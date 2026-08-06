@@ -269,6 +269,23 @@ class WorkTimeCalculator {
     return (value * 100).truncateToDouble() / 100;
   }
 
+  /// 打卡工时与 BOSS 已填工时的一致性容差。
+  ///
+  /// BOSS 那边只保留一位小数，且截断与四舍五入都出现过：
+  /// 打卡 11.47 在 BOSS 里可能是 11.4（截断），也可能是 11.5（四舍五入）。
+  /// 这两种都属于正常精度损失，不是填错，不该报警。
+  static const double bossHoursTolerance = 0.1;
+
+  /// 判断打卡工时与 BOSS 已填工时是否算一致。
+  ///
+  /// 只有超出 [bossHoursTolerance] 才认为真的对不上——
+  /// 把一位小数的精度差当成异常，会让整屏都是无意义的警示，
+  /// 反而把真正填错的那天淹没掉。
+  static bool isBossHoursConsistent(double punchHours, double bossHours) {
+    // 加极小量抵消浮点误差，避免 11.5 与 11.4 这类恰好等于容差的情况被误判
+    return (punchHours - bossHours).abs() <= bossHoursTolerance + 1e-9;
+  }
+
   // ========== 目标管理逻辑 (KISS: 复用此类) ==========
 
   /// 生成目标列表，确保包含基础目标

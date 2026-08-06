@@ -1100,65 +1100,75 @@ class MonthlyCalendarScreenState extends State<MonthlyCalendarScreen> {
 
   /// 格子内的工时区。
   ///
-  /// 设计取舍：每天真正要看的是**打卡工时**，所以它占主位；
-  /// BOSS 那边多数时候只需知道「填了没有」，把它也印成一行数字会让整屏
-  /// 布满数字和占位符，反而看不出重点。因此 BOSS 状态压成一条细状态条：
+  /// **格子里只放一个数字。** 上一版把 BOSS 工时也印成一行数字，结果
+  /// 「11.10」这样的五位数在窄格子里横向被切，BOSS 那行还溢出到格子外压住
+  /// 下一行日期。格子就这么大，塞两个数字必然崩。
   ///
-  /// - 已填且与打卡一致 → 实心细条，低调确认
-  /// - 打了卡但没填日志 → 淡色空条，这是唯一需要你动手的状态
-  /// - 两边对不上       → 直接显示 BOSS 的数字并标警示色，此时数字才有意义
+  /// 因此改为：打卡工时占唯一的数字位（用 FittedBox 保证再宽也能缩进去），
+  /// BOSS 的状态全部由下方那条细条的**颜色**表达：
+  ///
+  /// - 实心   → 已填报且与打卡一致
+  /// - 淡色   → 打了卡但没填日志，这是唯一需要动手的状态
+  /// - 警示橙 → 已填但与打卡对不上，点进该日可看具体数值
   Widget _buildCellHours(String dateStr, double hours, Color textColor) {
     final bossHours = _bossHours[dateStr];
     final hasHikiot = hours > 0;
     final hasBoss = bossHours != null && bossHours > 0;
 
     // 都没有数据时留等高占位，避免同行格子高度参差
-    if (!hasHikiot && !hasBoss) return const SizedBox(height: 16);
+    if (!hasHikiot && !hasBoss) return const SizedBox(height: 15);
 
-    // 两边都有值且差异超过 0.01 小时才算不一致（避免浮点误差误报）
-    final mismatch = hasHikiot && hasBoss && (hours - bossHours).abs() > 0.01;
+    final mismatch =
+        hasHikiot &&
+        hasBoss &&
+        !WorkTimeCalculator.isBossHoursConsistent(hours, bossHours);
+
+    final Color barColor;
+    if (mismatch) {
+      barColor = _mismatchColor;
+    } else if (hasBoss) {
+      barColor = textColor.withValues(alpha: 0.85);
+    } else {
+      barColor = textColor.withValues(alpha: 0.22);
+    }
 
     return Column(
       mainAxisSize: MainAxisSize.min,
       children: [
-        Text(
-          hasHikiot ? WorkTimeCalculator.formatHours(hours) : '—',
-          style: TextStyle(
-            fontSize: 11,
-            height: 1.15,
-            color: textColor,
-            fontWeight: FontWeight.w600,
-            letterSpacing: -0.2,
+        // 固定高度 + 缩放：工时最长是「11.10」这样的五位，
+        // 窄屏上宁可字变小也不能被切掉
+        SizedBox(
+          height: 12,
+          child: FittedBox(
+            fit: BoxFit.scaleDown,
+            child: Text(
+              hasHikiot ? WorkTimeCalculator.formatHours(hours) : '—',
+              style: TextStyle(
+                fontSize: 11,
+                height: 1.0,
+                color: textColor,
+                fontWeight: FontWeight.w600,
+              ),
+              maxLines: 1,
+              softWrap: false,
+            ),
           ),
-          maxLines: 1,
-          softWrap: false,
         ),
-        const SizedBox(height: 2),
-        if (mismatch)
-          Text(
-            WorkTimeCalculator.formatHours(bossHours),
-            style: const TextStyle(
-              fontSize: 9,
-              height: 1.0,
-              color: Color(0xFFB26A00), // 警示橙，在各种格子底色上都能看清
-              fontWeight: FontWeight.bold,
-            ),
-            maxLines: 1,
-            softWrap: false,
-          )
-        else
-          Container(
-            width: 14,
-            height: 3,
-            decoration: BoxDecoration(
-              // 已填 → 实心；只打卡未填 → 淡色，提示这天还欠一条日志
-              color: textColor.withValues(alpha: hasBoss ? 0.85 : 0.22),
-              borderRadius: BorderRadius.circular(2),
-            ),
+        const SizedBox(height: 3),
+        Container(
+          width: 16,
+          height: 3,
+          decoration: BoxDecoration(
+            color: barColor,
+            borderRadius: BorderRadius.circular(2),
           ),
+        ),
       ],
     );
   }
+
+  /// 不一致时的警示色。在绿/紫/灰各种格子底色上都能看清。
+  static const Color _mismatchColor = Color(0xFFFFCC33);
 
   /// 日历下方图例。
   ///
@@ -1197,7 +1207,7 @@ class MonthlyCalendarScreenState extends State<MonthlyCalendarScreen> {
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
           Text(
-            '大字为打卡工时，下方细条为 BOSS 填报状态',
+            '数字为打卡工时，下方细条为 BOSS 填报状态（点某日看具体数值）',
             style: TextStyle(
               fontSize: 11,
               color: Colors.grey[800],
@@ -1209,19 +1219,12 @@ class MonthlyCalendarScreenState extends State<MonthlyCalendarScreen> {
             spacing: 14,
             runSpacing: 6,
             children: [
-              _legendItem(_legendBar(0.85), '已填报'),
-              _legendItem(_legendBar(0.22), '未填报'),
+              _legendItem(_legendBar(Colors.grey.shade800), '已填报'),
               _legendItem(
-                const Text(
-                  '8.5',
-                  style: TextStyle(
-                    fontSize: 9,
-                    color: Color(0xFFB26A00),
-                    fontWeight: FontWeight.bold,
-                  ),
-                ),
-                '与打卡不一致，显示 BOSS 值',
+                _legendBar(Colors.grey.shade800.withValues(alpha: 0.25)),
+                '未填报',
               ),
+              _legendItem(_legendBar(_mismatchColor), '与打卡差超 0.1 小时'),
             ],
           ),
         ],
@@ -1229,12 +1232,12 @@ class MonthlyCalendarScreenState extends State<MonthlyCalendarScreen> {
     );
   }
 
-  Widget _legendBar(double alpha) {
+  Widget _legendBar(Color color) {
     return Container(
-      width: 14,
+      width: 16,
       height: 3,
       decoration: BoxDecoration(
-        color: Colors.grey.shade800.withValues(alpha: alpha),
+        color: color,
         borderRadius: BorderRadius.circular(2),
       ),
     );
@@ -1248,6 +1251,61 @@ class MonthlyCalendarScreenState extends State<MonthlyCalendarScreen> {
         const SizedBox(width: 5),
         Text(label, style: TextStyle(fontSize: 10, color: Colors.grey[700])),
       ],
+    );
+  }
+
+  /// 单日详情里的 BOSS 已填工时行。
+  ///
+  /// 只在该日确实同步到了 BOSS 数据时出现；未同步过就不显示，
+  /// 避免把「没同步」误看成「没填报」——这两件事完全不同。
+  Widget _buildBossHoursRow(String dateStr, double punchHours) {
+    final bossHours = _bossHours[dateStr];
+    if (bossHours == null || bossHours <= 0) return const SizedBox.shrink();
+
+    final consistent =
+        punchHours <= 0 ||
+        WorkTimeCalculator.isBossHoursConsistent(punchHours, bossHours);
+
+    return Padding(
+      padding: const EdgeInsets.only(bottom: 16),
+      child: Container(
+        padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+        decoration: BoxDecoration(
+          color: consistent ? Colors.grey[100] : AppColors.warningLight,
+          borderRadius: BorderRadius.circular(8),
+          border: Border.all(
+            color: consistent ? Colors.grey[300]! : AppColors.warning,
+          ),
+        ),
+        child: Row(
+          children: [
+            Icon(
+              consistent ? Icons.check_circle_outline : Icons.error_outline,
+              size: 18,
+              color: consistent ? Colors.green[600] : AppColors.warningDark,
+            ),
+            const SizedBox(width: 8),
+            Expanded(
+              child: Text(
+                consistent
+                    ? 'BOSS 已填 ${WorkTimeCalculator.formatHours(bossHours)}h'
+                    : 'BOSS 已填 ${WorkTimeCalculator.formatHours(bossHours)}h，'
+                          '与打卡差 '
+                          '${WorkTimeCalculator.formatHours((punchHours - bossHours).abs())}h',
+                style: TextStyle(
+                  fontSize: 12,
+                  color: consistent
+                      ? Colors.grey[700]
+                      : AppColors.warningDark,
+                  fontWeight: consistent
+                      ? FontWeight.normal
+                      : FontWeight.w600,
+                ),
+              ),
+            ),
+          ],
+        ),
+      ),
     );
   }
 
@@ -1385,6 +1443,10 @@ class MonthlyCalendarScreenState extends State<MonthlyCalendarScreen> {
                       ),
                       const SizedBox(height: 16),
                     ],
+
+                    // BOSS 已填工时。格子里只剩一条状态细条，具体数值放这里，
+                    // 否则不一致时用户看得见警示却查不到差在哪。
+                    _buildBossHoursRow(dateStr, hours),
 
                     if (hasCrossDayPunch) ...[
                       _buildCrossDayPunchDialogReminder(dayData),
