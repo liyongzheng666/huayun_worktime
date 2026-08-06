@@ -10,9 +10,9 @@ import '../services/storage_service.dart';
 import '../services/work_log_repository.dart';
 import '../utils/date_helper.dart';
 import '../utils/work_log_boss_hours.dart';
-import '../utils/work_log_bootstrap_script.dart';
 import '../utils/work_log_constants_scanner.dart';
 import '../utils/work_log_csv_parser.dart';
+import '../utils/work_log_diagnostics_script.dart';
 import '../utils/work_log_fill_script.dart';
 import '../utils/work_log_request_capture.dart';
 import '../utils/work_log_submit_script.dart';
@@ -180,6 +180,9 @@ class _WorkReportWebViewScreenState extends State<WorkReportWebViewScreen> {
               },
               onLoadStop: (_, url) {
                 setState(() => _currentUrl = url?.toString() ?? '');
+                // 无论是否一键提交，都在后台静默学习提交配置——
+                // 用户正常浏览的过程本身就是学习素材，不该让他去填内部 ID
+                _startBackgroundLearning();
                 if (widget.autoSubmit) _startAutoSubmit();
               },
               // 单页应用内部跳转不触发 onLoadStop，需单独监听。
@@ -521,136 +524,156 @@ class _WorkReportWebViewScreenState extends State<WorkReportWebViewScreen> {
     }
   }
 
+  /// 后台学习是否已启动，避免每次 onLoadStop 都开一轮轮询。
+  bool _learningStarted = false;
+
+  /// 后台静默学习 BOSS 提交配置。
+  ///
+  /// 这是为了消掉「必须先手工填三个内部 ID」这件反人类的事。用户没有义务
+  /// 知道 `PROJECT_xxxxxxxx` 是什么、更没义务去哪里找它——他正常登录、
+  /// 正常翻一次日志列表、正常填一次日志的过程本身就是学习素材，
+  /// 这里只是在旁边看着，一旦抓包里出现项目信息就存下来。
+  ///
+  /// 学不到不打扰用户：提交时还会再试一次，仍失败才给诊断和手工配置入口。
+  Future<void> _startBackgroundLearning() async {
+    if (_learningStarted) return;
+    _learningStarted = true;
+
+    final storage = StorageService();
+    final saved = await storage.loadBossConstants();
+    if (saved['projectId']?.isNotEmpty == true) return; // 已配置过，无需再学
+
+    final projectName = await _preferredProjectName();
+
+    // 轮询而非一次性扫描：用户何时登录、何时点开列表都不确定。
+    // 2.5 秒一次、最多约 2 分钟，足够覆盖登录加浏览，也不会一直空转。
+    for (var attempt = 0; attempt < 48; attempt++) {
+      await Future.delayed(const Duration(milliseconds: 2500));
+      if (!mounted) return;
+
+      // 提交也在发同步请求，避开以免互相拖慢
+      if (_submitting) continue;
+
+      final controller = _controller;
+      if (controller == null) continue;
+
+      final learned = await _learnConstants(controller, projectName);
+      if (learned != null) {
+        if (!mounted) return;
+        _notify('已自动获取 BOSS 提交配置，之后可直接一键提交');
+        return;
+      }
+    }
+  }
+
+  /// 扫一次抓包，尝试学到提交配置；成功则落盘并返回。
+  ///
+  /// 两种来源都试：
+  /// 1. 保存报文（用户刚在网页上填过一条）——三个值一次齐全，最准
+  /// 2. 列表/详情响应（用户翻过日志列表）——覆盖面更广
+  Future<Map<String, String>?> _learnConstants(
+    InAppWebViewController controller,
+    String projectName,
+  ) async {
+    final fromSave = _parseConstants(
+      await _runScriptRaw(
+        controller,
+        WorkLogSubmitScript.buildExtractConstantsScript(
+          captureStoreName: WorkLogRequestCapture.storeName,
+        ),
+      ),
+    );
+    if (fromSave != null) {
+      await StorageService().saveBossConstants(fromSave);
+      return fromSave;
+    }
+
+    // 不自己构造列表查询：BOSS 的列表是有状态视图，必须先由 GetTitle 在
+    // 服务端建立上下文，单独调 GetDataGridList 只会返回空行（实测 200 且
+    // Rows 为空）。改为收割页面自己查出来的数据，稳健得多。
+    final scanned = _parseConstants(
+      await _runScriptRaw(
+        controller,
+        WorkLogConstantsScanner.build(
+          captureStoreName: WorkLogRequestCapture.storeName,
+          preferredProjectName: projectName,
+        ),
+      ),
+    );
+    if (scanned != null) {
+      await StorageService().saveBossConstants(scanned);
+      return scanned;
+    }
+
+    return null;
+  }
+
+  /// 当日 CSV 条目里的项目名，用于在多项目时挑对那一个；取不到返回空串。
+  ///
+  /// 只读 CSV 条目而不用 loadDraft：后者会顺带拉一次考勤工时，
+  /// 而这里只要项目名，没必要为此发一次网络请求。
+  Future<String> _preferredProjectName() async {
+    final date = widget.fillDate ?? DateHelper.getWorkDate();
+    final entry = await WorkLogRepository().loadEntry(
+      DateHelper.formatDate(date),
+    );
+    return entry?.projectName ?? '';
+  }
+
   /// 取提交所需的固定业务标识。
   ///
-  /// 三级回退，用户无需任何手动准备：
-  /// 1. 本地已保存的（首次成功后即命中）
-  /// 2. 本次会话抓包里的保存报文
-  /// 3. 自举：从 BOSS 里的历史日志自动查出来
+  /// 顺序：本地已保存 → 立刻再扫一次抓包（后台学习可能还没轮到这一次）。
+  /// 都取不到才提示用户，并把诊断复制到剪贴板。
+  ///
+  /// 早期版本还会模拟点击菜单去「催」页面加载列表，已删除：那条路依赖
+  /// 不透明的 SPA 菜单结构，是实测最不可靠的一条，而后台学习已覆盖其目的。
   Future<Map<String, String>?> _resolveBossConstants(
     InAppWebViewController controller,
     String projectName,
   ) async {
-    final storage = StorageService();
-    final saved = await storage.loadBossConstants();
+    final saved = await StorageService().loadBossConstants();
     if (saved['projectId']?.isNotEmpty == true) return saved;
 
-    // 先试抓包（最快，本次会话刚保存过时命中）
-    final extracted = await _readConstants(
-      controller,
-      WorkLogSubmitScript.buildExtractConstantsScript(
-        captureStoreName: WorkLogRequestCapture.storeName,
-      ),
-    );
-    if (extracted != null) {
-      await storage.saveBossConstants(extracted);
-      return extracted;
-    }
-
-    // 再扫描页面已产生的响应。
-    //
-    // 不自己构造列表查询：BOSS 的列表是有状态视图，必须先由 GetTitle 在
-    // 服务端建立上下文，单独调 GetDataGridList 只会返回空行（实测 200 且
-    // Rows 为空）。改为收割页面自己查出来的数据，稳健得多。
-    var scanRaw = await _runScriptRaw(
-      controller,
-      WorkLogConstantsScanner.build(
-        captureStoreName: WorkLogRequestCapture.storeName,
-        preferredProjectName: projectName,
-      ),
-    );
-    var scanned = _parseConstants(scanRaw);
-
-    // 首页的请求里没有日志数据（实测首页自身就会发约 40 个请求把缓冲填满）。
-    // 因此扫不到时自动点进「我的工作日志」，让页面自己去查，再收割结果。
-    if (scanned == null) {
-      if (!mounted) return null;
-      _notify('首次使用，正在打开工作日志列表获取项目信息…');
-
-      scanRaw = await _navigateAndScan(controller, projectName);
-      scanned = _parseConstants(scanRaw);
-    }
-
-    if (scanned != null) {
-      await storage.saveBossConstants(scanned);
-      return scanned;
-    }
-
-    final bootstrapRaw = scanRaw;
+    final learned = await _learnConstants(controller, projectName);
+    if (learned != null) return learned;
 
     // Release 构建不开 Dart VM 服务，flutter logs 抓不到 debugPrint，
     // 因此失败时把诊断信息复制到剪贴板，便于直接反馈。
-    await _copyDiagnostics(controller, projectName, bootstrapRaw);
+    await _copyDiagnostics(controller, projectName);
     return null;
   }
 
-  /// 自动点进工作日志列表，等页面查出数据后再扫描。
-  ///
-  /// 菜单文字可能因版本略有差异，故按候选列表依次尝试。
-  /// 每次点击后轮询扫描——列表是异步加载的，固定等待要么不够要么浪费。
-  Future<String?> _navigateAndScan(
-    InAppWebViewController controller,
-    String projectName,
-  ) async {
-    const candidates = ['我的工作日志', '工作日志', '我的日志'];
-    final scanScript = WorkLogConstantsScanner.build(
-      captureStoreName: WorkLogRequestCapture.storeName,
-      preferredProjectName: projectName,
-    );
-
-    String? lastRaw;
-
-    for (final text in candidates) {
-      final clicked = await _runScriptRaw(
-        controller,
-        WorkLogFillScript.buildOpenForm(buttonText: text),
-      );
-      debugPrint('[日志提交] 点击「$text」= $clicked');
-
-      var hit = false;
-      try {
-        final decoded = jsonDecode(clicked ?? '{}');
-        hit = decoded is Map && decoded['clicked'] == true;
-      } catch (_) {}
-      if (!hit) continue;
-
-      // 列表异步加载，轮询等待数据落进抓包
-      for (var attempt = 0; attempt < 8; attempt++) {
-        await Future.delayed(const Duration(milliseconds: 600));
-        if (!mounted) return lastRaw;
-
-        lastRaw = await _runScriptRaw(controller, scanScript);
-        if (_parseConstants(lastRaw) != null) return lastRaw;
-      }
-    }
-
-    return lastRaw;
-  }
-
-  /// 自举失败时收集诊断信息并复制到剪贴板。
+  /// 学不到配置时收集诊断信息并复制到剪贴板。
   Future<void> _copyDiagnostics(
     InAppWebViewController controller,
     String projectName,
-    String? bootstrapRaw,
   ) async {
     final probe = await _runScriptRaw(
       controller,
-      WorkLogBootstrapScript.buildDiagnosticsScript(
+      WorkLogDiagnosticsScript.build(
         captureStoreName: WorkLogRequestCapture.storeName,
         preferredProjectName: projectName,
       ),
     );
 
+    final decoded = _tryDecode(probe);
     final report = const JsonEncoder.withIndent('  ').convert({
-      'stage': 'bootstrapFailed',
+      'stage': 'learnConstantsFailed',
       'preferredProjectName': projectName,
-      'bootstrapResult': bootstrapRaw,
-      'diagnostics': _tryDecode(probe),
+      'diagnostics': decoded,
     });
 
     await Clipboard.setData(ClipboardData(text: report));
     if (!mounted) return;
-    _notify('请先在网页上打开一次「我的工作日志」列表，再点提交（诊断已复制到剪贴板）');
+
+    // 优先显示脚本给出的人话结论，它比通用文案更能指向下一步该做什么
+    final conclusion = (decoded is Map ? decoded['conclusion'] : null)
+        ?.toString();
+    _notify(
+      conclusion == null || conclusion.isEmpty
+          ? '未取到项目信息。请在网页上打开一次「我的工作日志」列表（诊断已复制到剪贴板）'
+          : '$conclusion（诊断已复制到剪贴板）',
+    );
   }
 
   static Object? _tryDecode(String? raw) {
@@ -681,30 +704,6 @@ class _WorkReportWebViewScreenState extends State<WorkReportWebViewScreen> {
       if (decoded is! Map || decoded['ok'] != true) return null;
       final projectId = '${decoded['projectId'] ?? ''}';
       if (projectId.isEmpty) return null;
-      return {
-        'projectId': projectId,
-        'projectCode': '${decoded['projectCode'] ?? ''}',
-        'auditor': '${decoded['auditor'] ?? ''}',
-      };
-    } catch (e) {
-      return null;
-    }
-  }
-
-  /// 执行取常量脚本并解析结果，失败返回 null。
-  Future<Map<String, String>?> _readConstants(
-    InAppWebViewController controller,
-    String script,
-  ) async {
-    try {
-      final raw = await controller.evaluateJavascript(source: script);
-      debugPrint('[日志提交] 取常量返回=${raw?.toString()}');
-      final decoded = jsonDecode(raw?.toString() ?? '{}');
-      if (decoded is! Map || decoded['ok'] != true) return null;
-
-      final projectId = '${decoded['projectId'] ?? ''}';
-      if (projectId.isEmpty) return null;
-
       return {
         'projectId': projectId,
         'projectCode': '${decoded['projectCode'] ?? ''}',

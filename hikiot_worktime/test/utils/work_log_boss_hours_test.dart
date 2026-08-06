@@ -1,4 +1,5 @@
 import 'package:flutter_test/flutter_test.dart';
+import 'package:hikiot_worktime/utils/boss_session_script.dart';
 import 'package:hikiot_worktime/utils/work_log_boss_hours.dart';
 
 void main() {
@@ -48,24 +49,47 @@ void main() {
         captureStoreName: '__store',
       );
 
-      expect(script.contains('findPara'), isTrue);
+      expect(script.contains('bossFindPara()'), isTrue);
       expect(script.contains('__store'), isTrue);
       expect(script.contains('Password'), isFalse);
       expect(script.contains('2026-08-05'), isTrue);
     });
 
-    test('会话查找只依赖 UserID，登录后首页请求即可用', () {
-      final script = WorkLogBossHours.buildFetchSingleDayScript(
+    test('整月脚本与单日脚本共用同一套会话查找', () {
+      // 历史教训：整月脚本曾经把 ServiceUri 也加进筛选条件，而单日脚本没有，
+      // 表现为刚登录时同步整月报「未捕获到会话」、单日查询却正常，
+      // 现象自相矛盾且极难排查（踩坑记录 3.11）。两者必须走同一份实现。
+      final month = WorkLogBossHours.buildFetchMonthScript(
+        year: 2026,
+        month: 8,
+        captureStoreName: '__store',
+      );
+      final single = WorkLogBossHours.buildFetchSingleDayScript(
         dateStr: '2026-08-05',
         captureStoreName: '__store',
       );
-      expect(script.contains('UserID'), isTrue);
-      expect(script.contains('ServiceUri'), isTrue); // 设置用，非筛选用
-      expect(
-        RegExp(r'p\.para\.UserID\)').hasMatch(script),
-        isTrue,
-        reason: '筛选条件应只有 UserID',
+
+      final preamble = BossSessionScript.sessionPreamble(
+        captureStoreName: '__store',
       );
+      expect(month.contains(preamble), isTrue);
+      expect(single.contains(preamble), isTrue);
+    });
+
+    test('单日与整月都用同一个「取已填工时」的解析，避免取错列', () {
+      // 返回值是 [总额度, 已填, 剩余]，取错一位就会把额度当成已填
+      final month = WorkLogBossHours.buildFetchMonthScript(
+        year: 2026,
+        month: 8,
+        captureStoreName: '__store',
+      );
+      final single = WorkLogBossHours.buildFetchSingleDayScript(
+        dateStr: '2026-08-05',
+        captureStoreName: '__store',
+      );
+
+      expect(month.contains('function pickUsed(data)'), isTrue);
+      expect(single.contains('function pickUsed(data)'), isTrue);
     });
 
     test('整月脚本按月份天数循环，不写死 31 天', () {

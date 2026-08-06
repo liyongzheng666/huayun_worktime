@@ -36,8 +36,12 @@ class WorkLogScreenState extends State<WorkLogScreen> {
   int _totalCount = 0;
   bool _loading = true;
 
-  /// BOSS 提交配置是否已填。未配置时提交必然失败，因此在界面上前置提示。
+  /// BOSS 提交配置是否已就绪。未就绪时提交必然失败，因此在界面上前置提示。
   bool _bossConfigured = false;
+
+  /// 加载序号。切换日期会发起新的工时请求，而先发的请求可能后返回，
+  /// 不做丢弃就会出现「日期栏显示 8-7、内容却是 8-6」的错位。
+  int _loadSeq = 0;
 
   @override
   void initState() {
@@ -49,14 +53,18 @@ class WorkLogScreenState extends State<WorkLogScreen> {
   Future<void> refreshData() => _reload();
 
   Future<void> _reload() async {
+    final seq = ++_loadSeq;
     setState(() => _loading = true);
 
-    final draft = await _repository.loadDraft(_selectedDate);
+    // 固定本次要加载的日期：等待期间用户可能又翻了一页
+    final date = _selectedDate;
+    final draft = await _repository.loadDraft(date);
     final (sourceName, importedAt) = await _repository.loadMeta();
     final all = await _repository.loadAll();
     final constants = await StorageService().loadBossConstants();
 
-    if (!mounted) return;
+    // 已经有更新的一次加载在跑，本次结果作废
+    if (!mounted || seq != _loadSeq) return;
     setState(() {
       _draft = draft;
       _sourceName = sourceName;
@@ -235,9 +243,11 @@ class WorkLogScreenState extends State<WorkLogScreen> {
     );
   }
 
-  /// 未配置 BOSS 提交参数时的引导卡片。
+  /// BOSS 提交配置未就绪时的引导卡片。
   ///
-  /// 前置提示而非点了才报错：这三个值缺失时提交必然失败。
+  /// 刻意**不**把「手工填三个 ID」当主入口：用户没有义务知道
+  /// `PROJECT_xxxxxxxx` 是什么，更没义务去哪里翻出来。正常打开一次日志系统，
+  /// APP 会在后台从网页会话里自己学到。手工填写只作为学不到时的兜底。
   Widget _buildConfigPrompt() {
     return Card(
       color: AppColors.warningLight,
@@ -245,40 +255,59 @@ class WorkLogScreenState extends State<WorkLogScreen> {
         borderRadius: BorderRadius.circular(12),
         side: BorderSide(color: AppColors.warning),
       ),
-      child: InkWell(
-        onTap: _editBossConstants,
-        borderRadius: BorderRadius.circular(12),
-        child: Padding(
-          padding: const EdgeInsets.all(14),
-          child: Row(
-            children: [
-              Icon(Icons.tune, color: AppColors.warningDark),
-              const SizedBox(width: 12),
-              Expanded(
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    Text(
-                      '尚未配置 BOSS 提交参数',
-                      style: TextStyle(
-                        fontWeight: FontWeight.w600,
-                        color: AppColors.warningDark,
+      child: Padding(
+        padding: const EdgeInsets.all(14),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Row(
+              children: [
+                Icon(Icons.auto_fix_high, color: AppColors.warningDark),
+                const SizedBox(width: 12),
+                Expanded(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Text(
+                        'BOSS 提交配置未就绪',
+                        style: TextStyle(
+                          fontWeight: FontWeight.w600,
+                          color: AppColors.warningDark,
+                        ),
                       ),
-                    ),
-                    const SizedBox(height: 2),
-                    Text(
-                      '点此填写项目 ID 等三项，填一次即可长期使用',
-                      style: TextStyle(
-                        fontSize: 12,
-                        color: AppColors.warningDark,
+                      const SizedBox(height: 2),
+                      Text(
+                        '打开日志系统并登录，APP 会自动获取，无需手工填写',
+                        style: TextStyle(
+                          fontSize: 12,
+                          color: AppColors.warningDark,
+                        ),
                       ),
-                    ),
-                  ],
+                    ],
+                  ),
                 ),
-              ),
-              Icon(Icons.chevron_right, color: AppColors.warningDark),
-            ],
-          ),
+              ],
+            ),
+            const SizedBox(height: 6),
+            Row(
+              mainAxisAlignment: MainAxisAlignment.end,
+              children: [
+                TextButton(
+                  onPressed: _editBossConstants,
+                  child: const Text('手工填写', style: TextStyle(fontSize: 12)),
+                ),
+                const SizedBox(width: 4),
+                FilledButton.icon(
+                  onPressed: () => _openReportSystem(autoSubmit: false),
+                  icon: const Icon(Icons.open_in_browser, size: 16),
+                  label: const Text('打开日志系统', style: TextStyle(fontSize: 12)),
+                  style: FilledButton.styleFrom(
+                    visualDensity: VisualDensity.compact,
+                  ),
+                ),
+              ],
+            ),
+          ],
         ),
       ),
     );

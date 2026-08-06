@@ -1,10 +1,16 @@
 import 'dart:convert';
 
+import 'boss_session_script.dart';
+
 /// 从抓包记录中扫描提交所需的固定业务标识
 ///
 /// 为什么不自己构造查询：BOSS 的列表接口是有状态视图，必须先由 `GetTitle`
 /// 在服务端建立查询上下文，单独调 `GetDataGridList` 只会返回空行
 /// （实测 status 200、Rows 为空）。改为收割页面自己产生的响应。
+///
+/// **必须扫所有同源 frame**（由 `bossCaptured()` 保证）：业务模块跑在 iframe 里，
+/// 只读主框架拿到的永远只有首页自身的请求，扫多久都不会有项目信息。
+/// 这正是早期「自动获取项目信息」屡试屡败的原因，见 踩坑记录 2.7。
 ///
 /// **两种数据形状都要认**——这是实测踩过的坑：
 /// - 详情形状（打开某条日志）：`"PROJECTID":"PROJECT_xxx"`
@@ -33,8 +39,11 @@ class WorkLogConstantsScanner {
   }) {
     return '''
       (function() {
+        ${BossSessionScript.sessionPreamble(captureStoreName: captureStoreName)}
+        ${BossSessionScript.callPreamble()}
+
         var PREFERRED = ${jsonEncode(preferredProjectName)};
-        var store = window.$captureStoreName || [];
+        var store = bossCaptured();
 
         // 响应是多层转义的 JSON，反斜杠数量随嵌套层数变化，
         // 因此统一用 \\\\*" 容忍任意层级的转义。
@@ -127,44 +136,21 @@ class WorkLogConstantsScanner {
         // 列表形状缺 PROJECTCODE，按 EID 取完整记录补齐。
         // GetObjectData 是无状态的对象查询，可以单独调用。
         if (!best.projectCode && best.workLogId) {
-          var para = null;
-          for (var p = store.length - 1; p >= 0 && !para; p--) {
-            var e2 = store[p];
-            if (!e2 || !e2.body) continue;
-            try {
-              var parsed = JSON.parse(e2.body);
-              if (parsed && parsed.para && parsed.para.UserID) para = parsed.para;
-            } catch (err) {}
-          }
-
+          var para = bossFindPara();
           if (para) {
-            var outer = {};
-            for (var k in para) { if (para.hasOwnProperty(k)) outer[k] = para[k]; }
-            outer.ServiceUri = ${jsonEncode(objectServiceUri)};
-
-            var inner = {};
-            for (var k2 in para) { if (para.hasOwnProperty(k2)) inner[k2] = para[k2]; }
-            delete inner.ServiceUri;
-            inner.ObjectID = best.workLogId;
-
-            var xhr = new XMLHttpRequest();
-            xhr.open('POST', '/Base/BaseService.asmx/DataService', false);
-            xhr.setRequestHeader('Content-Type', 'application/json');
-            xhr.setRequestHeader('X-Requested-With', 'XMLHttpRequest');
-            try {
-              xhr.send(JSON.stringify({
-                para: outer,
-                content: JSON.stringify({ para: inner })
-              }));
-              if (xhr.status === 200) {
-                best.projectCode = first(RE_D_PROJECT_CODE, xhr.responseText);
-                if (!best.auditor) {
-                  best.auditor = first(RE_D_AUDITOR, xhr.responseText);
-                }
-                best.filledFromDetail = true;
+            var res = bossCall(
+              para,
+              ${jsonEncode(objectServiceUri)},
+              { ObjectID: best.workLogId }
+            );
+            if (res.ok) {
+              best.projectCode = first(RE_D_PROJECT_CODE, res.text);
+              if (!best.auditor) {
+                best.auditor = first(RE_D_AUDITOR, res.text);
               }
-            } catch (err) {
-              best.detailError = String(err);
+              best.filledFromDetail = true;
+            } else {
+              best.detailError = res.reason;
             }
           }
         }

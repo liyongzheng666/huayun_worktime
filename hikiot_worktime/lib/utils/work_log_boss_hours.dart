@@ -1,9 +1,12 @@
 import 'dart:convert';
 
-/// BOSS 月度工时抓取
+import 'boss_session_script.dart';
+
+/// BOSS 已填工时抓取
 ///
 /// 用途：月历页除了展示海康打卡工时，还要展示 BOSS 系统里已填报的工时，
-/// 便于一眼看出「打了卡但没填日志」或「填报工时和打卡对不上」。
+/// 便于一眼看出「打了卡但没填日志」或「填报工时和打卡对不上」；
+/// 提交前也用它检查当天是否已有日志。
 ///
 /// 数据来源：`Hoteam.InforCenter.WorkReportService.GetWorkHours`，
 /// 传 `SelectDate` 返回 `[总额度, 已填, 剩余]`，取中间值即当日已填工时。
@@ -16,6 +19,18 @@ class WorkLogBossHours {
 
   static const String hoursServiceUri =
       'Hoteam.InforCenter.WorkReportService.GetWorkHours';
+
+  /// 从 `GetWorkHours` 的返回数组里取「已填工时」的 JS 片段。
+  ///
+  /// 返回值是 `[总额度, 已填, 剩余]`，第 2 项才是已填；取不到时返回 null，
+  /// 由调用方决定当成「未知」还是「0」——这两者含义完全不同。
+  static const String _pickUsedFunction = '''
+      function pickUsed(data) {
+        if (!data || data.length < 2) return null;
+        var used = parseFloat(data[1]);
+        return isNaN(used) ? null : used;
+      }
+  ''';
 
   /// 生成抓取整月工时的脚本。
   ///
@@ -33,31 +48,16 @@ class WorkLogBossHours {
 
     return '''
       (function() {
+        ${BossSessionScript.sessionPreamble(captureStoreName: captureStoreName)}
+        ${BossSessionScript.callPreamble()}
+        $_pickUsedFunction
+
         var YEAR = $year, MONTH = $month;
         var MONTH_KEY = ${jsonEncode(monthKey)};
         var SERVICE_URI = ${jsonEncode(hoursServiceUri)};
 
-        // 复用页面刚发过的请求里的会话上下文，不在本地保存任何凭据
-        function findPara() {
-          var store = window.$captureStoreName || [];
-          for (var i = store.length - 1; i >= 0; i--) {
-            var e = store[i];
-            if (!e || !e.body) continue;
-            try {
-              var p = JSON.parse(e.body);
-              if (p && p.para && p.para.UserID && p.para.ServiceUri) return p.para;
-            } catch (err) {}
-          }
-          return null;
-        }
-
-        var para = findPara();
-        if (!para) {
-          return JSON.stringify({
-            ok: false,
-            message: '未捕获到会话上下文，请先在页面上做一次操作（如切换日期）'
-          });
-        }
+        var para = bossFindPara();
+        if (!para) return ${BossSessionScript.noSessionResult};
 
         function pad(n) { return n < 10 ? '0' + n : '' + n; }
 
@@ -68,43 +68,13 @@ class WorkLogBossHours {
         for (var day = 1; day <= daysInMonth; day++) {
           var dateStr = YEAR + '-' + pad(MONTH) + '-' + pad(day);
 
-          var outer = {};
-          for (var k in para) { if (para.hasOwnProperty(k)) outer[k] = para[k]; }
-          outer.ServiceUri = SERVICE_URI;
+          var res = bossCall(para, SERVICE_URI, { SelectDate: dateStr });
+          if (!res.ok) { failed.push(dateStr); continue; }
 
-          var inner = {};
-          for (var k2 in para) { if (para.hasOwnProperty(k2)) inner[k2] = para[k2]; }
-          delete inner.ServiceUri;
-          inner.SelectDate = dateStr;
-
-          var xhr = new XMLHttpRequest();
-          xhr.open('POST', '/Base/BaseService.asmx/DataService', false);
-          xhr.setRequestHeader('Content-Type', 'application/json');
-          xhr.setRequestHeader('X-Requested-With', 'XMLHttpRequest');
-
-          try {
-            xhr.send(JSON.stringify({
-              para: outer,
-              content: JSON.stringify({ para: inner })
-            }));
-          } catch (err) {
-            failed.push(dateStr);
-            continue;
-          }
-
-          if (xhr.status !== 200) { failed.push(dateStr); continue; }
-
-          // 响应形如 {"d":"{\\"d\\":[24,10.3,13.7]}"}，取数组第 2 项＝已填工时
-          try {
-            var lvl1 = JSON.parse(xhr.responseText).d;
-            var lvl2 = typeof lvl1 === 'string' ? JSON.parse(lvl1).d : lvl1;
-            if (lvl2 && lvl2.length >= 2) {
-              var used = parseFloat(lvl2[1]);
-              if (!isNaN(used) && used > 0) hours[dateStr] = used;
-            }
-          } catch (err) {
-            failed.push(dateStr);
-          }
+          var used = pickUsed(res.data);
+          if (used === null) { failed.push(dateStr); continue; }
+          // 只记有填报的天，0 不入表——月历页据此区分「未填」与「填了 0」
+          if (used > 0) hours[dateStr] = used;
         }
 
         return JSON.stringify({
@@ -131,54 +101,27 @@ class WorkLogBossHours {
   }) {
     return '''
       (function() {
-        function findPara() {
-          var store = window.$captureStoreName || [];
-          for (var i = store.length - 1; i >= 0; i--) {
-            var e = store[i];
-            if (!e || !e.body) continue;
-            try {
-              var p = JSON.parse(e.body);
-              if (p && p.para && p.para.UserID) return p.para;
-            } catch (err) {}
-          }
-          return null;
-        }
+        ${BossSessionScript.sessionPreamble(captureStoreName: captureStoreName)}
+        ${BossSessionScript.callPreamble()}
+        $_pickUsedFunction
 
-        var para = findPara();
+        var para = bossFindPara();
         if (!para) return JSON.stringify({ ok: false, reason: 'noSession' });
 
-        var outer = {};
-        for (var k in para) { if (para.hasOwnProperty(k)) outer[k] = para[k]; }
-        outer.ServiceUri = ${jsonEncode(hoursServiceUri)};
-
-        var inner = {};
-        for (var k2 in para) { if (para.hasOwnProperty(k2)) inner[k2] = para[k2]; }
-        delete inner.ServiceUri;
-        inner.SelectDate = ${jsonEncode(dateStr)};
-
-        var xhr = new XMLHttpRequest();
-        xhr.open('POST', '/Base/BaseService.asmx/DataService', false);
-        xhr.setRequestHeader('Content-Type', 'application/json');
-        xhr.setRequestHeader('X-Requested-With', 'XMLHttpRequest');
-
-        try {
-          xhr.send(JSON.stringify({
-            para: outer,
-            content: JSON.stringify({ para: inner })
-          }));
-        } catch (e) {
-          return JSON.stringify({ ok: false, reason: 'network' });
+        var res = bossCall(
+          para,
+          ${jsonEncode(hoursServiceUri)},
+          { SelectDate: ${jsonEncode(dateStr)} }
+        );
+        if (!res.ok) {
+          return JSON.stringify({ ok: false, reason: res.reason });
         }
-        if (xhr.status !== 200) return JSON.stringify({ ok: false, reason: 'http' });
 
-        try {
-          var lvl1 = JSON.parse(xhr.responseText).d;
-          var lvl2 = typeof lvl1 === 'string' ? JSON.parse(lvl1).d : lvl1;
-          var used = (lvl2 && lvl2.length >= 2) ? parseFloat(lvl2[1]) : 0;
-          return JSON.stringify({ ok: true, used: isNaN(used) ? 0 : used });
-        } catch (e) {
-          return JSON.stringify({ ok: false, reason: 'parse' });
-        }
+        var used = pickUsed(res.data);
+        // 解不出数值时报失败而不是当成 0：
+        // 「查不到」与「当天为零」在提交确认框里是两种完全不同的提示。
+        if (used === null) return JSON.stringify({ ok: false, reason: 'parse' });
+        return JSON.stringify({ ok: true, used: used });
       })();
     ''';
   }
@@ -207,7 +150,9 @@ class WorkLogBossHours {
 
       final result = <String, double>{};
       hours.forEach((key, value) {
-        final parsed = value is num ? value.toDouble() : double.tryParse('$value');
+        final parsed = value is num
+            ? value.toDouble()
+            : double.tryParse('$value');
         if (parsed != null) result['$key'] = parsed;
       });
       return result;

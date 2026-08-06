@@ -1,5 +1,6 @@
 import 'dart:convert';
 
+import 'boss_session_script.dart';
 import 'work_log_csv_parser.dart';
 
 /// BOSS 工作日志提交报文构造
@@ -60,21 +61,17 @@ class WorkLogSubmitScript {
   static String buildSessionProbeScript({required String captureStoreName}) {
     return '''
       (function() {
-        var store = window.$captureStoreName || [];
-        for (var i = store.length - 1; i >= 0; i--) {
-          var entry = store[i];
-          if (!entry || !entry.body) continue;
-          try {
-            var parsed = JSON.parse(entry.body);
-            if (parsed && parsed.para && parsed.para.UserID) {
-              return JSON.stringify({
-                ready: true,
-                userName: parsed.para.UserName || ''
-              });
-            }
-          } catch (e) {}
+        ${BossSessionScript.sessionPreamble(captureStoreName: captureStoreName)}
+
+        var para = bossFindPara();
+        if (!para) {
+          return JSON.stringify({ ready: false, captured: bossCaptured().length });
         }
-        return JSON.stringify({ ready: false });
+        return JSON.stringify({
+          ready: true,
+          userName: para.UserName || '',
+          captured: bossCaptured().length
+        });
       })();
     ''';
   }
@@ -90,7 +87,9 @@ class WorkLogSubmitScript {
   }) {
     return '''
       (function() {
-        var store = window.$captureStoreName || [];
+        ${BossSessionScript.sessionPreamble(captureStoreName: captureStoreName)}
+
+        var store = bossCaptured();
 
         for (var i = store.length - 1; i >= 0; i--) {
           var entry = store[i];
@@ -115,6 +114,8 @@ class WorkLogSubmitScript {
 
         return JSON.stringify({
           ok: false,
+          reason: 'notFound',
+          capturedCount: store.length,
           message: '抓包里没有找到保存日志的记录，请先在网页上手动保存一条日志'
         });
       })();
@@ -199,90 +200,31 @@ class WorkLogSubmitScript {
 
     return '''
       (function() {
+        ${BossSessionScript.sessionPreamble(captureStoreName: captureStoreName)}
+        ${BossSessionScript.callPreamble()}
+
         var WORKLOG_DATA = $dataJson;
         var SERVICE_URI = ${jsonEncode(saveServiceUri)};
 
-        // 从抓包记录里找一条带完整会话上下文的请求，复用它的 para。
-        // 这样凭据只存在于网页会话中，不落到 APP 存储。
-        //
-        // 只要求 UserID：ServiceUri 由我们自己设置，不能拿它当筛选条件。
-        // 登录后首页自动发的 CheckUserUnReadMessage / GetIntervals 都不带
-        // ServiceUri，但 para 是完整的——要求它会让刚登录时取不到会话。
-        function findPara() {
-          var store = window.$captureStoreName || [];
-          for (var i = store.length - 1; i >= 0; i--) {
-            var entry = store[i];
-            if (!entry || !entry.body) continue;
-            try {
-              var parsed = JSON.parse(entry.body);
-              if (parsed && parsed.para && parsed.para.UserID) {
-                return parsed.para;
-              }
-            } catch (e) {}
-          }
-          return null;
-        }
+        // 复用抓包里的会话上下文，凭据始终停留在网页会话中，不落到 APP 存储
+        var para = bossFindPara();
+        if (!para) return ${BossSessionScript.noSessionResult};
 
-        var para = findPara();
-        if (!para) {
-          return JSON.stringify({
-            ok: false,
-            reason: 'noSession',
-            message: '未捕获到会话上下文，请先在页面上做一次任意操作（如切换日期）'
-          });
-        }
-
-        // 外层 para：复制一份并换掉 ServiceUri，避免污染原对象
-        var outer = {};
-        for (var k in para) { if (para.hasOwnProperty(k)) outer[k] = para[k]; }
-        outer.ServiceUri = SERVICE_URI;
-
-        // 内层 para：同样的上下文 + 业务数据
-        var inner = {};
-        for (var k2 in para) { if (para.hasOwnProperty(k2)) inner[k2] = para[k2]; }
-        delete inner.ServiceUri;
-        inner.workLogData = WORKLOG_DATA;
-        inner.ctrlEvent = { o: { id: 'guid0' } };
-
-        var payload = JSON.stringify({
-          para: outer,
-          content: JSON.stringify({ para: inner })
+        var res = bossCall(para, SERVICE_URI, {
+          workLogData: WORKLOG_DATA,
+          ctrlEvent: { o: { id: 'guid0' } }
         });
+        if (!res.ok) return JSON.stringify(res);
 
-        // 同步请求，便于把结果直接返回给 evaluateJavascript
-        var xhr = new XMLHttpRequest();
-        xhr.open('POST', '/Base/BaseService.asmx/DataService', false);
-        xhr.setRequestHeader('Content-Type', 'application/json');
-        xhr.setRequestHeader('X-Requested-With', 'XMLHttpRequest');
-
-        try {
-          xhr.send(payload);
-        } catch (e) {
-          return JSON.stringify({ ok: false, reason: 'network', message: String(e) });
-        }
-
-        if (xhr.status !== 200) {
-          return JSON.stringify({
-            ok: false, reason: 'http', status: xhr.status,
-            message: (xhr.responseText || '').substring(0, 300)
-          });
-        }
-
-        // 成功时响应形如 {"d":"{\\"d\\":\\"WORKLOG_xxx\\"}"}，逐层解开取 ID
-        var text = xhr.responseText || '';
-        var objectId = null;
-        try {
-          var lvl1 = JSON.parse(text).d;
-          var lvl2 = typeof lvl1 === 'string' ? JSON.parse(lvl1).d : lvl1;
-          objectId = typeof lvl2 === 'string' ? lvl2 : null;
-        } catch (e) {}
-
+        // 成功时最内层就是新建记录的 ID
+        var objectId = (typeof res.data === 'string') ? res.data : null;
         if (objectId && objectId.indexOf('WORKLOG_') === 0) {
           return JSON.stringify({ ok: true, objectId: objectId });
         }
         return JSON.stringify({
-          ok: false, reason: 'unexpected',
-          message: text.substring(0, 300)
+          ok: false,
+          reason: 'unexpected',
+          message: (res.text || '').substring(0, 300)
         });
       })();
     ''';

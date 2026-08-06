@@ -168,38 +168,34 @@ void main() {
         captureStoreName: '__store',
       );
 
-      expect(script.contains('findPara'), isTrue);
+      // 会话查找与请求发送都走公共片段，具体约束在
+      // boss_session_script_test.dart 中统一断言，这里只验证确实接上了。
+      expect(script.contains('bossFindPara()'), isTrue);
+      expect(script.contains('bossCall('), isTrue);
       expect(script.contains('__store'), isTrue);
       // 绝不能把凭据字段写进脚本
       expect(script.contains('Password'), isFalse);
     });
 
-    test('会话查找只依赖 UserID，不得要求 ServiceUri', () {
-      // 登录后首页自动发的 CheckUserUnReadMessage / GetIntervals 不带
-      // ServiceUri，但 para 完整。若把 ServiceUri 加回筛选条件，
-      // 刚登录时就取不到会话，一键提交会失效。
+    test('提交成功时取出新建记录的 WORKLOG ID', () {
       final script = WorkLogSubmitScript.build(
         workLogData: build(entry),
         captureStoreName: '__store',
       );
 
-      final findParaBody = RegExp(
-        r'function findPara\(\) \{(.*?)\n        \}',
-        dotAll: true,
-      ).firstMatch(script)?.group(1);
-
-      expect(findParaBody, isNotNull);
-      expect(findParaBody!.contains('UserID'), isTrue);
-      expect(findParaBody.contains('ServiceUri'), isFalse);
+      // 只有拿到 WORKLOG_ 开头的 ID 才算成功，
+      // 否则可能是服务端返回了错误页而 HTTP 仍是 200。
+      expect(script.contains("indexOf('WORKLOG_') === 0"), isTrue);
+      expect(script.contains("reason: 'unexpected'"), isTrue);
     });
 
-    test('会话探测脚本同样不要求 ServiceUri', () {
+    test('会话探测报告已抓到的请求数，便于区分「没登录」和「没抓到」', () {
       final probe = WorkLogSubmitScript.buildSessionProbeScript(
         captureStoreName: '__store',
       );
 
-      expect(probe.contains('UserID'), isTrue);
-      expect(probe.contains('ServiceUri'), isFalse);
+      expect(probe.contains('bossFindPara()'), isTrue);
+      expect(probe.contains('captured'), isTrue);
       expect(probe.contains('Password'), isFalse);
     });
 
