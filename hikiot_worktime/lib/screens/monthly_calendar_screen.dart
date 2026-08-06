@@ -2374,9 +2374,14 @@ class MonthlyCalendarScreenState extends State<MonthlyCalendarScreen> {
               style: TextStyle(fontSize: 14, fontWeight: FontWeight.bold),
             ),
             const SizedBox(width: 4),
-            Text(
-              '(长按置顶)',
-              style: TextStyle(fontSize: 11, color: Colors.grey[500]),
+            // 字体放大时先让这句说明省略，也不能把右侧开关挤出屏幕
+            Flexible(
+              child: Text(
+                '(长按置顶)',
+                style: TextStyle(fontSize: 11, color: Colors.grey[500]),
+                maxLines: 1,
+                overflow: TextOverflow.ellipsis,
+              ),
             ),
             const Spacer(),
             // 今日数据开关
@@ -2633,25 +2638,36 @@ class MonthlyCalendarScreenState extends State<MonthlyCalendarScreen> {
           child: Column(
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
-              Row(
+              // 用 Wrap 而不是 Row + Spacer：
+              // 目标名、徽章、工时三者宽度都会随系统字体放大而增长，
+              // Row 放不下时会直接溢出把数字切掉（实测 168.00h 被切成 168.0(）。
+              // Wrap 在放不下时自动换行，任何字号下都不会崩。
+              Wrap(
+                crossAxisAlignment: WrapCrossAlignment.center,
+                spacing: 8,
+                runSpacing: 6,
                 children: [
-                  Icon(
-                    isCompleted
-                        ? Icons.check_circle
-                        : Icons.radio_button_unchecked,
-                    color: getProgressColor(),
-                    size: 20,
+                  Row(
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      Icon(
+                        isCompleted
+                            ? Icons.check_circle
+                            : Icons.radio_button_unchecked,
+                        color: getProgressColor(),
+                        size: 20,
+                      ),
+                      const SizedBox(width: 6),
+                      Text(
+                        '$target% 目标',
+                        style: TextStyle(
+                          fontSize: 14,
+                          fontWeight: FontWeight.bold,
+                          color: getProgressColor(),
+                        ),
+                      ),
+                    ],
                   ),
-                  const SizedBox(width: 8),
-                  Text(
-                    '$target% 目标',
-                    style: TextStyle(
-                      fontSize: 14,
-                      fontWeight: FontWeight.bold,
-                      color: getProgressColor(),
-                    ),
-                  ),
-                  const SizedBox(width: 8),
                   // 置顶标签优先显示
                   if (isPinned)
                     Container(
@@ -2698,7 +2714,6 @@ class MonthlyCalendarScreenState extends State<MonthlyCalendarScreen> {
                         style: TextStyle(fontSize: 10, color: Colors.white),
                       ),
                     ),
-                  const Spacer(),
                   Text(
                     '${WorkTimeCalculator.formatHours(currentHours)} / ${WorkTimeCalculator.formatHours(targetHours)}h',
                     style: TextStyle(fontSize: 12, color: Colors.grey[700]),
@@ -2721,12 +2736,15 @@ class MonthlyCalendarScreenState extends State<MonthlyCalendarScreen> {
                         ),
                       ),
                       const SizedBox(width: 8),
-                      Text(
-                        '${WorkTimeCalculator.formatHours(progressPercentage)}%',
-                        style: TextStyle(
-                          fontSize: 11,
-                          fontWeight: FontWeight.bold,
-                          color: getProgressColor(),
+                      // 字体放大时让数值换行而不是撑爆整行
+                      Flexible(
+                        child: Text(
+                          '${WorkTimeCalculator.formatHours(progressPercentage)}%',
+                          style: TextStyle(
+                            fontSize: 11,
+                            fontWeight: FontWeight.bold,
+                            color: getProgressColor(),
+                          ),
                         ),
                       ),
                     ],
@@ -2759,12 +2777,15 @@ class MonthlyCalendarScreenState extends State<MonthlyCalendarScreen> {
                         ),
                       ),
                       const SizedBox(width: 8),
-                      Text(
-                        '${WorkTimeCalculator.formatHours(avgProgressPercentage)}% (${WorkTimeCalculator.formatHours(avgHoursPerDay)}h/天)',
-                        style: TextStyle(
-                          fontSize: 11,
-                          fontWeight: FontWeight.bold,
-                          color: getAvgProgressColor(),
+                      // 这行最长（含百分比和每天小时数），字体放大时最先撑爆
+                      Flexible(
+                        child: Text(
+                          '${WorkTimeCalculator.formatHours(avgProgressPercentage)}% (${WorkTimeCalculator.formatHours(avgHoursPerDay)}h/天)',
+                          style: TextStyle(
+                            fontSize: 11,
+                            fontWeight: FontWeight.bold,
+                            color: getAvgProgressColor(),
+                          ),
                         ),
                       ),
                     ],
