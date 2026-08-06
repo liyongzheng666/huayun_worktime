@@ -52,6 +52,7 @@ class WorkReportWebViewScreen extends StatefulWidget {
     this.initialUrl,
     this.fillDate,
     this.autoSubmit = false,
+    this.autoSyncBossMonth,
   });
 
   final String? initialUrl;
@@ -61,6 +62,13 @@ class WorkReportWebViewScreen extends StatefulWidget {
 
   /// 进入后自动等待登录完成并发起提交，用于「一键提交今日日志」。
   final bool autoSubmit;
+
+  /// 非空时：进入后自动等登录完成 → 同步该月的 BOSS 工时 → 自动返回。
+  ///
+  /// 供月度页的「全量更新工时」调用。BOSS 工时只能在网页会话里取
+  /// （凭据在页面请求体内，不能落到 APP），所以必须借道这个页面，
+  /// 但对用户而言应当是一次点击完成，不该让他自己去翻菜单。
+  final DateTime? autoSyncBossMonth;
 
   @override
   State<WorkReportWebViewScreen> createState() =>
@@ -114,10 +122,11 @@ class _WorkReportWebViewScreenState extends State<WorkReportWebViewScreen> {
           PopupMenuButton<String>(
             icon: const Icon(Icons.more_vert),
             tooltip: '开发者工具',
+            // 「同步本月 BOSS 工时」已并入月度页的「全量更新工时」，
+            // 不在这里重复提供入口——同一件事两个地方触发，
+            // 用户既记不住又容易只更新了一半。
             onSelected: (value) {
               switch (value) {
-                case 'syncHours':
-                  _syncBossHours();
                 case 'dom':
                   _exportPageStructure();
                 case 'clearCapture':
@@ -127,8 +136,6 @@ class _WorkReportWebViewScreenState extends State<WorkReportWebViewScreen> {
               }
             },
             itemBuilder: (_) => const [
-              PopupMenuItem(value: 'syncHours', child: Text('同步本月 BOSS 工时')),
-              PopupMenuDivider(),
               PopupMenuItem(value: 'dom', child: Text('导出页面结构')),
               PopupMenuItem(value: 'clearCapture', child: Text('① 清空抓包')),
               PopupMenuItem(value: 'exportCapture', child: Text('② 导出抓包')),
@@ -185,6 +192,7 @@ class _WorkReportWebViewScreenState extends State<WorkReportWebViewScreen> {
                 // 用户正常浏览的过程本身就是学习素材，不该让他去填内部 ID
                 _startBackgroundLearning();
                 if (widget.autoSubmit) _startAutoSubmit();
+                if (widget.autoSyncBossMonth != null) _startAutoSyncBossHours();
               },
               // 单页应用内部跳转不触发 onLoadStop，需单独监听。
               onUpdateVisitedHistory: (_, url, _) {
@@ -973,14 +981,63 @@ class _WorkReportWebViewScreenState extends State<WorkReportWebViewScreen> {
     );
   }
 
-  /// 同步当前月份的 BOSS 已填工时到本地，供月历页展示。
+  /// 自动同步是否已触发，避免多次 onLoadStop 重复开轮询。
+  bool _autoSyncStarted = false;
+
+  /// 「全量更新工时」带过来的自动同步：等登录完成 → 同步该月 → 自动返回。
+  ///
+  /// 不设超时上限后自动退出：用户可能正停在登录页慢慢输密码，
+  /// 这时候把页面关掉等于白跑一趟。轮询会一直等到会话就绪，
+  /// 用户不想等随时可以自己返回。
+  Future<void> _startAutoSyncBossHours() async {
+    if (_autoSyncStarted) return;
+    _autoSyncStarted = true;
+
+    final month = widget.autoSyncBossMonth;
+    if (month == null) return;
+
+    for (var attempt = 0; ; attempt++) {
+      if (!mounted) return;
+
+      final controller = _controller;
+      if (controller != null) {
+        try {
+          final probe = await controller.evaluateJavascript(
+            source: WorkLogSubmitScript.buildSessionProbeScript(
+              captureStoreName: WorkLogRequestCapture.storeName,
+            ),
+          );
+          final decoded = jsonDecode(probe?.toString() ?? '{}');
+          if (decoded is Map && decoded['ready'] == true) break;
+        } catch (_) {
+          // 探测失败按未就绪处理，继续等
+        }
+      }
+
+      // 等久了给一次提示，免得用户以为卡住了
+      if (attempt == 12 && mounted) {
+        _notify('等待登录完成后会自动同步 BOSS 工时');
+      }
+      await Future.delayed(const Duration(milliseconds: 700));
+    }
+
+    if (!mounted) return;
+    final ok = await _syncBossHours(month: month);
+
+    // 同步完自动退回月度页，用户不必再手动返回
+    if (!mounted) return;
+    Navigator.of(context).pop(ok);
+  }
+
+  /// 同步指定月份的 BOSS 已填工时到本地，供月历页展示。
   ///
   /// 逐日请求（一个月约 30 次），因此执行期间给出等待提示。
-  Future<void> _syncBossHours() async {
+  /// 返回是否真的取到了数据。
+  Future<bool> _syncBossHours({DateTime? month}) async {
     final controller = _controller;
-    if (controller == null) return;
+    if (controller == null) return false;
 
-    final date = widget.fillDate ?? DateHelper.getWorkDate();
+    final date = month ?? widget.fillDate ?? DateHelper.getWorkDate();
     final monthKey = DateHelper.formatMonth(date);
     _notify('正在同步 $monthKey 的 BOSS 工时，约需数十秒…');
 
@@ -995,16 +1052,18 @@ class _WorkReportWebViewScreenState extends State<WorkReportWebViewScreen> {
 
       final hours = WorkLogBossHours.parseResult(result?.toString());
       if (hours.isEmpty) {
-        if (!mounted) return;
+        if (!mounted) return false;
         _notify('未取到任何 BOSS 工时，请确认已登录并在页面上操作过一次');
-        return;
+        return false;
       }
 
       await StorageService().saveBossHours(monthKey, hours);
-      if (!mounted) return;
+      if (!mounted) return false;
       _notify('已同步 $monthKey：${hours.length} 天有填报记录');
+      return true;
     } catch (e) {
       _notify('同步失败：$e');
+      return false;
     }
   }
 

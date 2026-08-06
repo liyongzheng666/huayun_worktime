@@ -14,6 +14,7 @@ import '../utils/date_helper.dart';
 import '../utils/target_progress_helper.dart';
 
 import '../widgets/home_button.dart';
+import 'work_report_webview_screen.dart';
 import '../widgets/haptic_refresh_indicator.dart';
 import '../widgets/team_selection_dialog.dart';
 
@@ -381,6 +382,11 @@ class MonthlyCalendarScreenState extends State<MonthlyCalendarScreen> {
       }
 
       setState(() => _isLoading = false);
+
+      // 全量更新顺带把 BOSS 已填工时也刷一遍：
+      // 「更新工时」在用户眼里是一件事，不该拆成两个入口、
+      // 其中一个还藏在网页页的三点菜单里。
+      if (forceAll && mounted) await _syncBossHours();
     } catch (e) {
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
@@ -388,6 +394,38 @@ class MonthlyCalendarScreenState extends State<MonthlyCalendarScreen> {
         );
       }
       setState(() => _isLoading = false);
+    }
+  }
+
+  /// 同步当月 BOSS 已填工时。
+  ///
+  /// BOSS 工时只能在网页会话里取——凭据在页面的每个请求体内，
+  /// 不能落到 APP 存储（见 docs/踩坑记录.md 3.12）。因此必须借道日志系统页面，
+  /// 但对用户而言是一次点击完成：进去、同步、自动退回。
+  Future<void> _syncBossHours() async {
+    final synced = await Navigator.push<bool>(
+      context,
+      MaterialPageRoute(
+        builder: (_) => WorkReportWebViewScreen(
+          fillDate: _selectedMonth,
+          autoSyncBossMonth: _selectedMonth,
+        ),
+      ),
+    );
+    if (!mounted) return;
+
+    // 无论成功与否都重读一次：用户可能中途自己返回，
+    // 但此前已经同步成功过。
+    final bossHours = await _storage.loadBossHours(
+      DateFormat('yyyy-MM').format(_selectedMonth),
+    );
+    if (!mounted) return;
+    setState(() => _bossHours = bossHours);
+
+    if (synced != true && bossHours.isEmpty) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('BOSS 工时未同步，海康打卡工时已更新')),
+      );
     }
   }
 
@@ -874,11 +912,11 @@ class MonthlyCalendarScreenState extends State<MonthlyCalendarScreen> {
               physics: const NeverScrollableScrollPhysics(),
               gridDelegate: const SliverGridDelegateWithFixedCrossAxisCount(
                 crossAxisCount: 7,
-                // 格子内现在是三行（日期 + 海康工时 + BOSS 工时），
-                // 比原来的 0.8 更高一些才不会挤在一起。
-                childAspectRatio: 0.72,
-                crossAxisSpacing: 4,
-                mainAxisSpacing: 4,
+                // 格子内是日期 + 工时 + BOSS 状态条。
+                // BOSS 由一行数字压成细条后，不再需要 0.72 那么高。
+                childAspectRatio: 0.84,
+                crossAxisSpacing: 5,
+                mainAxisSpacing: 5,
               ),
               itemCount: weekdayOfFirstDay - 1 + daysInMonth, // 前面的空白 + 实际天数
               itemBuilder: (context, index) {
@@ -963,23 +1001,24 @@ class MonthlyCalendarScreenState extends State<MonthlyCalendarScreen> {
     final dayType = dayData?['type'] ?? AppConstants.typeWorkday;
     final isManual = dayData?['isManual'] ?? false;
 
-    // 根据类型选择背景颜色
+    // 根据类型选择背景颜色。
+    // 用 shade 而非原色：原色饱和度过高，整月铺满时刺眼且压不住格子内的文字。
     Color bgColor;
     switch (dayType) {
       case '工作日':
-        bgColor = Colors.green;
+        bgColor = Colors.green.shade600;
         break;
       case '加班日':
-        bgColor = Colors.purple;
+        bgColor = Colors.deepPurple.shade400;
         break;
       case '出差':
-        bgColor = Colors.amber;
+        bgColor = Colors.amber.shade700;
         break;
       case '请假':
-        bgColor = Colors.red;
+        bgColor = Colors.red.shade400;
         break;
       case '自定义':
-        bgColor = Colors.blue;
+        bgColor = Colors.blue.shade500;
         break;
       case '非工作日':
       default:
@@ -1005,106 +1044,148 @@ class MonthlyCalendarScreenState extends State<MonthlyCalendarScreen> {
     return Container(
       decoration: BoxDecoration(
         color: bgColor.withValues(alpha: opacity),
+        // 今天用加粗描边强调；其余格子只留极淡的边，避免整屏被网格线切碎
         border: isToday
-            ? Border.all(color: Colors.orange, width: 2)
-            : Border.all(color: Colors.grey[300]!, width: 0.5),
-        borderRadius: BorderRadius.circular(8),
+            ? Border.all(color: Colors.orange.shade800, width: 2)
+            : Border.all(color: Colors.black.withValues(alpha: 0.06), width: 1),
+        borderRadius: BorderRadius.circular(10),
       ),
       child: InkWell(
         onTap: () {
           HapticUtils.selectionClick(); // 点击日历日期时震动
           _showDetailedDayDialog(dateStr);
         },
-        borderRadius: BorderRadius.circular(8),
-        child: Padding(
-          padding: const EdgeInsets.all(4),
-          child: Column(
-            mainAxisAlignment: MainAxisAlignment.center,
-            children: [
-              Row(
+        borderRadius: BorderRadius.circular(10),
+        child: Stack(
+          children: [
+            Padding(
+              padding: const EdgeInsets.symmetric(horizontal: 2, vertical: 4),
+              child: Column(
                 mainAxisAlignment: MainAxisAlignment.center,
                 children: [
                   Text(
                     '$day',
                     style: TextStyle(
-                      fontSize: 16,
+                      fontSize: 15,
+                      height: 1.1,
                       fontWeight: FontWeight.bold,
                       color: textColor,
                     ),
                   ),
-                  if (isManual)
-                    Container(
-                      margin: const EdgeInsets.only(left: 2),
-                      width: 6,
-                      height: 6,
-                      decoration: const BoxDecoration(
-                        color: Colors.red,
-                        shape: BoxShape.circle,
-                      ),
-                    ),
+                  const SizedBox(height: 1),
+                  _buildCellHours(dateStr, hours, textColor),
                 ],
               ),
-              _buildCellHours(dateStr, hours, textColor),
-            ],
-          ),
+            ),
+            // 手动标记移到右上角：原先跟在日期后面，会把日期挤得不居中，
+            // 有标记和没标记的格子看起来像没对齐。
+            if (isManual)
+              Positioned(
+                top: 3,
+                right: 3,
+                child: Container(
+                  width: 5,
+                  height: 5,
+                  decoration: BoxDecoration(
+                    color: textColor.withValues(alpha: 0.9),
+                    shape: BoxShape.circle,
+                  ),
+                ),
+              ),
+          ],
         ),
       ),
     );
   }
 
-  /// 格子内的工时区：上行海康打卡工时，下行 BOSS 已填报工时。
+  /// 格子内的工时区。
   ///
-  /// 同时展示两者的意义在于一眼看出差异，因此两者不一致时把 BOSS 值高亮，
-  /// 一致或未同步时保持低调，避免整屏花掉。
+  /// 设计取舍：每天真正要看的是**打卡工时**，所以它占主位；
+  /// BOSS 那边多数时候只需知道「填了没有」，把它也印成一行数字会让整屏
+  /// 布满数字和占位符，反而看不出重点。因此 BOSS 状态压成一条细状态条：
+  ///
+  /// - 已填且与打卡一致 → 实心细条，低调确认
+  /// - 打了卡但没填日志 → 淡色空条，这是唯一需要你动手的状态
+  /// - 两边对不上       → 直接显示 BOSS 的数字并标警示色，此时数字才有意义
   Widget _buildCellHours(String dateStr, double hours, Color textColor) {
     final bossHours = _bossHours[dateStr];
     final hasHikiot = hours > 0;
     final hasBoss = bossHours != null && bossHours > 0;
 
-    if (!hasHikiot && !hasBoss) return const SizedBox(height: 2);
+    // 都没有数据时留等高占位，避免同行格子高度参差
+    if (!hasHikiot && !hasBoss) return const SizedBox(height: 16);
 
     // 两边都有值且差异超过 0.01 小时才算不一致（避免浮点误差误报）
-    final mismatch =
-        hasHikiot && hasBoss && (hours - bossHours).abs() > 0.01;
+    final mismatch = hasHikiot && hasBoss && (hours - bossHours).abs() > 0.01;
 
-    return Padding(
-      padding: const EdgeInsets.only(top: 1),
-      child: Column(
-        mainAxisSize: MainAxisSize.min,
-        children: [
-          Text(
-            hasHikiot ? WorkTimeCalculator.formatHours(hours) : '—',
-            style: TextStyle(
-              fontSize: 10,
-              height: 1.1,
-              color: textColor,
-              fontWeight: FontWeight.w500,
-            ),
-            maxLines: 1,
-            softWrap: false,
+    return Column(
+      mainAxisSize: MainAxisSize.min,
+      children: [
+        Text(
+          hasHikiot ? WorkTimeCalculator.formatHours(hours) : '—',
+          style: TextStyle(
+            fontSize: 11,
+            height: 1.15,
+            color: textColor,
+            fontWeight: FontWeight.w600,
+            letterSpacing: -0.2,
           ),
+          maxLines: 1,
+          softWrap: false,
+        ),
+        const SizedBox(height: 2),
+        if (mismatch)
           Text(
-            hasBoss ? WorkTimeCalculator.formatHours(bossHours) : '—',
-            style: TextStyle(
+            WorkTimeCalculator.formatHours(bossHours),
+            style: const TextStyle(
               fontSize: 9,
-              height: 1.2,
-              // 不一致时用醒目色，其余情况弱化处理
-              color: mismatch
-                  ? AppColors.warningDark
-                  : textColor.withValues(alpha: 0.65),
-              fontWeight: mismatch ? FontWeight.bold : FontWeight.normal,
+              height: 1.0,
+              color: Color(0xFFB26A00), // 警示橙，在各种格子底色上都能看清
+              fontWeight: FontWeight.bold,
             ),
             maxLines: 1,
             softWrap: false,
+          )
+        else
+          Container(
+            width: 14,
+            height: 3,
+            decoration: BoxDecoration(
+              // 已填 → 实心；只打卡未填 → 淡色，提示这天还欠一条日志
+              color: textColor.withValues(alpha: hasBoss ? 0.85 : 0.22),
+              borderRadius: BorderRadius.circular(2),
+            ),
           ),
-        ],
-      ),
+      ],
     );
   }
 
-  /// 日历下方图例，说明两行工时各代表什么。
+  /// 日历下方图例。
+  ///
+  /// 格子里的细条是自造的视觉语言，不解释没人看得懂，因此图例用
+  /// 同样的图形把三种状态画出来，而不是只用文字描述。
   Widget _buildHoursLegend() {
-    final synced = _bossHours.isNotEmpty;
+    if (_bossHours.isEmpty) {
+      return Container(
+        padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+        decoration: BoxDecoration(
+          color: Colors.grey.shade100,
+          borderRadius: BorderRadius.circular(8),
+        ),
+        child: Row(
+          children: [
+            Icon(Icons.layers_outlined, size: 16, color: Colors.grey[600]),
+            const SizedBox(width: 8),
+            Expanded(
+              child: Text(
+                'BOSS 工时未同步，点「全量更新工时」可一并同步',
+                style: TextStyle(fontSize: 11, color: Colors.grey[700]),
+              ),
+            ),
+          ],
+        ),
+      );
+    }
 
     return Container(
       padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
@@ -1112,21 +1193,61 @@ class MonthlyCalendarScreenState extends State<MonthlyCalendarScreen> {
         color: Colors.grey.shade100,
         borderRadius: BorderRadius.circular(8),
       ),
-      child: Row(
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          Icon(Icons.layers_outlined, size: 16, color: Colors.grey[600]),
-          const SizedBox(width: 8),
-          Expanded(
-            child: Text(
-              synced
-                  ? '每格上行为海康打卡工时，下行为 BOSS 已填报工时；'
-                        '两者不一致时下行标红'
-                  : 'BOSS 工时未同步。到「工作日志 → 打开日志系统 → ⋮ 同步本月 BOSS 工时」',
-              style: TextStyle(fontSize: 11, color: Colors.grey[700]),
+          Text(
+            '大字为打卡工时，下方细条为 BOSS 填报状态',
+            style: TextStyle(
+              fontSize: 11,
+              color: Colors.grey[800],
+              fontWeight: FontWeight.w600,
             ),
+          ),
+          const SizedBox(height: 6),
+          Wrap(
+            spacing: 14,
+            runSpacing: 6,
+            children: [
+              _legendItem(_legendBar(0.85), '已填报'),
+              _legendItem(_legendBar(0.22), '未填报'),
+              _legendItem(
+                const Text(
+                  '8.5',
+                  style: TextStyle(
+                    fontSize: 9,
+                    color: Color(0xFFB26A00),
+                    fontWeight: FontWeight.bold,
+                  ),
+                ),
+                '与打卡不一致，显示 BOSS 值',
+              ),
+            ],
           ),
         ],
       ),
+    );
+  }
+
+  Widget _legendBar(double alpha) {
+    return Container(
+      width: 14,
+      height: 3,
+      decoration: BoxDecoration(
+        color: Colors.grey.shade800.withValues(alpha: alpha),
+        borderRadius: BorderRadius.circular(2),
+      ),
+    );
+  }
+
+  Widget _legendItem(Widget sample, String label) {
+    return Row(
+      mainAxisSize: MainAxisSize.min,
+      children: [
+        SizedBox(width: 16, child: Center(child: sample)),
+        const SizedBox(width: 5),
+        Text(label, style: TextStyle(fontSize: 10, color: Colors.grey[700])),
+      ],
     );
   }
 
