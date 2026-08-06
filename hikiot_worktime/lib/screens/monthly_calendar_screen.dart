@@ -58,6 +58,10 @@ class MonthlyCalendarScreenState extends State<MonthlyCalendarScreen> {
   // 节假日计划
   Map<String, String> _holidayPlan = {};
 
+  // BOSS 已填报工时: {日期字符串: 工时}
+  // 由「工作日志 → 日志系统 → 同步本月 BOSS 工时」写入，本页只读展示。
+  Map<String, double> _bossHours = {};
+
   // 是否包含今日工时数据（适用于第二天上班只打了上班卡想看之前数据的情况）
   bool _includeTodayData = true;
 
@@ -273,6 +277,12 @@ class MonthlyCalendarScreenState extends State<MonthlyCalendarScreen> {
       _isLoading = true;
       _error = null;
     });
+
+    // BOSS 工时来自本地缓存，由日志页手动同步写入，读不到不影响主流程
+    final bossHours = await _storage.loadBossHours(monthStr);
+    if (mounted) {
+      setState(() => _bossHours = bossHours);
+    }
 
     try {
       final result = await _monthlyRepository.loadMonth(
@@ -864,7 +874,9 @@ class MonthlyCalendarScreenState extends State<MonthlyCalendarScreen> {
               physics: const NeverScrollableScrollPhysics(),
               gridDelegate: const SliverGridDelegateWithFixedCrossAxisCount(
                 crossAxisCount: 7,
-                childAspectRatio: 0.8,
+                // 格子内现在是三行（日期 + 海康工时 + BOSS 工时），
+                // 比原来的 0.8 更高一些才不会挤在一起。
+                childAspectRatio: 0.72,
                 crossAxisSpacing: 4,
                 mainAxisSpacing: 4,
               ),
@@ -897,6 +909,8 @@ class MonthlyCalendarScreenState extends State<MonthlyCalendarScreen> {
               },
             ),
             const SizedBox(height: 12),
+            _buildHoursLegend(),
+            const SizedBox(height: 8),
             // 提示信息
             Container(
               padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
@@ -1030,17 +1044,88 @@ class MonthlyCalendarScreenState extends State<MonthlyCalendarScreen> {
                     ),
                 ],
               ),
-              const SizedBox(height: 2),
-              if (hours > 0)
-                Text(
-                  '${WorkTimeCalculator.formatHours(hours)}H',
-                  style: TextStyle(fontSize: 10, color: textColor),
-                  overflow: TextOverflow.visible,
-                  softWrap: false,
-                ),
+              _buildCellHours(dateStr, hours, textColor),
             ],
           ),
         ),
+      ),
+    );
+  }
+
+  /// 格子内的工时区：上行海康打卡工时，下行 BOSS 已填报工时。
+  ///
+  /// 同时展示两者的意义在于一眼看出差异，因此两者不一致时把 BOSS 值高亮，
+  /// 一致或未同步时保持低调，避免整屏花掉。
+  Widget _buildCellHours(String dateStr, double hours, Color textColor) {
+    final bossHours = _bossHours[dateStr];
+    final hasHikiot = hours > 0;
+    final hasBoss = bossHours != null && bossHours > 0;
+
+    if (!hasHikiot && !hasBoss) return const SizedBox(height: 2);
+
+    // 两边都有值且差异超过 0.01 小时才算不一致（避免浮点误差误报）
+    final mismatch =
+        hasHikiot && hasBoss && (hours - bossHours).abs() > 0.01;
+
+    return Padding(
+      padding: const EdgeInsets.only(top: 1),
+      child: Column(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Text(
+            hasHikiot ? WorkTimeCalculator.formatHours(hours) : '—',
+            style: TextStyle(
+              fontSize: 10,
+              height: 1.1,
+              color: textColor,
+              fontWeight: FontWeight.w500,
+            ),
+            maxLines: 1,
+            softWrap: false,
+          ),
+          Text(
+            hasBoss ? WorkTimeCalculator.formatHours(bossHours) : '—',
+            style: TextStyle(
+              fontSize: 9,
+              height: 1.2,
+              // 不一致时用醒目色，其余情况弱化处理
+              color: mismatch
+                  ? AppColors.warningDark
+                  : textColor.withValues(alpha: 0.65),
+              fontWeight: mismatch ? FontWeight.bold : FontWeight.normal,
+            ),
+            maxLines: 1,
+            softWrap: false,
+          ),
+        ],
+      ),
+    );
+  }
+
+  /// 日历下方图例，说明两行工时各代表什么。
+  Widget _buildHoursLegend() {
+    final synced = _bossHours.isNotEmpty;
+
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+      decoration: BoxDecoration(
+        color: Colors.grey.shade100,
+        borderRadius: BorderRadius.circular(8),
+      ),
+      child: Row(
+        children: [
+          Icon(Icons.layers_outlined, size: 16, color: Colors.grey[600]),
+          const SizedBox(width: 8),
+          Expanded(
+            child: Text(
+              synced
+                  ? '每格上行为海康打卡工时，下行为 BOSS 已填报工时；'
+                        '两者不一致时下行标红'
+                  : 'BOSS 工时未同步。到「工作日志 → 打开日志系统 → ⋮ 同步本月 BOSS 工时」',
+              style: TextStyle(fontSize: 11, color: Colors.grey[700]),
+            ),
+          ),
+        ],
       ),
     );
   }

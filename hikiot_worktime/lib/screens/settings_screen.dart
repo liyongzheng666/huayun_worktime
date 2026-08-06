@@ -6,7 +6,9 @@ import 'dart:async';
 import '../services/session_service.dart';
 import '../services/storage_service.dart';
 import '../services/hikiot_api_client.dart';
+import '../services/ios_reminder_scheduler.dart';
 import '../services/notification_service.dart';
+import '../services/platform_capabilities.dart';
 import '../services/reminder_coordinator.dart';
 import '../services/settings_repository.dart';
 import '../services/team_context_service.dart';
@@ -411,20 +413,30 @@ class _SettingsScreenState extends State<SettingsScreen> {
                     ),
                     const SizedBox(height: 6),
                     Text(
-                      '此功能采用本地闹钟而非服务器推送，在以下情况可能无法正常提醒：',
+                      PlatformCapabilities.supportsExactBackgroundAlarm
+                          ? '此功能采用本地闹钟而非服务器推送，在以下情况可能无法正常提醒：'
+                          : '此功能采用系统本地通知，到点由系统直接推送，不依赖 App 后台运行，'
+                                '但存在以下限制：',
                       style: TextStyle(fontSize: 11, color: Colors.red[700]),
                     ),
                     const SizedBox(height: 4),
                     Text(
-                      '• 小米/华为/OPPO/vivo等国产系统省电策略\n'
-                      '• 应用被系统后台杀死\n'
-                      '• 未开启自启动权限\n'
-                      '• 开启了电池优化',
+                      PlatformCapabilities.supportsExactBackgroundAlarm
+                          ? '• 小米/华为/OPPO/vivo等国产系统省电策略\n'
+                                '• 应用被系统后台杀死\n'
+                                '• 未开启自启动权限\n'
+                                '• 开启了电池优化'
+                          // iOS 不会在触发时刻唤起 App，通知内容在调度时就已冻结。
+                          : '• 提醒文案为固定内容，不含当日实时打卡状态\n'
+                                '• 需要在系统设置中允许本应用发送通知\n'
+                                '• 开启「专注模式」时可能被系统延后',
                       style: TextStyle(fontSize: 11, color: Colors.red[600]),
                     ),
                     const SizedBox(height: 6),
                     Text(
-                      '建议：点击"权限设置"按照指引配置手机权限',
+                      PlatformCapabilities.supportsExactBackgroundAlarm
+                          ? '建议：点击"权限设置"按照指引配置手机权限'
+                          : '建议：收不到提醒时，请到 设置 > 通知 中确认已允许本应用通知',
                       style: TextStyle(
                         fontSize: 11,
                         fontWeight: FontWeight.w500,
@@ -763,17 +775,20 @@ class _SettingsScreenState extends State<SettingsScreen> {
             // 功能按钮
             Row(
               children: [
-                Expanded(
-                  child: OutlinedButton.icon(
-                    onPressed: _showPermissionGuide,
-                    icon: const Icon(Icons.settings_suggest, size: 18),
-                    label: const Text('权限设置'),
-                    style: OutlinedButton.styleFrom(
-                      padding: const EdgeInsets.symmetric(vertical: 10),
+                // 厂商保活引导仅 Android 需要，iOS 无自启动/省电白名单概念。
+                if (PlatformCapabilities.needsVendorKeepAliveGuide) ...[
+                  Expanded(
+                    child: OutlinedButton.icon(
+                      onPressed: _showPermissionGuide,
+                      icon: const Icon(Icons.settings_suggest, size: 18),
+                      label: const Text('权限设置'),
+                      style: OutlinedButton.styleFrom(
+                        padding: const EdgeInsets.symmetric(vertical: 10),
+                      ),
                     ),
                   ),
-                ),
-                const SizedBox(width: 12),
+                  const SizedBox(width: 12),
+                ],
                 Expanded(
                   child: ElevatedButton.icon(
                     onPressed:
@@ -804,7 +819,9 @@ class _SettingsScreenState extends State<SettingsScreen> {
                   const SizedBox(width: 8),
                   Expanded(
                     child: Text(
-                      '需开启自启动、关闭省电优化才能正常提醒',
+                      PlatformCapabilities.supportsExactBackgroundAlarm
+                          ? '需开启自启动、关闭省电优化才能正常提醒'
+                          : '提醒由系统按时推送，文案为固定内容，打开 App 查看实时工时',
                       style: TextStyle(fontSize: 12, color: Colors.blue[700]),
                     ),
                   ),
@@ -1117,14 +1134,28 @@ class _SettingsScreenState extends State<SettingsScreen> {
       builder: (context) => _TestCountdownDialog(),
     );
 
-    if (confirmed == true && mounted) {
-      // 设置10秒后的测试闹钟
+    if (confirmed != true || !mounted) return;
+
+    if (PlatformCapabilities.supportsExactBackgroundAlarm) {
+      // Android：退出 APP 才能验证「被闹钟唤醒」这条后台链路是否真的可用。
       final notificationService = NotificationService();
       await notificationService.initialize();
       await notificationService.scheduleTestAlarm();
-
-      // 退出APP
       exit(0);
+    }
+
+    // iOS：系统禁止 APP 主动退出，改为预约一条本地通知并提示用户回桌面等待。
+    final scheduler = IosReminderScheduler();
+    await scheduler.initialize();
+    await scheduler.scheduleTestNotification();
+
+    if (mounted) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text('已预约测试通知，请回到桌面或锁屏等待约 10 秒'),
+          duration: Duration(seconds: 4),
+        ),
+      );
     }
   }
 

@@ -1,4 +1,10 @@
-import 'notification_service.dart';
+import 'android_reminder_scheduler.dart';
+import 'ios_reminder_scheduler.dart';
+import 'platform_capabilities.dart';
+import 'reminder_scheduler.dart';
+
+// 对外继续从本文件暴露 ReminderScheduler，调用方和既有测试无需感知接口被拆分。
+export 'reminder_scheduler.dart';
 
 /// 提醒开关操作结果。
 enum ReminderToggleResult {
@@ -8,69 +14,19 @@ enum ReminderToggleResult {
   exactAlarmPermissionDenied,
 }
 
-/// 提醒调度器接口，隔离权限请求和 AlarmManager 调度细节。
-abstract class ReminderScheduler {
-  Future<void> initialize();
-
-  Future<bool> requestNotificationPermission();
-
-  Future<bool> requestExactAlarmPermission();
-
-  Future<void> scheduleMorningAlarm(int hour, int minute);
-
-  Future<void> scheduleEveningAlarm(int hour, int minute);
-
-  Future<void> cancelMorningAlarm();
-
-  Future<void> cancelEveningAlarm();
-}
-
-class _NotificationReminderScheduler implements ReminderScheduler {
-  _NotificationReminderScheduler(this._notificationService);
-
-  final NotificationService _notificationService;
-
-  @override
-  Future<void> initialize() {
-    return _notificationService.initialize();
-  }
-
-  @override
-  Future<bool> requestNotificationPermission() {
-    return _notificationService.requestNotificationPermission();
-  }
-
-  @override
-  Future<bool> requestExactAlarmPermission() {
-    return _notificationService.requestExactAlarmPermission();
-  }
-
-  @override
-  Future<void> scheduleMorningAlarm(int hour, int minute) {
-    return _notificationService.scheduleMorningAlarm(hour, minute);
-  }
-
-  @override
-  Future<void> scheduleEveningAlarm(int hour, int minute) {
-    return _notificationService.scheduleEveningAlarm(hour, minute);
-  }
-
-  @override
-  Future<void> cancelMorningAlarm() {
-    return _notificationService.cancelMorningAlarm();
-  }
-
-  @override
-  Future<void> cancelEveningAlarm() {
-    return _notificationService.cancelEveningAlarm();
-  }
+/// 按当前平台能力选择提醒调度器。
+///
+/// Android 走精确闹钟 + 后台联网实时文案；iOS 走系统本地通知 + 固定文案。
+ReminderScheduler createDefaultReminderScheduler() {
+  return PlatformCapabilities.supportsExactBackgroundAlarm
+      ? AndroidReminderScheduler()
+      : IosReminderScheduler();
 }
 
 /// 提醒设置协调器：统一处理权限闭环与实际调度。
 class ReminderCoordinator {
   ReminderCoordinator({ReminderScheduler? scheduler})
-    : _scheduler =
-          scheduler ?? _NotificationReminderScheduler(NotificationService());
+    : _scheduler = scheduler ?? createDefaultReminderScheduler();
 
   final ReminderScheduler _scheduler;
 

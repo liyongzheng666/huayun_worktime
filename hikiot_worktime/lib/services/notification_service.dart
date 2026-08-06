@@ -4,6 +4,7 @@ import 'dart:typed_data';
 import 'package:flutter_local_notifications/flutter_local_notifications.dart';
 import 'package:android_alarm_manager_plus/android_alarm_manager_plus.dart';
 import 'package:permission_handler/permission_handler.dart';
+import 'platform_capabilities.dart';
 import 'punch_reminder_service.dart';
 import 'storage_service.dart';
 
@@ -50,8 +51,10 @@ class NotificationService {
       onDidReceiveNotificationResponse: _onNotificationTapped,
     );
 
-    // 初始化 AlarmManager
-    await AndroidAlarmManager.initialize();
+    // 初始化 AlarmManager（仅 Android，iOS 没有等价的精确闹钟能力）
+    if (PlatformCapabilities.supportsExactBackgroundAlarm) {
+      await AndroidAlarmManager.initialize();
+    }
 
     // 创建通知渠道 (Android 8.0+)
     await _createNotificationChannel();
@@ -94,12 +97,25 @@ class NotificationService {
   }
 
   /// 请求通知权限
+  ///
+  /// iOS 必须真正向系统申请授权。此前非 Android 分支直接返回 true，
+  /// 会导致用户拒绝通知后界面仍显示「提醒已开启」，而通知永远不会送达。
   Future<bool> requestNotificationPermission() async {
-    if (Platform.isAndroid) {
+    if (PlatformCapabilities.supportsExactBackgroundAlarm) {
       final status = await Permission.notification.request();
       return status.isGranted;
     }
-    return true;
+
+    final iosPlugin = _notifications
+        .resolvePlatformSpecificImplementation<
+          IOSFlutterLocalNotificationsPlugin
+        >();
+    final granted = await iosPlugin?.requestPermissions(
+      alert: true,
+      badge: true,
+      sound: true,
+    );
+    return granted ?? false;
   }
 
   /// 请求精确闹钟权限 (Android 12+)
@@ -112,9 +128,21 @@ class NotificationService {
   }
 
   /// 检查所有必要权限
+  ///
+  /// 精确闹钟和电池优化白名单是 Android 专属概念，iOS 上不存在对应权限，
+  /// 直接按「已满足」返回，避免调用方把系统不支持误判成用户拒绝。
   Future<Map<String, bool>> checkAllPermissions() async {
+    final notificationGranted = await Permission.notification.isGranted;
+    if (!PlatformCapabilities.needsExactAlarmPermission) {
+      return {
+        'notification': notificationGranted,
+        'exactAlarm': true,
+        'ignoreBatteryOptimizations': true,
+      };
+    }
+
     return {
-      'notification': await Permission.notification.isGranted,
+      'notification': notificationGranted,
       'exactAlarm': await Permission.scheduleExactAlarm.isGranted,
       'ignoreBatteryOptimizations':
           await Permission.ignoreBatteryOptimizations.isGranted,

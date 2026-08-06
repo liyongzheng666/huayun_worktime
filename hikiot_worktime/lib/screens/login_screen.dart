@@ -1,3 +1,5 @@
+import 'dart:collection';
+
 import 'package:flutter/material.dart';
 import 'package:flutter_inappwebview/flutter_inappwebview.dart';
 import '../core/theme/theme.dart';
@@ -109,7 +111,10 @@ class _LoginScreenState extends State<LoginScreen> {
               // 缓存和存储
               cacheEnabled: true,
               clearCache: false,
-              thirdPartyCookiesEnabled: true,
+              thirdPartyCookiesEnabled: true, // 仅 Android 生效
+              // iOS 专属：让 WKWebView 使用共享 Cookie 存储，默认为 false。
+              // 开启后登录产生的 www_token 才能稳定被 CookieManager 读到并持久化。
+              sharedCookiesEnabled: true,
 
               // 用户代理（模拟真实移动浏览器）
               userAgent:
@@ -126,6 +131,17 @@ class _LoginScreenState extends State<LoginScreen> {
               // 自动适配
               layoutAlgorithm: LayoutAlgorithm.NORMAL,
             ),
+            // viewport 必须赶在首次渲染前设置。
+            // 放在 onLoadStop 注入会先渲染出错误排版，而且 WKWebView 首屏后
+            // 再改 initial-scale 不一定触发重新布局。Android 侧的
+            // useWideViewPort/loadWithOverviewMode/initialScale 在 iOS 上
+            // 全部无效，iOS 完全依赖这段脚本。
+            initialUserScripts: UnmodifiableListView<UserScript>([
+              UserScript(
+                injectionTime: UserScriptInjectionTime.AT_DOCUMENT_START,
+                source: _viewportScript,
+              ),
+            ]),
             onWebViewCreated: (controller) {
               webViewController = controller;
 
@@ -144,21 +160,11 @@ class _LoginScreenState extends State<LoginScreen> {
               });
               debugPrint('加载完成: ${url?.toString()}');
 
-              // 注入CSS和JavaScript来优化移动端显示
+              // 注入CSS优化移动端显示。
+              // viewport 已由 AT_DOCUMENT_START 用户脚本处理，此处不再重复设置。
               await controller.evaluateJavascript(
                 source: '''
                 (function() {
-                  // 确保viewport meta标签正确，设置初始缩放
-                  var viewport = document.querySelector('meta[name=viewport]');
-                  if (viewport) {
-                    viewport.setAttribute('content', 'width=device-width, initial-scale=0.8, maximum-scale=5.0, user-scalable=yes');
-                  } else {
-                    var meta = document.createElement('meta');
-                    meta.name = 'viewport';
-                    meta.content = 'width=device-width, initial-scale=0.8, maximum-scale=5.0, user-scalable=yes';
-                    document.getElementsByTagName('head')[0].appendChild(meta);
-                  }
-
                   // 添加CSS修复样式，确保内容不超出屏幕
                   var style = document.createElement('style');
                   style.textContent = `
@@ -192,6 +198,9 @@ class _LoginScreenState extends State<LoginScreen> {
                 })();
               ''',
               );
+
+              // 输出实测布局数据，便于客观判断 iOS 排版是否溢出。
+              await _checkLayout(controller);
 
               // 检查是否是登录后的页面
               if (url != null && !url.toString().contains('/login')) {
@@ -237,9 +246,103 @@ class _LoginScreenState extends State<LoginScreen> {
     );
   }
 
+  /// viewport 修正脚本。
+  ///
+  /// AT_DOCUMENT_START 时 `document.head` 可能还不存在，因此回退到
+  /// `documentElement`；页面自身之后可能再写一次 viewport，所以在
+  /// DOMContentLoaded 时重新应用一次。
+  static const String _viewportScript = '''
+    (function() {
+      var CONTENT = 'width=device-width, initial-scale=0.8, maximum-scale=5.0, user-scalable=yes';
+      function applyViewport() {
+        var viewport = document.querySelector('meta[name=viewport]');
+        if (!viewport) {
+          viewport = document.createElement('meta');
+          viewport.setAttribute('name', 'viewport');
+          (document.head || document.documentElement).appendChild(viewport);
+        }
+        viewport.setAttribute('content', CONTENT);
+      }
+      applyViewport();
+      document.addEventListener('DOMContentLoaded', applyViewport);
+    })();
+  ''';
+
+  /// 布局自检：用实测数值代替肉眼判断，输出到日志。
+  ///
+  /// `overflow > 0` 表示内容宽度超出视口，即出现横向滚动条。
+  Future<void> _checkLayout(InAppWebViewController controller) async {
+    try {
+      final result = await controller.evaluateJavascript(
+        source: '''
+          (function() {
+            var de = document.documentElement;
+            var meta = document.querySelector('meta[name=viewport]');
+            return JSON.stringify({
+              scrollWidth: de.scrollWidth,
+              innerWidth: window.innerWidth,
+              overflow: de.scrollWidth - window.innerWidth,
+              devicePixelRatio: window.devicePixelRatio,
+              scale: (window.visualViewport && window.visualViewport.scale) || null,
+              viewport: meta ? meta.getAttribute('content') : null
+            });
+          })();
+        ''',
+      );
+      debugPrint('WebView 布局自检: $result');
+    } catch (e) {
+      debugPrint('WebView 布局自检失败: $e');
+    }
+  }
+
+  /// 可能写入 www_token 的域名，与 SessionService 清理 Cookie 的域名保持一致。
+  static const List<String> _tokenCookieUrls = [
+    'https://www.hikiot.com',
+    'https://hikiot.com',
+    'https://api.hikiot.com',
+  ];
+
   Future<void> _tryExtractToken(InAppWebViewController controller) async {
     try {
-      // 注入JavaScript提取Cookie中的Token
+      // 优先读原生 Cookie 存储：iOS WKWebView 对 document.cookie 限制更严，
+      // 且 HttpOnly Cookie 只有这条路径读得到。失败再回退到注入 JS。
+      final token =
+          await _readTokenFromCookieStore() ??
+          await _readTokenFromDocumentCookie(controller);
+
+      if (token != null) {
+        await _saveTokenAndNavigate(token);
+      }
+    } catch (e) {
+      // 提取Token失败
+    }
+  }
+
+  /// 从 WebView 原生 Cookie 存储中读取 token。
+  Future<String?> _readTokenFromCookieStore() async {
+    final cookieManager = CookieManager.instance();
+
+    for (final url in _tokenCookieUrls) {
+      try {
+        final cookies = await cookieManager.getCookies(url: WebUri(url));
+        for (final cookie in cookies) {
+          if (cookie.name != 'www_token') continue;
+          final token = _normalizeExtractedToken(cookie.value);
+          if (token != null) return token;
+        }
+      } catch (_) {
+        // 单个域名读取失败不影响其余域名。
+      }
+    }
+
+    return null;
+  }
+
+  /// 回退方案：注入 JS 读取 document.cookie。
+  Future<String?> _readTokenFromDocumentCookie(
+    InAppWebViewController controller,
+  ) async {
+    try {
       String js = '''
         (function() {
           var cookies = document.cookie.split(';');
@@ -255,15 +358,11 @@ class _LoginScreenState extends State<LoginScreen> {
         })();
       ''';
 
-      final token = _normalizeExtractedToken(
+      return _normalizeExtractedToken(
         await controller.evaluateJavascript(source: js),
       );
-
-      if (token != null) {
-        await _saveTokenAndNavigate(token);
-      }
-    } catch (e) {
-      // 提取Token失败
+    } catch (_) {
+      return null;
     }
   }
 

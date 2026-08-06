@@ -382,6 +382,114 @@ class StorageService {
         : AppConstants.typeRestDay;
   }
 
+  // ============ 工作日志 ============
+
+  /// 保存导入的工作日志（按日期归档）及其来源元信息。
+  Future<void> saveWorkLogEntries(
+    Map<String, Map<String, dynamic>> entries, {
+    String? sourceName,
+    DateTime? importedAt,
+  }) async {
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setString(StorageKeys.workLogEntries, jsonEncode(entries));
+    if (sourceName != null && sourceName.isNotEmpty) {
+      await prefs.setString(StorageKeys.workLogSourceName, sourceName);
+    }
+    await prefs.setString(
+      StorageKeys.workLogImportedAt,
+      (importedAt ?? DateTime.now()).toIso8601String(),
+    );
+  }
+
+  Future<Map<String, Map<String, dynamic>>> loadWorkLogEntries() async {
+    final prefs = await SharedPreferences.getInstance();
+    final jsonStr = prefs.getString(StorageKeys.workLogEntries);
+    if (jsonStr == null) return {};
+
+    try {
+      final decoded = jsonDecode(jsonStr);
+      if (decoded is! Map) return {};
+      return decoded.map(
+        (key, value) =>
+            MapEntry(key as String, Map<String, dynamic>.from(value as Map)),
+      );
+    } catch (e) {
+      return {};
+    }
+  }
+
+  /// 返回 (来源文件名, 导入时间)，未导入过时均为 null。
+  Future<(String?, DateTime?)> loadWorkLogMeta() async {
+    final prefs = await SharedPreferences.getInstance();
+    final sourceName = prefs.getString(StorageKeys.workLogSourceName);
+    final importedAtStr = prefs.getString(StorageKeys.workLogImportedAt);
+    return (sourceName, DateTime.tryParse(importedAtStr ?? ''));
+  }
+
+  /// 保存 BOSS 提交所需的固定业务标识。
+  ///
+  /// 只接受项目 ID/编码与审核人 ID 这类业务标识；调用方不得把
+  /// Password、LoginID 等会话凭据传进来（BOSS 把凭据放在每个请求体里，
+  /// 一旦落盘等同于本地明文保存登录凭据）。
+  Future<void> saveBossConstants(Map<String, String> constants) async {
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setString(
+      StorageKeys.workLogBossConstants,
+      jsonEncode(constants),
+    );
+  }
+
+  Future<Map<String, String>> loadBossConstants() async {
+    final prefs = await SharedPreferences.getInstance();
+    final jsonStr = prefs.getString(StorageKeys.workLogBossConstants);
+    if (jsonStr == null) return {};
+
+    try {
+      final decoded = jsonDecode(jsonStr);
+      if (decoded is! Map) return {};
+      return decoded.map((key, value) => MapEntry('$key', '$value'));
+    } catch (e) {
+      return {};
+    }
+  }
+
+  /// 保存 BOSS 某月已填工时（日期 → 工时）。
+  Future<void> saveBossHours(
+    String monthKey,
+    Map<String, double> hours,
+  ) async {
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setString(StorageKeys.bossHoursKey(monthKey), jsonEncode(hours));
+  }
+
+  Future<Map<String, double>> loadBossHours(String monthKey) async {
+    final prefs = await SharedPreferences.getInstance();
+    final jsonStr = prefs.getString(StorageKeys.bossHoursKey(monthKey));
+    if (jsonStr == null) return {};
+
+    try {
+      final decoded = jsonDecode(jsonStr);
+      if (decoded is! Map) return {};
+      final result = <String, double>{};
+      decoded.forEach((key, value) {
+        final parsed = value is num
+            ? value.toDouble()
+            : double.tryParse('$value');
+        if (parsed != null) result['$key'] = parsed;
+      });
+      return result;
+    } catch (e) {
+      return {};
+    }
+  }
+
+  Future<void> clearWorkLogEntries() async {
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.remove(StorageKeys.workLogEntries);
+    await prefs.remove(StorageKeys.workLogSourceName);
+    await prefs.remove(StorageKeys.workLogImportedAt);
+  }
+
   Future<ReminderSettings> loadReminderSettings() async {
     final prefs = await SharedPreferences.getInstance();
     final morningTime = _readReminderTime(

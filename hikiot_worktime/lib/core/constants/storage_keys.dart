@@ -77,6 +77,26 @@ class StorageKeys {
   /// 下班提醒时间
   static const String eveningReminderTime = 'evening_reminder_time';
 
+  // ============ 工作日志相关 ============
+  /// 导入的工作日志条目（按日期归档的 JSON）
+  static const String workLogEntries = 'work_log_entries';
+
+  /// 工作日志导入来源文件名
+  static const String workLogSourceName = 'work_log_source_name';
+
+  /// 工作日志导入时间（ISO8601）
+  static const String workLogImportedAt = 'work_log_imported_at';
+
+  /// BOSS 提交所需的固定业务标识（项目 ID/编码、审核人 ID）。
+  /// 只存业务标识，不存 Password、LoginID 等会话凭据。
+  static const String workLogBossConstants = 'work_log_boss_constants';
+
+  /// BOSS 月度已填工时前缀 (实际key: boss_hours_{yyyy-MM})
+  static const String bossHoursPrefix = 'boss_hours';
+
+  /// 获取 BOSS 月度工时的完整 key
+  static String bossHoursKey(String monthKey) => '${bossHoursPrefix}_$monthKey';
+
   // ============ 引导相关 ============
   /// 新手引导完成标记
   static const String onboardingCompleted = 'onboarding_completed';

@@ -3,6 +3,7 @@ import '../core/theme/theme.dart';
 import 'daily_hours_screen.dart';
 import 'monthly_calendar_screen.dart';
 import 'settings_screen.dart';
+import 'work_log_screen.dart';
 import '../utils/startup_refresh_coordinator.dart';
 import '../widgets/home_button.dart';
 
@@ -21,6 +22,7 @@ class _MainScreenState extends State<MainScreen> {
 
   final GlobalKey<MonthlyCalendarScreenState> _monthlyKey = GlobalKey();
   final GlobalKey<DailyHoursScreenState> _dailyKey = GlobalKey();
+  final GlobalKey<WorkLogScreenState> _workLogKey = GlobalKey();
 
   @override
   void initState() {
@@ -64,6 +66,11 @@ class _MainScreenState extends State<MainScreen> {
         await _monthlyKey.currentState!.refreshDateData(selectedDate);
       }
     }
+
+    // 切换到工作日志页时刷新，确保工时与前两页口径一致
+    if (index == 2 && _workLogKey.currentState != null) {
+      await _workLogKey.currentState!.refreshData();
+    }
   }
 
   @override
@@ -80,6 +87,7 @@ class _MainScreenState extends State<MainScreen> {
             token: widget.token,
             autoInitialize: false,
           ),
+          WorkLogScreen(key: _workLogKey),
           const SettingsScreen(),
         ],
       ),
@@ -102,7 +110,8 @@ class _MainScreenState extends State<MainScreen> {
               children: [
                 _buildNavItem(0, Icons.today, '每日工时'),
                 _buildNavItem(1, Icons.calendar_month, '月度统计'),
-                _buildNavItem(2, Icons.settings, '设置'),
+                _buildNavItem(2, Icons.edit_note, '工作日志'),
+                _buildNavItem(3, Icons.settings, '设置'),
               ],
             ),
           ),
