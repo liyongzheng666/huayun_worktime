@@ -252,6 +252,23 @@ class WorkTimeCalculator {
     return truncated.toStringAsFixed(2);
   }
 
+  /// 解析用户手输的工时，非法输入返回 null。
+  ///
+  /// 提交 BOSS 日志前允许手工调整工时（打卡异常、出差、补录等场景），
+  /// 但不能把非法值发到公司系统，因此在这里统一校验。
+  ///
+  /// 规则与 [formatHours] 一致：保留两位小数，**截断不四舍五入**。
+  /// 上限取一天 24 小时，超出必然是笔误。
+  static double? parseHoursInput(String raw) {
+    final text = raw.trim();
+    if (text.isEmpty) return null;
+
+    final value = double.tryParse(text);
+    if (value == null || value <= 0 || value > 24) return null;
+
+    return (value * 100).truncateToDouble() / 100;
+  }
+
   // ========== 目标管理逻辑 (KISS: 复用此类) ==========
 
   /// 生成目标列表，确保包含基础目标
