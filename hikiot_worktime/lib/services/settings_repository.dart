@@ -9,6 +9,7 @@ class SettingsSnapshot {
     required this.crossDayMinutes,
     required this.smartSort,
     required this.baseTarget,
+    required this.minTarget,
     required this.hapticModeIndex,
     required this.reminderSettings,
     required this.extendedTargetRange,
@@ -24,6 +25,9 @@ class SettingsSnapshot {
   final int crossDayMinutes;
   final bool smartSort;
   final int baseTarget;
+
+  /// 目标进度列表的起点百分比
+  final int minTarget;
   final int hapticModeIndex;
   final ReminderSettings reminderSettings;
   final bool extendedTargetRange;
@@ -58,6 +62,7 @@ class SettingsRepository {
           AppConstants.defaultCrossDayMinutes,
       smartSort: await _storage.loadSmartSort(),
       baseTarget: await _storage.loadBaseTarget(),
+      minTarget: await _storage.loadMinTarget(),
       hapticModeIndex: await _storage.loadHapticModeIndex(),
       reminderSettings: reminderSettings,
       extendedTargetRange: await _storage.loadExtendedTargetRange(),
@@ -94,6 +99,15 @@ class SettingsRepository {
 
   Future<void> saveBaseTarget(int target) {
     return _storage.saveBaseTarget(target);
+  }
+
+  /// 保存最低目标。
+  ///
+  /// 最低目标必须不高于基础目标，否则目标列表会退化成只剩基础目标一项。
+  /// 在这里夹紧而不是交给界面，是为了让任何调用方都拿不到非法组合。
+  Future<void> saveMinTarget(int target) async {
+    final baseTarget = await _storage.loadBaseTarget();
+    await _storage.saveMinTarget(target > baseTarget ? baseTarget : target);
   }
 
   Future<void> saveExtendedTargetRange(bool enabled) {

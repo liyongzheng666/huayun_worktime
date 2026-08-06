@@ -40,6 +40,8 @@ class DailyHoursScreenState extends State<DailyHoursScreen>
   int? _pinnedTarget; // 置顶的目标
   bool _smartSort = true; // 智能排序开关
   int _baseTarget = 120; // 基础目标百分比
+  /// 目标进度列表的起点，可在设置里调整
+  int _minTarget = AppConstants.defaultMinTarget;
   bool _showOnboarding = false; // 是否显示新手引导
   bool _isUserPullRefresh = false; // 是否是用户主动下拉刷新
 
@@ -195,6 +197,7 @@ class DailyHoursScreenState extends State<DailyHoursScreen>
       _smartSort = result.smartSort;
       _pinnedTarget = result.pinnedTarget;
       _baseTarget = result.baseTarget;
+      _minTarget = result.minTarget;
       _teamNo = result.teamNo;
       _holidayPlan = result.holidayPlan;
       _dayData = result.dayData.isEmpty ? null : result.dayData;
@@ -1326,6 +1329,7 @@ class DailyHoursScreenState extends State<DailyHoursScreen>
     final targetProgress = TargetProgressHelper.buildDailyProgress(
       displayHours: displayHours,
       baseTarget: _baseTarget,
+      minTarget: _minTarget,
       smartSort: _smartSort,
       pinnedTarget: _pinnedTarget,
     );

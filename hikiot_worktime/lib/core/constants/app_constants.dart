@@ -33,6 +33,12 @@ class AppConstants {
   /// 默认基础目标百分比
   static const int defaultBaseTarget = 120;
 
+  /// 默认最低目标百分比。
+  ///
+  /// 目标进度列表从这里起排到基础目标为止。100%、110% 这类过低的挡位
+  /// 常年满足，列在最前面只会挤占版面，因此起点可配置且默认从 120% 开始。
+  static const int defaultMinTarget = 120;
+
   /// 最小目标百分比
   static const int minTargetPercent = 100;
 

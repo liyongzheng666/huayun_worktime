@@ -46,6 +46,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
 
   // 基础目标百分比
   int _baseTarget = 120;
+  int _minTarget = 120;
   bool _extendedTargetRange = false; // 扩展目标范围开关
 
   // 震动模式
@@ -86,6 +87,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
       _lunchEndTime = _parseTime(snapshot.lunchEndTime, _lunchEndTime);
       _smartSort = snapshot.smartSort;
       _baseTarget = snapshot.baseTarget;
+      _minTarget = snapshot.minTarget;
       _hapticMode =
           HapticMode.values[snapshot.hapticModeIndex.clamp(
             0,
@@ -644,6 +646,85 @@ class _SettingsScreenState extends State<SettingsScreen> {
             const SizedBox(height: 12),
             Text(
               '用于达标后工时统计和目标进度的颜色判断',
+              style: TextStyle(fontSize: 12, color: Colors.grey[600]),
+            ),
+
+            const Divider(height: 28),
+
+            // ===== 最低目标 =====
+            // 目标进度列表的起点。100%、110% 这类挡位常年满足，
+            // 固定列在最前面只会把真正要冲的挡位挤到看不见的地方。
+            Row(
+              children: [
+                Icon(
+                  Icons.vertical_align_bottom,
+                  size: 20,
+                  color: Colors.teal[700],
+                ),
+                const SizedBox(width: 8),
+                const Expanded(
+                  child: Text(
+                    '最低目标',
+                    style: TextStyle(fontSize: 14, fontWeight: FontWeight.w600),
+                  ),
+                ),
+                Container(
+                  padding: const EdgeInsets.symmetric(
+                    horizontal: 12,
+                    vertical: 6,
+                  ),
+                  decoration: BoxDecoration(
+                    color: Colors.teal[100],
+                    borderRadius: BorderRadius.circular(16),
+                  ),
+                  child: Text(
+                    '$_minTarget%',
+                    style: TextStyle(
+                      fontSize: 16,
+                      fontWeight: FontWeight.bold,
+                      color: Colors.teal[700],
+                    ),
+                  ),
+                ),
+              ],
+            ),
+            const SizedBox(height: 8),
+            SliderTheme(
+              data: SliderTheme.of(context).copyWith(
+                activeTrackColor: Colors.teal[700],
+                inactiveTrackColor: Colors.teal[100],
+                thumbColor: Colors.teal[700],
+                overlayColor: Colors.teal.withValues(alpha: 0.2),
+                valueIndicatorColor: Colors.teal[700],
+                valueIndicatorTextStyle: const TextStyle(
+                  color: Colors.white,
+                  fontWeight: FontWeight.bold,
+                ),
+              ),
+              child: Slider(
+                // 上限跟着基础目标走：最低目标高于基础目标时列表会退化成一项，
+                // 与其事后纠正，不如从滑块上就不给他滑过去
+                value: _minTarget.toDouble().clamp(
+                  100,
+                  _baseTarget.toDouble().clamp(100, 300),
+                ),
+                min: 100,
+                max: _baseTarget.toDouble().clamp(100, 300),
+                divisions: ((_baseTarget - 100) / 10).round().clamp(1, 20),
+                label: '$_minTarget%',
+                onChanged: (value) async {
+                  await HapticUtils.selectionClick();
+                  setState(() => _minTarget = value.round());
+                },
+                onChangeEnd: (value) async {
+                  await _settingsRepository.saveMinTarget(value.round());
+                },
+              ),
+            ),
+            const SizedBox(height: 4),
+            Text(
+              '目标进度只显示 $_minTarget% ~ $_baseTarget%，'
+              '从低到高排列，基础目标在最后',
               style: TextStyle(fontSize: 12, color: Colors.grey[600]),
             ),
           ],

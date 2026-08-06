@@ -38,6 +38,9 @@ class StorageKeys {
   /// 基础目标百分比
   static const String baseTarget = 'base_target';
 
+  /// 最低目标百分比（目标进度列表的起点）
+  static const String minTarget = 'min_target';
+
   /// 置顶目标
   static const String pinnedTarget = 'pinned_target';
 

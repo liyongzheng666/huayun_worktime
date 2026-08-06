@@ -74,6 +74,8 @@ class MonthlyCalendarScreenState extends State<MonthlyCalendarScreen> {
 
   // 基础目标百分比
   int _baseTarget = 120;
+  /// 目标进度列表的起点，可在设置里调整
+  int _minTarget = AppConstants.defaultMinTarget;
 
   @override
   void initState() {
@@ -248,6 +250,7 @@ class MonthlyCalendarScreenState extends State<MonthlyCalendarScreen> {
     _smartSort = await _storage.loadSmartSort();
     _pinnedTarget = await _storage.loadPinnedTarget();
     _baseTarget = await _storage.loadBaseTarget();
+    _minTarget = await _storage.loadMinTarget();
 
     if (_monthlyData.isEmpty) {
       await _loadMonthlyData();
@@ -1073,7 +1076,7 @@ class MonthlyCalendarScreenState extends State<MonthlyCalendarScreen> {
                     ),
                   ),
                   const SizedBox(height: 1),
-                  _buildCellHours(dateStr, hours, textColor),
+                  _buildCellHours(dateStr, hours, textColor, isPast),
                 ],
               ),
             ),
@@ -1107,10 +1110,16 @@ class MonthlyCalendarScreenState extends State<MonthlyCalendarScreen> {
   /// 因此改为：打卡工时占唯一的数字位（用 FittedBox 保证再宽也能缩进去），
   /// BOSS 的状态全部由下方那条细条的**颜色**表达：
   ///
-  /// - 实心   → 已填报且与打卡一致
-  /// - 淡色   → 打了卡但没填日志，这是唯一需要动手的状态
-  /// - 警示橙 → 已填但与打卡对不上，点进该日可看具体数值
-  Widget _buildCellHours(String dateStr, double hours, Color textColor) {
+  /// - 灰白   → 已填报且与打卡一致，最常见的状态，压到最低存在感
+  /// - 橙     → 已填但与打卡对不上，点进该日可看具体数值
+  /// - 红     → 已过去的日期打了卡却没填日志，这是真正的欠账
+  /// - 淡色   → 今天或将来还没填，属正常，不该报警
+  Widget _buildCellHours(
+    String dateStr,
+    double hours,
+    Color textColor,
+    bool isPast,
+  ) {
     final bossHours = _bossHours[dateStr];
     final hasHikiot = hours > 0;
     final hasBoss = bossHours != null && bossHours > 0;
@@ -1123,11 +1132,20 @@ class MonthlyCalendarScreenState extends State<MonthlyCalendarScreen> {
         hasBoss &&
         !WorkTimeCalculator.isBossHoursConsistent(hours, bossHours);
 
+    // 底色深浅决定「灰白」该偏哪边：白字格子（绿/紫/红等深色底）用近白，
+    // 浅灰底的非工作日用中灰，否则近白的横条在浅底上等于隐形。
+    final consistentColor = textColor == Colors.white
+        ? const Color(0xFFEDEDED)
+        : Colors.grey.shade500;
+
     final Color barColor;
     if (mismatch) {
       barColor = _mismatchColor;
     } else if (hasBoss) {
-      barColor = textColor.withValues(alpha: 0.85);
+      barColor = consistentColor;
+    } else if (hasHikiot && isPast) {
+      // 已过去、打了卡、BOSS 没记录——这天的日志确实欠着
+      barColor = _missingColor;
     } else {
       barColor = textColor.withValues(alpha: 0.22);
     }
@@ -1167,8 +1185,11 @@ class MonthlyCalendarScreenState extends State<MonthlyCalendarScreen> {
     );
   }
 
-  /// 不一致时的警示色。在绿/紫/灰各种格子底色上都能看清。
-  static const Color _mismatchColor = Color(0xFFFFCC33);
+  /// 工时对不上时的警示色（橙）。在绿/紫/灰各种格子底色上都能看清。
+  static const Color _mismatchColor = Color(0xFFFB8C00);
+
+  /// 已过期却没填报的警示色（红）。比橙更重，因为这是漏填而非精度差异。
+  static const Color _missingColor = Color(0xFFE53935);
 
   /// 日历下方图例。
   ///
@@ -1219,12 +1240,13 @@ class MonthlyCalendarScreenState extends State<MonthlyCalendarScreen> {
             spacing: 14,
             runSpacing: 6,
             children: [
-              _legendItem(_legendBar(Colors.grey.shade800), '已填报'),
+              _legendItem(_legendBar(Colors.grey.shade400), '已填报'),
+              _legendItem(_legendBar(_missingColor), '已过期未填报'),
+              _legendItem(_legendBar(_mismatchColor), '与打卡差超 0.1 小时'),
               _legendItem(
                 _legendBar(Colors.grey.shade800.withValues(alpha: 0.25)),
-                '未填报',
+                '今天/未来未填',
               ),
-              _legendItem(_legendBar(_mismatchColor), '与打卡差超 0.1 小时'),
             ],
           ),
         ],
@@ -2357,6 +2379,7 @@ class MonthlyCalendarScreenState extends State<MonthlyCalendarScreen> {
       avgHoursPerDay: avgHoursPerDay,
       remainingWorkDays: remainingWorkDays,
       baseTarget: _baseTarget,
+      minTarget: _minTarget,
       smartSort: _smartSort,
       pinnedTarget: _pinnedTarget,
     );

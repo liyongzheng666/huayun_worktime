@@ -30,11 +30,12 @@ class TargetProgressHelper {
   static TargetProgressResult buildDailyProgress({
     required double displayHours,
     required int baseTarget,
+    required int minTarget,
     required bool smartSort,
     required int? pinnedTarget,
   }) {
     final currentPercentage = displayHours / 8 * 100;
-    final allTargets = _dailyTargets(baseTarget, currentPercentage);
+    final allTargets = _dailyTargets(baseTarget, minTarget, currentPercentage);
 
     int? highestAchievedTarget;
     int? nextToAchieveTarget;
@@ -74,13 +75,14 @@ class TargetProgressHelper {
     required double avgHoursPerDay,
     required int remainingWorkDays,
     required int baseTarget,
+    required int minTarget,
     required bool smartSort,
     required int? pinnedTarget,
   }) {
     final currentPercentage = baseHours > 0
         ? adjustedTotalHours / baseHours * 100
         : 0.0;
-    final targets = _targetsForPercentage(baseTarget, currentPercentage);
+    final targets = _targetsForPercentage(baseTarget, minTarget, currentPercentage);
     final targetData = targets.map((target) {
       final targetHours = baseHours * target / 100;
       final isCompleted = currentPercentage >= target;
@@ -129,18 +131,31 @@ class TargetProgressHelper {
     }
   }
 
-  static List<int> _dailyTargets(int baseTarget, double currentPercentage) {
-    return _targetsForPercentage(baseTarget, currentPercentage);
-  }
-
-  static List<int> _targetsForPercentage(
+  static List<int> _dailyTargets(
     int baseTarget,
+    int minTarget,
     double currentPercentage,
   ) {
-    final baseTargets = WorkTimeCalculator.generateTargetList(baseTarget);
-    return currentPercentage >= 160
-        ? [...baseTargets, ...extendedTargets]
-        : baseTargets;
+    return _targetsForPercentage(baseTarget, minTarget, currentPercentage);
+  }
+
+  /// 列表范围：最低目标 → 基础目标。
+  ///
+  /// 已经超过基础目标时补上更高的挡位，否则冲过头之后就没有可追的目标了；
+  /// 补的挡位一律高于基础目标，因此不影响「基础目标是配置范围内的最后一项」。
+  static List<int> _targetsForPercentage(
+    int baseTarget,
+    int minTarget,
+    double currentPercentage,
+  ) {
+    final baseTargets = WorkTimeCalculator.generateTargetList(
+      baseTarget,
+      minTarget: minTarget,
+    );
+    if (currentPercentage < baseTarget) return baseTargets;
+
+    final beyond = extendedTargets.where((t) => t > baseTarget).toList();
+    return [...baseTargets, ...beyond];
   }
 
   static List<Map<String, dynamic>> _sortDailyTargets(

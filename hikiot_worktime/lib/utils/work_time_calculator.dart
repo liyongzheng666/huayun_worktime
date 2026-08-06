@@ -288,12 +288,28 @@ class WorkTimeCalculator {
 
   // ========== 目标管理逻辑 (KISS: 复用此类) ==========
 
-  /// 生成目标列表，确保包含基础目标
-  static List<int> generateTargetList(int baseTarget) {
-    final targets = <int>{100, 110, 120, 130, 140, 150, 160};
-    targets.add(baseTarget); // 确保基础目标在列表中
-    final sortedList = targets.toList()..sort();
-    return sortedList;
+  /// 生成目标进度列表：从 [minTarget] 起，按 10% 递增，到 [baseTarget] 为止。
+  ///
+  /// 从小到大排列，因此基础目标天然落在最后一项。
+  ///
+  /// 为什么不再固定输出 100~160：100%、110% 这类挡位常年满足，
+  /// 排在最前面只会挤占版面，把真正要冲的挡位推到看不见的地方。
+  /// 起点与终点都由用户在设置里决定。
+  ///
+  /// [minTarget] 高于 [baseTarget] 时只返回基础目标——
+  /// 这是设置被改乱的情况，此时至少要让用户看见自己的基础目标，
+  /// 返回空列表会让整个进度区消失，更难排查。
+  static List<int> generateTargetList(int baseTarget, {int? minTarget}) {
+    final start = minTarget ?? AppConstants.defaultMinTarget;
+    if (start > baseTarget) return [baseTarget];
+
+    final targets = <int>{};
+    for (var value = start; value < baseTarget; value += AppConstants.targetStep) {
+      targets.add(value);
+    }
+    targets.add(baseTarget); // 基础目标必定在列表中，且为最后一项
+
+    return targets.toList()..sort();
   }
 
   /// 计算新的置顶目标（切换逻辑）

@@ -30,6 +30,7 @@ class DailyAttendanceLoadResult {
     required this.smartSort,
     required this.pinnedTarget,
     required this.baseTarget,
+    required this.minTarget,
     this.attendanceData,
   });
 
@@ -41,6 +42,9 @@ class DailyAttendanceLoadResult {
   final bool smartSort;
   final int? pinnedTarget;
   final int baseTarget;
+
+  /// 目标进度列表的起点百分比
+  final int minTarget;
 }
 
 class DailyMarkMutationResult {
@@ -72,6 +76,7 @@ class DailyAttendanceRepository {
     final smartSort = await _storage.loadSmartSort();
     final pinnedTarget = await _storage.loadPinnedTarget();
     final baseTarget = await _storage.loadBaseTarget();
+    final minTarget = await _storage.loadMinTarget();
     final teamNo = await _storage.loadTeamNo();
     final dateKey = DateHelper.formatDate(selectedDate);
 
@@ -86,6 +91,7 @@ class DailyAttendanceRepository {
         smartSort: smartSort,
         pinnedTarget: pinnedTarget,
         baseTarget: baseTarget,
+        minTarget: minTarget,
       );
     }
 
@@ -109,6 +115,7 @@ class DailyAttendanceRepository {
         smartSort: smartSort,
         pinnedTarget: pinnedTarget,
         baseTarget: baseTarget,
+        minTarget: minTarget,
       );
     }
 
@@ -124,6 +131,7 @@ class DailyAttendanceRepository {
         smartSort: smartSort,
         pinnedTarget: pinnedTarget,
         baseTarget: baseTarget,
+        minTarget: minTarget,
       );
     }
 
@@ -139,6 +147,7 @@ class DailyAttendanceRepository {
         smartSort: smartSort,
         pinnedTarget: pinnedTarget,
         baseTarget: baseTarget,
+        minTarget: minTarget,
       );
     }
 
@@ -154,6 +163,7 @@ class DailyAttendanceRepository {
         smartSort: smartSort,
         pinnedTarget: pinnedTarget,
         baseTarget: baseTarget,
+        minTarget: minTarget,
       );
     }
 
@@ -179,6 +189,7 @@ class DailyAttendanceRepository {
       smartSort: smartSort,
       pinnedTarget: pinnedTarget,
       baseTarget: baseTarget,
+      minTarget: minTarget,
     );
   }
 
@@ -365,6 +376,7 @@ class DailyAttendanceRepository {
     required bool smartSort,
     required int? pinnedTarget,
     required int baseTarget,
+    required int minTarget,
     Map<String, dynamic>? attendanceData,
   }) {
     return DailyAttendanceLoadResult(
@@ -378,6 +390,7 @@ class DailyAttendanceRepository {
       smartSort: smartSort,
       pinnedTarget: pinnedTarget,
       baseTarget: baseTarget,
+      minTarget: minTarget,
     );
   }
 
