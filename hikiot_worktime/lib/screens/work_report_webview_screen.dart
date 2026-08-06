@@ -570,7 +570,7 @@ class _WorkReportWebViewScreenState extends State<WorkReportWebViewScreen> {
     if (!mounted) return;
     final still = await StorageService().loadBossConstants();
     if (!mounted || _constantsUsableFor(still, projectName)) return;
-    _notify('尚未获取到配置。在网页上正常填报一次日志即可自动记住');
+    _notify('尚未获取到配置。到「我的工作日志」点开任意一个已填过的日期即可');
   }
 
   /// 扫一次抓包，尝试学到提交配置；成功则落盘并返回。

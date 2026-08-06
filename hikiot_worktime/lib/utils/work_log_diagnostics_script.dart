@@ -177,6 +177,7 @@ class WorkLogDiagnosticsScript {
             services[uri] = {
               serviceUri: uri,
               calls: 0,
+              paramKeys: [],
               respHasProject: false,
               respHasAuditor: false,
               respHasWorkLog: false,
@@ -186,6 +187,22 @@ class WorkLogDiagnosticsScript {
           }
           var slot = services[uri];
           slot.calls++;
+
+          // 记下这个服务除会话字段外还吃哪些参数——要照着重放它，
+          // 光知道服务名不够，还得知道传什么。
+          // 只取 key 不取值：值里可能带 Password 等凭据。
+          try {
+            var sessionKeys = {};
+            for (var sk in parsed2.para) {
+              if (parsed2.para.hasOwnProperty(sk)) sessionKeys[sk] = true;
+            }
+            var innerPara = JSON.parse(parsed2.content).para;
+            for (var ik in innerPara) {
+              if (!innerPara.hasOwnProperty(ik)) continue;
+              if (sessionKeys[ik]) continue; // 会话字段，不是业务参数
+              if (slot.paramKeys.indexOf(ik) < 0) slot.paramKeys.push(ik);
+            }
+          } catch (err3) {}
           var resp = e2.response || '';
           if (RE_PROJECT.test(resp)) slot.respHasProject = true;
           if (RE_AUDITOR.test(resp)) slot.respHasAuditor = true;

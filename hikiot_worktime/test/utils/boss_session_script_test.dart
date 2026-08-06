@@ -211,6 +211,10 @@ void main() {
       expect(script.contains('respHasWorkLog'), isTrue);
       expect(script.contains('respHasAuditor'), isTrue);
       expect(script.contains('anyTruncated'), isTrue);
+      // 光有服务名不够，还得知道它吃哪些参数才能照着重放
+      expect(script.contains('paramKeys'), isTrue);
+      // 参数只取 key 不取值：值里可能带 Password
+      expect(script.contains('slot.paramKeys.push(ik)'), isTrue);
     });
   });
 }
