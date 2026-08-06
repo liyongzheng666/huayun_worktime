@@ -14,6 +14,7 @@ import '../utils/work_log_constants_scanner.dart';
 import '../utils/work_log_csv_parser.dart';
 import '../utils/work_log_diagnostics_script.dart';
 import '../utils/work_log_fill_script.dart';
+import '../utils/work_log_history_lookup.dart';
 import '../utils/work_log_request_capture.dart';
 import '../utils/work_log_submit_script.dart';
 import '../utils/work_time_calculator.dart';
@@ -466,6 +467,7 @@ class _WorkReportWebViewScreenState extends State<WorkReportWebViewScreen> {
       entry,
       draft.hours,
       existingHours,
+      constants,
     );
     if (confirmed != true) return;
 
@@ -575,13 +577,29 @@ class _WorkReportWebViewScreenState extends State<WorkReportWebViewScreen> {
 
   /// 扫一次抓包，尝试学到提交配置；成功则落盘并返回。
   ///
-  /// 两种来源都试：
-  /// 1. 保存报文（用户刚在网页上填过一条）——三个值一次齐全，最准
-  /// 2. 列表/详情响应（用户翻过日志列表）——覆盖面更广
+  /// 三种来源按可靠度依次尝试：
+  /// 1. 历史日志网格（`GetHisWorkLogList`）——按行解 JSON，三个值同源且能
+  ///    挑出与当天项目一致的那一行，还能拿到审核人姓名供用户核对。最优。
+  /// 2. 保存报文（用户刚在网页上填过一条）——语义精确，但要求用户先填过。
+  /// 3. 正则扫描其余响应——兜底。
   Future<Map<String, String>?> _learnConstants(
     InAppWebViewController controller,
     String projectName,
   ) async {
+    final fromHistory = _parseConstants(
+      await _runScriptRaw(
+        controller,
+        WorkLogHistoryLookup.build(
+          captureStoreName: WorkLogRequestCapture.storeName,
+          preferredProjectName: projectName,
+        ),
+      ),
+    );
+    if (fromHistory != null) {
+      await StorageService().saveBossConstants(fromHistory);
+      return fromHistory;
+    }
+
     final fromSave = _parseConstants(
       await _runScriptRaw(
         controller,
@@ -757,10 +775,14 @@ class _WorkReportWebViewScreenState extends State<WorkReportWebViewScreen> {
       return {
         'projectId': projectId,
         'projectCode': '${decoded['projectCode'] ?? ''}',
-        'auditor': auditor,
+        // BOSS 的保存报文里审核人带前导分号，而历史网格里不带，
+        // 统一补齐为提交时的形态
+        'auditor': auditor.startsWith(';') ? auditor : ';$auditor',
         // 记下这套值属于哪个项目，供后续核对——项目会换，
         // 换了以后旧值必须失效，不能拿旧项目的 ID 提交新项目的日志
         'projectName': '${decoded['projectName'] ?? ''}',
+        // 审核人姓名只用于让用户在提交前肉眼核对，不参与报文
+        'auditorName': '${decoded['auditorName'] ?? ''}',
       };
     } catch (e) {
       return null;
@@ -773,6 +795,7 @@ class _WorkReportWebViewScreenState extends State<WorkReportWebViewScreen> {
     WorkLogEntry entry,
     WorkLogHours hours,
     double? existingHours,
+    Map<String, String> constants,
   ) {
     final alreadyFiled = existingHours != null && existingHours > 0;
 
@@ -813,6 +836,16 @@ class _WorkReportWebViewScreenState extends State<WorkReportWebViewScreen> {
                     style: TextStyle(fontSize: 11, color: Colors.grey[600]),
                   ),
                 ),
+              // 项目与审核人是这里最有后果的两项：填错项目会把工时记到
+              // 别的项目名下，填错审核人会把日志提交给错误的审批人。
+              // 两者都不是用户输入的，而是 APP 自动查来的，因此必须让他能核对。
+              _confirmRow('项目', entry.projectName),
+              _confirmRow(
+                '审核人',
+                constants['auditorName']?.isNotEmpty == true
+                    ? constants['auditorName']!
+                    : '（未知，仅有 ID）',
+              ),
               _confirmRow('标题', entry.title),
               _confirmRow('工作类型', entry.workType),
               _confirmRow('项目阶段', entry.stage),
