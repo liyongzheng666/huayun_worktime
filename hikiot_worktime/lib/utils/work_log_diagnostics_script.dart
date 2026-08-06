@@ -118,6 +118,66 @@ class WorkLogDiagnosticsScript {
           report.session = { found: false };
         }
 
+        // —— 命中片段取样 ——
+        //
+        // 「抓到了项目信息但解析失败」时，光知道「有」没用，必须看到真实形状
+        // 才能写对提取规则。BOSS 同一份数据存在多种响应形状（详情 / 列表 /
+        // 首页面板…），闭着眼加正则只会再猜错一次。
+        //
+        // 凭据就地打码：BOSS 把 Password 明文放在每个请求体里（踩坑记录 3.12），
+        // 而这份报告是要复制出去给人看的。
+        function redact(text) {
+          if (!text) return '';
+          return String(text)
+            .replace(/(\\\\*"Password\\\\*"\\s*:\\s*\\\\*")[^"\\\\]*/g, '\$1***')
+            .replace(/(\\\\*"LoginID\\\\*"\\s*:\\s*\\\\*")[^"\\\\]*/g, '\$1***');
+        }
+
+        // 抓包对每条记录截断在 6000 字符。BOSS 的列表响应动辄几十 KB，
+        // 很可能 PROJECT_ 活了下来而键名被切掉——这本身就是一种失败原因，
+        // 必须能和「形状不认识」区分开。
+        function isTruncated(text) {
+          return !!text && String(text).indexOf('…[截断]') >= 0;
+        }
+
+        function windowsAround(text, re, limit) {
+          var out = [];
+          if (!text) return out;
+          var s = String(text);
+          var from = 0;
+          while (out.length < limit) {
+            var idx = s.substring(from).search(re);
+            if (idx < 0) break;
+            var at = from + idx;
+            out.push(redact(s.substring(Math.max(0, at - 400), at + 400)));
+            from = at + 1;
+          }
+          return out;
+        }
+
+        report.samples = [];
+        for (var m = all.length - 1; m >= 0 && report.samples.length < 4; m--) {
+          var e3 = all[m];
+          if (!e3) continue;
+          var hay = (e3.response || '') + (e3.body || '');
+          if (!RE_PROJECT.test(hay)) continue;
+
+          report.samples.push({
+            url: e3.url,
+            via: e3.via,
+            status: e3.status,
+            bodyTruncated: isTruncated(e3.body),
+            responseTruncated: isTruncated(e3.response),
+            bodyLength: e3.body ? String(e3.body).length : 0,
+            responseLength: e3.response ? String(e3.response).length : 0,
+            // 分开取样：项目标识和审核人标识可能来自完全不同的字段，
+            // 不能因为都出现过就认定它们属于同一条业务记录
+            projectWindows: windowsAround(e3.response, RE_PROJECT, 2)
+              .concat(windowsAround(e3.body, RE_PROJECT, 1)),
+            auditorWindows: windowsAround(e3.response, RE_AUDITOR, 1)
+          });
+        }
+
         // 给出一句人话结论，避免读报告的人还要自己推断
         if (!para) {
           report.conclusion = '未捕获到会话，通常是还没登录，或登录后页面没发过业务请求';

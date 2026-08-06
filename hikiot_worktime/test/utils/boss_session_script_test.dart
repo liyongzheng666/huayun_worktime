@@ -167,7 +167,32 @@ void main() {
       );
 
       expect(script.contains('Object.keys(para)'), isTrue);
-      expect(script.contains('Password'), isFalse);
+    });
+
+    test('取样片段必须先给凭据打码', () {
+      // 「抓到了但解析失败」时要把原始片段贴出来才能定位形状，
+      // 而 BOSS 的请求体里带明文 Password，直接贴等于泄露。
+      final script = WorkLogDiagnosticsScript.build(
+        captureStoreName: store,
+        preferredProjectName: '某项目',
+      );
+
+      expect(script.contains('function redact('), isTrue);
+      // Password/LoginID 只允许作为打码的匹配目标出现，且必须被替换成 ***
+      expect(script.contains(r'***'), isTrue);
+      expect(script.contains('redact(s.substring('), isTrue);
+    });
+
+    test('区分「响应被截断」与「形状不认识」', () {
+      // 抓包每条截断在 6000 字符，BOSS 列表响应远大于此。
+      // 键名被切掉和正则写错，在最终结果上完全一样，必须能分开。
+      final script = WorkLogDiagnosticsScript.build(
+        captureStoreName: store,
+        preferredProjectName: '某项目',
+      );
+
+      expect(script.contains('isTruncated'), isTrue);
+      expect(script.contains('responseLength'), isTrue);
     });
   });
 }
