@@ -155,6 +155,49 @@ class WorkLogDiagnosticsScript {
           return out;
         }
 
+        // —— 服务清单 ——
+        //
+        // 页面到底调了哪些服务，是「能不能直接读历史日志」的答案所在。
+        // BOSS 所有业务都走同一个 DataService 入口，靠 para.ServiceUri 区分；
+        // 已知 GetWorkHours 这类无状态服务可以直接重放，因此只要知道
+        // 「列出我的工作日志」用的是哪个服务名，就不必再靠扫响应碰运气。
+        var RE_WORKLOG = /WORKLOG_[A-Za-z0-9]+/;
+        var services = {};
+        for (var n = 0; n < all.length; n++) {
+          var e2 = all[n];
+          if (!e2 || !e2.body) continue;
+          var uri = null;
+          try {
+            var parsed2 = JSON.parse(e2.body);
+            uri = parsed2 && parsed2.para && parsed2.para.ServiceUri;
+          } catch (err2) {}
+          if (!uri) continue;
+
+          if (!services[uri]) {
+            services[uri] = {
+              serviceUri: uri,
+              calls: 0,
+              respHasProject: false,
+              respHasAuditor: false,
+              respHasWorkLog: false,
+              maxRespLength: 0,
+              anyTruncated: false
+            };
+          }
+          var slot = services[uri];
+          slot.calls++;
+          var resp = e2.response || '';
+          if (RE_PROJECT.test(resp)) slot.respHasProject = true;
+          if (RE_AUDITOR.test(resp)) slot.respHasAuditor = true;
+          if (RE_WORKLOG.test(resp)) slot.respHasWorkLog = true;
+          if (resp.length > slot.maxRespLength) slot.maxRespLength = resp.length;
+          if (String(resp).indexOf('…[截断]') >= 0) slot.anyTruncated = true;
+        }
+        report.services = [];
+        for (var key2 in services) {
+          if (services.hasOwnProperty(key2)) report.services.push(services[key2]);
+        }
+
         report.samples = [];
         for (var m = all.length - 1; m >= 0 && report.samples.length < 4; m--) {
           var e3 = all[m];

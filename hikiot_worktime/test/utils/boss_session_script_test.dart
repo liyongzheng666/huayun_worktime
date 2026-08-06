@@ -195,4 +195,22 @@ void main() {
       expect(script.contains('responseLength'), isTrue);
     });
   });
+
+  group('诊断脚本的服务清单', () {
+    test('列出页面调过的每个 ServiceUri 及其响应特征', () {
+      // BOSS 所有业务共用一个 DataService 入口，靠 para.ServiceUri 区分。
+      // 已知 GetWorkHours 这类无状态服务可直接重放，因此只要知道
+      // 「列出我的工作日志」是哪个服务名，就不必再靠扫响应碰运气。
+      final script = WorkLogDiagnosticsScript.build(
+        captureStoreName: store,
+        preferredProjectName: '某项目',
+      );
+
+      expect(script.contains('report.services'), isTrue);
+      expect(script.contains('serviceUri'), isTrue);
+      expect(script.contains('respHasWorkLog'), isTrue);
+      expect(script.contains('respHasAuditor'), isTrue);
+      expect(script.contains('anyTruncated'), isTrue);
+    });
+  });
 }

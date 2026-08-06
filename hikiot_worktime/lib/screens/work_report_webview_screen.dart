@@ -539,11 +539,11 @@ class _WorkReportWebViewScreenState extends State<WorkReportWebViewScreen> {
     if (_learningStarted) return;
     _learningStarted = true;
 
-    final storage = StorageService();
-    final saved = await storage.loadBossConstants();
-    if (saved['projectId']?.isNotEmpty == true) return; // 已配置过，无需再学
-
     final projectName = await _preferredProjectName();
+
+    final saved = await StorageService().loadBossConstants();
+    // 项目对得上才算已配置：项目换了就得重新学，否则会用旧项目的 ID 提交
+    if (_constantsUsableFor(saved, projectName)) return;
 
     // 轮询而非一次性扫描：用户何时登录、何时点开列表都不确定。
     // 2.5 秒一次、最多约 2 分钟，足够覆盖登录加浏览，也不会一直空转。
@@ -569,7 +569,7 @@ class _WorkReportWebViewScreenState extends State<WorkReportWebViewScreen> {
     // 明确告诉他该做什么，比默默失败强。
     if (!mounted) return;
     final still = await StorageService().loadBossConstants();
-    if (!mounted || still['projectId']?.isNotEmpty == true) return;
+    if (!mounted || _constantsUsableFor(still, projectName)) return;
     _notify('尚未获取到配置。在网页上正常填报一次日志即可自动记住');
   }
 
@@ -627,22 +627,53 @@ class _WorkReportWebViewScreenState extends State<WorkReportWebViewScreen> {
     return entry?.projectName ?? '';
   }
 
+  /// 已保存的配置是否可用于 [projectName] 这个项目。
+  ///
+  /// 用户的项目和审核人会换，一次学会就永久沿用是错的：换项目之后继续用
+  /// 旧的 PROJECTID，会把新项目的日志记到旧项目名下，而且不会报错。
+  ///
+  /// 没记项目名的（手工填写的旧数据）无从核对，按可用处理，
+  /// 否则会把用户自己填的值判死。
+  static bool _constantsUsableFor(
+    Map<String, String> saved,
+    String projectName,
+  ) {
+    if (saved['projectId']?.isNotEmpty != true) return false;
+    final savedName = saved['projectName'] ?? '';
+    if (savedName.isEmpty || projectName.isEmpty) return true;
+    return savedName == projectName;
+  }
+
   /// 取提交所需的固定业务标识。
   ///
-  /// 顺序：本地已保存 → 立刻再扫一次抓包（后台学习可能还没轮到这一次）。
+  /// 顺序：本地已保存且项目对得上 → 立刻再扫一次抓包。
   /// 都取不到才提示用户，并把诊断复制到剪贴板。
   ///
   /// 早期版本还会模拟点击菜单去「催」页面加载列表，已删除：那条路依赖
-  /// 不透明的 SPA 菜单结构，是实测最不可靠的一条，而后台学习已覆盖其目的。
+  /// 不透明的 SPA 菜单结构，是实测最不可靠的一条。
   Future<Map<String, String>?> _resolveBossConstants(
     InAppWebViewController controller,
     String projectName,
   ) async {
     final saved = await StorageService().loadBossConstants();
-    if (saved['projectId']?.isNotEmpty == true) return saved;
+    if (_constantsUsableFor(saved, projectName)) return saved;
+
+    final changedProject =
+        saved['projectId']?.isNotEmpty == true &&
+        (saved['projectName'] ?? '').isNotEmpty;
 
     final learned = await _learnConstants(controller, projectName);
     if (learned != null) return learned;
+
+    // 项目变了却学不到新配置时，宁可停下也不能拿旧项目的 ID 提交
+    if (changedProject) {
+      if (!mounted) return null;
+      _notify(
+        '项目已变为「$projectName」，但还没拿到它的提交配置。'
+        '请在网页上为该项目填报一次日志',
+      );
+      return null;
+    }
 
     // Release 构建不开 Dart VM 服务，flutter logs 抓不到 debugPrint，
     // 因此失败时把诊断信息复制到剪贴板，便于直接反馈。
@@ -727,6 +758,9 @@ class _WorkReportWebViewScreenState extends State<WorkReportWebViewScreen> {
         'projectId': projectId,
         'projectCode': '${decoded['projectCode'] ?? ''}',
         'auditor': auditor,
+        // 记下这套值属于哪个项目，供后续核对——项目会换，
+        // 换了以后旧值必须失效，不能拿旧项目的 ID 提交新项目的日志
+        'projectName': '${decoded['projectName'] ?? ''}',
       };
     } catch (e) {
       return null;
