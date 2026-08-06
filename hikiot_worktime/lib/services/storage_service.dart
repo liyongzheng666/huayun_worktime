@@ -439,6 +439,15 @@ class StorageService {
     );
   }
 
+  /// 清除已保存的 BOSS 提交配置。
+  ///
+  /// 需要独立方法而不是保存一份空值：清除后应回到「从未配置」状态，
+  /// 好让后台自动学习重新介入；留一份空 Map 在那里语义上是含糊的。
+  Future<void> clearBossConstants() async {
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.remove(StorageKeys.workLogBossConstants);
+  }
+
   Future<Map<String, String>> loadBossConstants() async {
     final prefs = await SharedPreferences.getInstance();
     final jsonStr = prefs.getString(StorageKeys.workLogBossConstants);

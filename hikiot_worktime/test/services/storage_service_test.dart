@@ -8,6 +8,42 @@ import 'package:hikiot_worktime/utils/work_time_calculator.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
 void main() {
+  group('StorageService BOSS 提交配置', () {
+    setUp(() {
+      SharedPreferences.setMockInitialValues({});
+    });
+
+    test('保存与读回三个业务标识', () async {
+      final storage = StorageService();
+
+      await storage.saveBossConstants({
+        'projectId': 'PROJECT_aaa',
+        'projectCode': 'PROJECT_bbb',
+        'auditor': ';USERINFO_ccc',
+      });
+
+      final loaded = await storage.loadBossConstants();
+      expect(loaded['projectId'], 'PROJECT_aaa');
+      expect(loaded['projectCode'], 'PROJECT_bbb');
+      expect(loaded['auditor'], ';USERINFO_ccc');
+    });
+
+    test('清除后回到「从未配置」状态，好让后台自动学习重新介入', () async {
+      // 保存按钮要求项目 ID 非空，光把输入框清空是存不下去的，
+      // 因此必须有一条独立的清除路径，否则没法回到未配置状态。
+      final storage = StorageService();
+      await storage.saveBossConstants({
+        'projectId': 'PROJECT_aaa',
+        'projectCode': 'PROJECT_bbb',
+        'auditor': ';USERINFO_ccc',
+      });
+
+      await storage.clearBossConstants();
+
+      expect(await storage.loadBossConstants(), isEmpty);
+    });
+  });
+
   group('StorageService session context', () {
     setUp(() {
       SharedPreferences.setMockInitialValues({});

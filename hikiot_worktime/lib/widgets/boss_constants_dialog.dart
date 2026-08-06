@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 
+import '../core/theme/theme.dart';
 import '../services/storage_service.dart';
 
 /// BOSS 提交配置对话框
@@ -34,6 +35,9 @@ class _BossConstantsDialogState extends State<BossConstantsDialog> {
 
   bool _loading = true;
 
+  /// 打开时是否已有保存过的配置，决定要不要显示「清除」。
+  bool _hasSaved = false;
+
   @override
   void initState() {
     super.initState();
@@ -47,6 +51,7 @@ class _BossConstantsDialogState extends State<BossConstantsDialog> {
       _projectIdController.text = saved['projectId'] ?? '';
       _projectCodeController.text = saved['projectCode'] ?? '';
       _auditorController.text = saved['auditor'] ?? '';
+      _hasSaved = (saved['projectId'] ?? '').isNotEmpty;
       _loading = false;
     });
   }
@@ -72,6 +77,22 @@ class _BossConstantsDialogState extends State<BossConstantsDialog> {
     Navigator.pop(context, true);
   }
 
+  /// 清除已保存的配置，回到「从未配置」状态。
+  ///
+  /// 必须有这条路径：保存按钮要求项目 ID 非空，光把输入框清空是存不下去的。
+  /// 清除后后台自动学习会重新介入，这也是验证自动获取是否生效的唯一办法。
+  Future<void> _clear() async {
+    await _storage.clearBossConstants();
+    if (!mounted) return;
+    setState(() {
+      _projectIdController.clear();
+      _projectCodeController.clear();
+      _auditorController.clear();
+      _hasSaved = false;
+    });
+    Navigator.pop(context, false);
+  }
+
   @override
   Widget build(BuildContext context) {
     return AlertDialog(
@@ -87,7 +108,8 @@ class _BossConstantsDialogState extends State<BossConstantsDialog> {
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
                   Text(
-                    '这三个值来自 BOSS 的日志记录，填一次即可长期使用。',
+                    '一般不用手工填：打开日志系统并登录后，APP 会自动获取。'
+                    '这里是自动获取不到时的兜底。',
                     style: TextStyle(fontSize: 12, color: Colors.grey[600]),
                   ),
                   const SizedBox(height: 14),
@@ -111,6 +133,13 @@ class _BossConstantsDialogState extends State<BossConstantsDialog> {
               ),
             ),
       actions: [
+        // 已配置过才显示清除：没配置时这个按钮没有意义
+        if (_hasSaved)
+          TextButton(
+            onPressed: _clear,
+            style: TextButton.styleFrom(foregroundColor: AppColors.warningDark),
+            child: const Text('清除'),
+          ),
         TextButton(
           onPressed: () => Navigator.pop(context, false),
           child: const Text('取消'),

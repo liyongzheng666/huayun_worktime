@@ -143,10 +143,17 @@ class WorkLogScreenState extends State<WorkLogScreen> {
   }
 
   /// 编辑 BOSS 提交配置。
+  ///
+  /// 关掉对话框后一律以存储为准重新判定，而不是只在「保存」时置位——
+  /// 对话框里也可以清除配置，只认保存的话清除后引导卡片不会重新出现。
   Future<void> _editBossConstants() async {
     final saved = await BossConstantsDialog.show(context);
+    final constants = await StorageService().loadBossConstants();
     if (!mounted) return;
-    setState(() => _bossConfigured = saved || _bossConfigured);
+
+    setState(() {
+      _bossConfigured = constants['projectId']?.isNotEmpty == true;
+    });
     if (saved) _showMessage('配置已保存，现在可以一键提交了');
   }
 
