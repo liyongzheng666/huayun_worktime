@@ -2,6 +2,7 @@ import 'dart:convert';
 
 import 'package:flutter_test/flutter_test.dart';
 import 'package:hikiot_worktime/utils/work_log_csv_parser.dart';
+import 'package:hikiot_worktime/utils/work_log_request_capture.dart';
 import 'package:hikiot_worktime/utils/work_log_submit_script.dart';
 
 void main() {
@@ -208,6 +209,20 @@ void main() {
       expect(script.contains('AUDITOR'), isTrue);
       expect(script.contains('Password'), isFalse);
       expect(script.contains('LoginID'), isFalse);
+    });
+  });
+
+  group('抓包容量', () {
+    test('单条记录上限远大于 BOSS 的 grid 响应', () {
+      // 实测一条 grid 响应就有 6005 字符被截断，需要的列正好在切口之外。
+      // 截断与「形状不认识」在结果上完全一样，曾因此误判过一轮。
+      expect(WorkLogRequestCapture.maxRecordChars, greaterThanOrEqualTo(20000));
+    });
+
+    test('条数上限仍足以容纳首页自身的请求', () {
+      // BOSS 经典首页加载自身就会发约 40 个请求，缓冲太小会把
+      // 后续真正需要的业务响应挤出去
+      expect(WorkLogRequestCapture.maxRecords, greaterThanOrEqualTo(60));
     });
   });
 }

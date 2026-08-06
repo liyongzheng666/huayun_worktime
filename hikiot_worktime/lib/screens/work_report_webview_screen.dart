@@ -564,6 +564,13 @@ class _WorkReportWebViewScreenState extends State<WorkReportWebViewScreen> {
         return;
       }
     }
+
+    // 轮询到头仍没学到。这不是异常，只是用户这段时间没做过带完整信息的操作，
+    // 明确告诉他该做什么，比默默失败强。
+    if (!mounted) return;
+    final still = await StorageService().loadBossConstants();
+    if (!mounted || still['projectId']?.isNotEmpty == true) return;
+    _notify('尚未获取到配置。在网页上正常填报一次日志即可自动记住');
   }
 
   /// 扫一次抓包，尝试学到提交配置；成功则落盘并返回。
@@ -698,16 +705,28 @@ class _WorkReportWebViewScreenState extends State<WorkReportWebViewScreen> {
     }
   }
 
+  /// 解析脚本返回的常量。
+  ///
+  /// **自动获取时审核人必须一并拿到**：BOSS 首页的「我的项目」网格里有
+  /// `PROJECT_xxx`，但完全没有工作日志的审核人；而抓包别处出现的 `USERINFO_`
+  /// 往往是用户自己的 ID。只要项目 ID 就落盘的话，会拿一个错的（或空的）
+  /// 审核人去提交，日志就发给了错误的审批人——这是公司真实系统上的后果，
+  /// 宁可让用户手工填，也不能猜。
+  ///
+  /// 手工填写不走这里，用户自己决定要不要留空。
   Map<String, String>? _parseConstants(String? raw) {
     try {
       final decoded = jsonDecode(raw ?? '{}');
       if (decoded is! Map || decoded['ok'] != true) return null;
+
       final projectId = '${decoded['projectId'] ?? ''}';
-      if (projectId.isEmpty) return null;
+      final auditor = '${decoded['auditor'] ?? ''}';
+      if (projectId.isEmpty || auditor.isEmpty) return null;
+
       return {
         'projectId': projectId,
         'projectCode': '${decoded['projectCode'] ?? ''}',
-        'auditor': '${decoded['auditor'] ?? ''}',
+        'auditor': auditor,
       };
     } catch (e) {
       return null;

@@ -283,8 +283,12 @@ class WorkLogScreenState extends State<WorkLogScreen> {
                         ),
                       ),
                       const SizedBox(height: 2),
+                      // 实测只翻列表拿不到审核人（首页「我的项目」网格里根本没有
+                      // 这一项），必须让 BOSS 自己发一次保存报文才拿得全。
+                      // 而手动填一次日志本来就是用户每天在做的事，不算额外负担。
                       Text(
-                        '打开日志系统并登录，APP 会自动获取，无需手工填写',
+                        '打开日志系统，在网页上正常填报一次日志，'
+                        'APP 会自动记住配置，之后就能一键提交',
                         style: TextStyle(
                           fontSize: 12,
                           color: AppColors.warningDark,

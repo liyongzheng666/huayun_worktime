@@ -145,4 +145,19 @@ void main() {
       expect(script.contains('notFound'), isTrue);
     });
   });
+
+  group('值可能在 ColText 而不是 ColValue', () {
+    test('ColValue 为 null 时从 ColText 取值', () {
+      // 实测 BOSS 首页「我的项目」网格就是这种形状：
+      // "ColName":"EID","ColText":"PROJECT_xxx","ColValue":null
+      // 早期正则只认 ColValue，导致明明抓到了却解析不出来。
+      expect(
+        script.contains(r'Col(?:Text|Value)'),
+        isTrue,
+        reason: '三个列表正则都应同时接受 ColText 与 ColValue',
+      );
+      expect(script.contains('ColValue\\\\*"\\s*:'), isFalse,
+          reason: '不应再有只认 ColValue 的正则');
+    });
+  });
 }

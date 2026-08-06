@@ -56,11 +56,11 @@ class WorkLogConstantsScanner {
         // —— 列表形状：ColName / ColText / ColValue 三元组 ——
         // 中间隔着 ColText 等字段，故用有界的非贪婪匹配
         var RE_L_PROJECT_ID =
-          /ColName\\\\*"\\s*:\\s*\\\\*"PROJECTNAME\\\\*"[\\s\\S]{0,600}?ColValue\\\\*"\\s*:\\s*\\\\*"(PROJECT_[A-Za-z0-9]+)/;
+          /ColName\\\\*"\\s*:\\s*\\\\*"PROJECTNAME\\\\*"[\\s\\S]{0,600}?Col(?:Text|Value)\\\\*"\\s*:\\s*\\\\*"(PROJECT_[A-Za-z0-9]+)/;
         var RE_L_AUDITOR =
-          /ColName\\\\*"\\s*:\\s*\\\\*"AUDITOR\\\\*"[\\s\\S]{0,600}?ColValue\\\\*"\\s*:\\s*\\\\*"(;?USERINFO_[A-Za-z0-9]+)/;
+          /ColName\\\\*"\\s*:\\s*\\\\*"AUDITOR\\\\*"[\\s\\S]{0,600}?Col(?:Text|Value)\\\\*"\\s*:\\s*\\\\*"(;?USERINFO_[A-Za-z0-9]+)/;
         var RE_L_EID =
-          /ColName\\\\*"\\s*:\\s*\\\\*"EID\\\\*"[\\s\\S]{0,600}?ColValue\\\\*"\\s*:\\s*\\\\*"(WORKLOG_[A-Za-z0-9]+)/;
+          /ColName\\\\*"\\s*:\\s*\\\\*"EID\\\\*"[\\s\\S]{0,600}?Col(?:Text|Value)\\\\*"\\s*:\\s*\\\\*"(WORKLOG_[A-Za-z0-9]+)/;
 
         function first(re, text) {
           var m = re.exec(text);

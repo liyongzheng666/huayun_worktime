@@ -18,7 +18,17 @@ class WorkLogRequestCapture {
   ///
   /// 不能太小：BOSS 经典首页加载时自身就会发约 40 个请求，
   /// 缓冲过小会把后续真正需要的业务响应挤出去（实测踩过）。
-  static const int maxRecords = 150;
+  static const int maxRecords = 100;
+
+  /// 单条记录保留的最大字符数。
+  ///
+  /// 原为 6000，实测不够：BOSS 的 grid 响应一条就有 6005 字符被截断，
+  /// 需要的列正好落在切口之外。截断和「形状不认识」在结果上完全一样，
+  /// 曾因此误判过一轮（诊断里现在会输出 `responseTruncated` 加以区分）。
+  ///
+  /// 与 [maxRecords] 是一组权衡：100 条 × 60000 字符 ≈ 最坏 6 MB，
+  /// 对 WebView 可以接受，而绝大多数请求远小于上限。
+  static const int maxRecordChars = 60000;
 
   /// 生成注入脚本（在 document start 注入一次即可）。
   static String buildHookScript() {
@@ -27,6 +37,7 @@ class WorkLogRequestCapture {
         if (window.$storeName) return; // 避免重复注入导致多层包装
         var STORE = window.$storeName = [];
         var MAX = $maxRecords;
+        var MAX_CHARS = $maxRecordChars;
 
         function record(entry) {
           try {
@@ -51,7 +62,9 @@ class WorkLogRequestCapture {
           } else {
             try { text = JSON.stringify(value); } catch (e) { text = String(value); }
           }
-          return text.length > 6000 ? text.substring(0, 6000) + '…[截断]' : text;
+          return text.length > MAX_CHARS
+            ? text.substring(0, MAX_CHARS) + '…[截断]'
+            : text;
         }
 
         // ---- 钩 XMLHttpRequest ----
