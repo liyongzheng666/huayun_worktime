@@ -39,6 +39,14 @@ class AppConstants {
   /// 常年满足，列在最前面只会挤占版面，因此起点可配置且默认从 120% 开始。
   static const int defaultMinTarget = 120;
 
+  /// 标准工时百分比。达到这里才算干够了一天，低于此值的完成度标橙。
+  static const double standardWorkPercent = 100;
+
+  /// 超时告警百分比。超过这条线的完成度标红并闪烁提示。
+  ///
+  /// 140% 约合 11.2 小时，已经明显超出正常工作时长。
+  static const double overworkPercent = 140;
+
   /// 最小目标百分比
   static const int minTargetPercent = 100;
 

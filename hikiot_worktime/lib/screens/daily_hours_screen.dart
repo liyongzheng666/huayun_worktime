@@ -11,6 +11,7 @@ import '../utils/haptic_utils.dart';
 import '../utils/date_helper.dart';
 import '../utils/target_progress_helper.dart';
 import '../widgets/home_button.dart';
+import '../widgets/percentage_pill.dart';
 import '../widgets/haptic_refresh_indicator.dart';
 import '../widgets/pull_refresh_guide.dart';
 import 'feature_guide_page.dart';
@@ -1016,12 +1017,6 @@ class DailyHoursScreenState extends State<DailyHoursScreen>
       200.0,
     );
 
-    Color getPercentageColor(double percentage) {
-      if (percentage >= _baseTarget) return Colors.green;
-      if (percentage >= 100) return Colors.orange;
-      return Colors.blue;
-    }
-
     return Card(
       elevation: 2,
       shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
@@ -1036,7 +1031,6 @@ class DailyHoursScreenState extends State<DailyHoursScreen>
               label: '按照打卡时间',
               hours: actualHours,
               percentage: actualPercentageRaw,
-              color: getPercentageColor(actualPercentageRaw),
             ),
             const Divider(height: 20),
             // 信息2: 现在下班的预估工时
@@ -1046,7 +1040,6 @@ class DailyHoursScreenState extends State<DailyHoursScreen>
               label: '如果现在下班',
               hours: estimatedHours,
               percentage: estimatedPercentageRaw,
-              color: getPercentageColor(estimatedPercentageRaw),
             ),
           ],
         ),
@@ -1060,15 +1053,16 @@ class DailyHoursScreenState extends State<DailyHoursScreen>
   /// 系统字体一放大就把百分比顶出屏幕（实测 53.12% 被切成 53.12）。
   ///
   /// 改成两行之后，数字独占一行、字号反而可以放大——既不会溢出，也更醒目。
-  /// 百分比做成彩色胶囊，一眼能看出离目标还差多少。
+  /// 百分比做成彩色胶囊：橙＝没干够、绿＝正常、红闪＝已明显超时。
   Widget _buildEstimateRow({
     required IconData icon,
     required Color iconColor,
     required String label,
     required double hours,
     required double percentage,
-    required Color color,
   }) {
+    // 数字与胶囊必须同色，因此都从同一个函数取，不再由调用方传入
+    final color = PercentagePill.colorFor(percentage);
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
@@ -1108,24 +1102,7 @@ class DailyHoursScreenState extends State<DailyHoursScreen>
                   color: color,
                 ),
               ),
-              Container(
-                padding: const EdgeInsets.symmetric(
-                  horizontal: 10,
-                  vertical: 3,
-                ),
-                decoration: BoxDecoration(
-                  color: color.withValues(alpha: 0.14),
-                  borderRadius: BorderRadius.circular(12),
-                ),
-                child: Text(
-                  '${WorkTimeCalculator.formatHours(percentage)}%',
-                  style: TextStyle(
-                    fontSize: 15,
-                    fontWeight: FontWeight.bold,
-                    color: color,
-                  ),
-                ),
-              ),
+              PercentagePill(percentage: percentage),
             ],
           ),
         ),
