@@ -31,7 +31,6 @@ class TargetProgressHelper {
     required double displayHours,
     required int baseTarget,
     required int minTarget,
-    required bool smartSort,
     required int? pinnedTarget,
   }) {
     final currentPercentage = displayHours / 8 * 100;
@@ -57,9 +56,7 @@ class TargetProgressHelper {
       };
     }).toList();
 
-    final sortedTargetData = smartSort
-        ? _sortDailyTargets(targetData)
-        : _sortByTarget(targetData);
+    final sortedTargetData = _sortByTarget(targetData);
     movePinnedTargetToFront(sortedTargetData, pinnedTarget);
 
     return TargetProgressResult(
@@ -76,7 +73,6 @@ class TargetProgressHelper {
     required int remainingWorkDays,
     required int baseTarget,
     required int minTarget,
-    required bool smartSort,
     required int? pinnedTarget,
   }) {
     final currentPercentage = baseHours > 0
@@ -108,9 +104,7 @@ class TargetProgressHelper {
       };
     }).toList();
 
-    final sortedResult = smartSort
-        ? _sortMonthlySmart(targetData)
-        : _sortMonthlyNormal(targetData);
+    final sortedResult = _sortMonthlyNormal(targetData);
     movePinnedTargetToFront(sortedResult.sortedTargetData, pinnedTarget);
 
     return sortedResult;
@@ -156,83 +150,6 @@ class TargetProgressHelper {
 
     final beyond = extendedTargets.where((t) => t > baseTarget).toList();
     return [...baseTargets, ...beyond];
-  }
-
-  static List<Map<String, dynamic>> _sortDailyTargets(
-    List<Map<String, dynamic>> targetData,
-  ) {
-    final completed = targetData
-        .where((data) => data['isCompleted'] as bool)
-        .toList();
-    final incomplete = targetData
-        .where((data) => !(data['isCompleted'] as bool))
-        .toList();
-
-    final highestAchieved = completed.isNotEmpty
-        ? [completed.last]
-        : <Map<String, dynamic>>[];
-    final nextToAchieve = incomplete.isNotEmpty
-        ? [incomplete.first]
-        : <Map<String, dynamic>>[];
-    final others = incomplete.skip(1).toList();
-    final bothCompleted = completed.length > 1
-        ? completed.sublist(0, completed.length - 1)
-        : <Map<String, dynamic>>[];
-
-    return [...highestAchieved, ...nextToAchieve, ...others, ...bothCompleted];
-  }
-
-  static TargetProgressResult _sortMonthlySmart(
-    List<Map<String, dynamic>> targetData,
-  ) {
-    final bothCompleted = <Map<String, dynamic>>[];
-    final others = <Map<String, dynamic>>[];
-
-    for (final data in targetData) {
-      final avgCompleted = data['avgCompleted'] as bool;
-      final isCompleted = data['isCompleted'] as bool;
-      if (avgCompleted && isCompleted) {
-        bothCompleted.add(data);
-      } else {
-        others.add(data);
-      }
-    }
-
-    bothCompleted.sort(_compareByTarget);
-    others.sort(_compareByTarget);
-
-    Map<String, dynamic>? highestAchievedData;
-    Map<String, dynamic>? nextToAchieveData;
-    for (var i = others.length - 1; i >= 0; i--) {
-      if (others[i]['avgCompleted'] as bool) {
-        highestAchievedData = others[i];
-        break;
-      }
-    }
-    for (final data in others) {
-      if (!(data['avgCompleted'] as bool)) {
-        nextToAchieveData = data;
-        break;
-      }
-    }
-
-    if (highestAchievedData != null) {
-      others.remove(highestAchievedData);
-    }
-    if (nextToAchieveData != null) {
-      others.remove(nextToAchieveData);
-    }
-
-    return TargetProgressResult(
-      sortedTargetData: [
-        ?highestAchievedData,
-        ?nextToAchieveData,
-        ...others,
-        ...bothCompleted,
-      ],
-      highestAchievedTarget: highestAchievedData?['target'] as int?,
-      nextToAchieveTarget: nextToAchieveData?['target'] as int?,
-    );
   }
 
   static TargetProgressResult _sortMonthlyNormal(

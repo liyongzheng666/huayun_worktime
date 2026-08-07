@@ -74,16 +74,6 @@ class StorageService {
     return prefs.getInt(StorageKeys.minTarget) ?? AppConstants.defaultMinTarget;
   }
 
-  Future<void> saveSmartSort(bool enabled) async {
-    final prefs = await SharedPreferences.getInstance();
-    await prefs.setBool(StorageKeys.smartSort, enabled);
-  }
-
-  Future<bool> loadSmartSort() async {
-    final prefs = await SharedPreferences.getInstance();
-    return prefs.getBool(StorageKeys.smartSort) ?? true;
-  }
-
   Future<void> saveExtendedTargetRange(bool enabled) async {
     final prefs = await SharedPreferences.getInstance();
     await prefs.setBool(StorageKeys.extendedTargetRange, enabled);

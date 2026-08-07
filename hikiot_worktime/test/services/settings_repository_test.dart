@@ -21,7 +21,7 @@ void main() {
           teamName: '研发团队',
         );
         await storage.saveUserName('测试用户');
-        await storage.saveSmartSort(false);
+        await storage.saveMinTarget(130);
         await storage.saveBaseTarget(150);
         await storage.saveExtendedTargetRange(true);
         await storage.saveDebugToolsEnabled(true);
@@ -33,7 +33,7 @@ void main() {
         expect(snapshot.teamNo, 'team-1');
         expect(snapshot.teamName, '研发团队');
         expect(snapshot.userName, '测试用户');
-        expect(snapshot.smartSort, isFalse);
+        expect(snapshot.minTarget, 130);
         expect(snapshot.baseTarget, 150);
         expect(snapshot.extendedTargetRange, isTrue);
         expect(snapshot.debugToolsEnabled, isTrue);
@@ -89,7 +89,6 @@ void main() {
         final storage = StorageService();
         final repository = SettingsRepository(storage: storage);
 
-        await repository.saveSmartSort(false);
         await repository.saveDebugToolsEnabled(true);
         await repository.saveOnboardingCompleted(false);
         await repository.saveReminderTime(
@@ -100,7 +99,6 @@ void main() {
         );
 
         final reminderSettings = await storage.loadReminderSettings();
-        expect(await storage.loadSmartSort(), isFalse);
         expect(await storage.loadDebugToolsEnabled(), isTrue);
         expect(await storage.loadOnboardingCompleted(), isFalse);
         expect(reminderSettings.morningEnabled, isFalse);

@@ -114,8 +114,7 @@ class _FeatureGuidePageState extends State<FeatureGuidePage> {
         '长按任意目标卡片可置顶',
         '置顶的目标显示在最前面',
         '再次长按取消置顶',
-        '智能排序根据完成进度自动排列',
-        '可在设置中开关智能排序',
+        '目标按百分比从低到高排列',
       ],
     ),
     _FeatureItem(

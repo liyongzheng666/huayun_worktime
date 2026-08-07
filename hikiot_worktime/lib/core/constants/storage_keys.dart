@@ -44,9 +44,6 @@ class StorageKeys {
   /// 置顶目标
   static const String pinnedTarget = 'pinned_target';
 
-  /// 智能排序开关
-  static const String smartSort = 'smart_sort';
-
   /// 扩展目标范围开关
   static const String extendedTargetRange = 'extended_target_range';
 

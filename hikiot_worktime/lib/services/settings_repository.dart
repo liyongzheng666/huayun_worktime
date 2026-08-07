@@ -7,7 +7,6 @@ class SettingsSnapshot {
     required this.lunchStartTime,
     required this.lunchEndTime,
     required this.crossDayMinutes,
-    required this.smartSort,
     required this.baseTarget,
     required this.minTarget,
     required this.hapticModeIndex,
@@ -23,7 +22,6 @@ class SettingsSnapshot {
   final String lunchStartTime;
   final String lunchEndTime;
   final int crossDayMinutes;
-  final bool smartSort;
   final int baseTarget;
 
   /// 目标进度列表的起点百分比
@@ -60,7 +58,6 @@ class SettingsRepository {
       crossDayMinutes:
           settings[StorageKeys.crossDayMinutes] as int? ??
           AppConstants.defaultCrossDayMinutes,
-      smartSort: await _storage.loadSmartSort(),
       baseTarget: await _storage.loadBaseTarget(),
       minTarget: await _storage.loadMinTarget(),
       hapticModeIndex: await _storage.loadHapticModeIndex(),
@@ -112,10 +109,6 @@ class SettingsRepository {
 
   Future<void> saveExtendedTargetRange(bool enabled) {
     return _storage.saveExtendedTargetRange(enabled);
-  }
-
-  Future<void> saveSmartSort(bool enabled) {
-    return _storage.saveSmartSort(enabled);
   }
 
   Future<void> saveDebugToolsEnabled(bool enabled) {

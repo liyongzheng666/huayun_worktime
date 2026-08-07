@@ -8,7 +8,6 @@ void main() {
         displayHours: 8,
         baseTarget: 160,
         minTarget: 120,
-        smartSort: false,
         pinnedTarget: null,
       );
 
@@ -27,7 +26,6 @@ void main() {
         displayHours: 8,
         baseTarget: 160,
         minTarget: 120,
-        smartSort: false,
         pinnedTarget: null,
       );
 
@@ -41,7 +39,6 @@ void main() {
         displayHours: 8,
         baseTarget: 130,
         minTarget: 100,
-        smartSort: false,
         pinnedTarget: null,
       );
 
@@ -58,7 +55,6 @@ void main() {
         displayHours: 8,
         baseTarget: 120,
         minTarget: 120,
-        smartSort: false,
         pinnedTarget: null,
       );
 
@@ -71,7 +67,6 @@ void main() {
         displayHours: 8,
         baseTarget: 120,
         minTarget: 150,
-        smartSort: false,
         pinnedTarget: null,
       );
 
@@ -84,7 +79,6 @@ void main() {
         displayHours: 12.8, // 160%
         baseTarget: 140,
         minTarget: 120,
-        smartSort: false,
         pinnedTarget: null,
       );
 
@@ -98,7 +92,7 @@ void main() {
   });
 
   group('排序与置顶', () {
-    test('关闭智能排序时严格从小到大', () {
+    test('严格按目标从小到大排列', () {
       final result = TargetProgressHelper.buildMonthlyProgress(
         adjustedTotalHours: 80,
         baseHours: 80,
@@ -106,7 +100,6 @@ void main() {
         remainingWorkDays: 5,
         baseTarget: 160,
         minTarget: 120,
-        smartSort: false,
         pinnedTarget: null,
       );
 
@@ -119,29 +112,32 @@ void main() {
       ]);
     });
 
-    test('智能排序把最高达成与下一个目标提到最前', () {
+    test('仍然标出最高达成与下一个目标，但不再改变顺序', () {
+      // 智能排序已移除，这两个值只用于卡片上的徽章与配色，
+      // 列表顺序恒为升序。
       final result = TargetProgressHelper.buildMonthlyProgress(
-        // 总量仅到 100%（尚未达成任何目标），但日均已够 130%——
-        // 智能排序挑的正是「日均已达成的最高档」与「下一个要冲的档」
+        // 总量仅到 100%（尚未达成任何目标），但日均已够 130%
         adjustedTotalHours: 80,
         baseHours: 80,
         avgHoursPerDay: 10.4,
         remainingWorkDays: 5,
         baseTarget: 160,
         minTarget: 120,
-        smartSort: true,
         pinnedTarget: null,
       );
 
       expect(result.highestAchievedTarget, 130);
       expect(result.nextToAchieveTarget, 140);
-      expect(result.sortedTargetData.take(2).map((d) => d['target']), [
+      expect(result.sortedTargetData.map((d) => d['target']).toList(), [
+        120,
         130,
         140,
+        150,
+        160,
       ]);
     });
 
-    test('置顶目标排到最前，不影响达成判定', () {
+    test('置顶目标排到最前，其余仍为升序', () {
       final result = TargetProgressHelper.buildMonthlyProgress(
         adjustedTotalHours: 80,
         baseHours: 80,
@@ -149,11 +145,16 @@ void main() {
         remainingWorkDays: 5,
         baseTarget: 160,
         minTarget: 120,
-        smartSort: true,
         pinnedTarget: 150,
       );
 
-      expect(result.sortedTargetData.first['target'], 150);
+      expect(result.sortedTargetData.map((d) => d['target']).toList(), [
+        150,
+        120,
+        130,
+        140,
+        160,
+      ]);
       expect(result.highestAchievedTarget, 130);
       expect(result.nextToAchieveTarget, 140);
     });

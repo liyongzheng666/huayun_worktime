@@ -69,8 +69,6 @@ class MonthlyCalendarScreenState extends State<MonthlyCalendarScreen> {
   // 置顶的目标
   int? _pinnedTarget;
 
-  // 智能排序开关
-  bool _smartSort = true;
 
   // 基础目标百分比
   int _baseTarget = 120;
@@ -92,7 +90,6 @@ class MonthlyCalendarScreenState extends State<MonthlyCalendarScreen> {
       loadDailyAttendance: _apiClient.getDailyAttendance,
     );
     _loadPinnedTarget();
-    _loadSmartSort();
     if (widget.autoInitialize) {
       _initializeUser();
     }
@@ -106,16 +103,6 @@ class MonthlyCalendarScreenState extends State<MonthlyCalendarScreen> {
     if (mounted) {
       setState(() {
         _pinnedTarget = target;
-      });
-    }
-  }
-
-  /// 加载智能排序开关
-  Future<void> _loadSmartSort() async {
-    final enabled = await _storage.loadSmartSort();
-    if (mounted) {
-      setState(() {
-        _smartSort = enabled;
       });
     }
   }
@@ -190,9 +177,6 @@ class MonthlyCalendarScreenState extends State<MonthlyCalendarScreen> {
 
   /// 刷新今日数据（从API获取最新考勤）
   Future<void> refreshTodayData() async {
-    // 重新加载智能排序设置
-    await _loadSmartSort();
-
     if (_personNo == null || _teamNo == null) return;
 
     try {
@@ -216,7 +200,6 @@ class MonthlyCalendarScreenState extends State<MonthlyCalendarScreen> {
 
   /// 刷新指定日期数据（用于每日页切换到月度页时同步当前日期）
   Future<void> refreshDateData(DateTime targetDate) async {
-    await _loadSmartSort();
 
     if (_personNo == null || _teamNo == null) return;
 
@@ -246,8 +229,7 @@ class MonthlyCalendarScreenState extends State<MonthlyCalendarScreen> {
   Future<void> refreshFromStorage() async {
     if (_personNo == null || _teamNo == null) return;
 
-    // 重新加载设置（确保智能排序等设置是最新的）
-    _smartSort = await _storage.loadSmartSort();
+    // 重新加载设置，确保目标相关配置是最新的
     _pinnedTarget = await _storage.loadPinnedTarget();
     _baseTarget = await _storage.loadBaseTarget();
     _minTarget = await _storage.loadMinTarget();
@@ -2380,7 +2362,6 @@ class MonthlyCalendarScreenState extends State<MonthlyCalendarScreen> {
       remainingWorkDays: remainingWorkDays,
       baseTarget: _baseTarget,
       minTarget: _minTarget,
-      smartSort: _smartSort,
       pinnedTarget: _pinnedTarget,
     );
     final sortedTargetData = targetProgress.sortedTargetData;

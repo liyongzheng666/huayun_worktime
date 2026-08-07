@@ -38,7 +38,6 @@ class DailyHoursScreenState extends State<DailyHoursScreen>
   Map<String, String> _holidayPlan = {}; // 节假日计划
   bool _useCheckInTime = true; // 默认使用打卡时间计算
   int? _pinnedTarget; // 置顶的目标
-  bool _smartSort = true; // 智能排序开关
   int _baseTarget = 120; // 基础目标百分比
   /// 目标进度列表的起点，可在设置里调整
   int _minTarget = AppConstants.defaultMinTarget;
@@ -52,7 +51,6 @@ class DailyHoursScreenState extends State<DailyHoursScreen>
     WidgetsBinding.instance.addObserver(this);
     initializeDateFormatting('zh_CN', null);
     _loadPinnedTarget();
-    _loadSmartSort();
     if (widget.autoLoad) {
       _loadDailyData();
     }
@@ -68,7 +66,6 @@ class DailyHoursScreenState extends State<DailyHoursScreen>
   @override
   void didChangeAppLifecycleState(AppLifecycleState state) {
     if (state == AppLifecycleState.resumed) {
-      _loadSmartSort();
       _loadDailyData();
     }
   }
@@ -136,16 +133,6 @@ class DailyHoursScreenState extends State<DailyHoursScreen>
     }
   }
 
-  /// 加载智能排序开关
-  Future<void> _loadSmartSort() async {
-    final enabled = await _storage.loadSmartSort();
-    if (mounted) {
-      setState(() {
-        _smartSort = enabled;
-      });
-    }
-  }
-
   /// 切换置顶目标
   Future<void> _togglePinnedTarget(int target) async {
     final newTarget = WorkTimeCalculator.calculateNewPinnedTarget(
@@ -160,7 +147,6 @@ class DailyHoursScreenState extends State<DailyHoursScreen>
 
   /// 公开方法:从其他页面切换回来时刷新数据
   Future<void> refreshData() async {
-    await _loadSmartSort();
     // 重新加载所有数据（包括手动标记），确保与月度页面的修改同步
     await _loadDailyData();
   }
@@ -194,7 +180,6 @@ class DailyHoursScreenState extends State<DailyHoursScreen>
       final result = await _dailyRepository.load(_selectedDate);
       if (!mounted) return;
 
-      _smartSort = result.smartSort;
       _pinnedTarget = result.pinnedTarget;
       _baseTarget = result.baseTarget;
       _minTarget = result.minTarget;
@@ -1330,7 +1315,6 @@ class DailyHoursScreenState extends State<DailyHoursScreen>
       displayHours: displayHours,
       baseTarget: _baseTarget,
       minTarget: _minTarget,
-      smartSort: _smartSort,
       pinnedTarget: _pinnedTarget,
     );
     final sortedTargetData = targetProgress.sortedTargetData;

@@ -27,7 +27,6 @@ class DailyAttendanceLoadResult {
     required this.teamNo,
     required this.holidayPlan,
     required this.dayData,
-    required this.smartSort,
     required this.pinnedTarget,
     required this.baseTarget,
     required this.minTarget,
@@ -39,7 +38,6 @@ class DailyAttendanceLoadResult {
   final Map<String, String> holidayPlan;
   final Map<String, dynamic> dayData;
   final Map<String, dynamic>? attendanceData;
-  final bool smartSort;
   final int? pinnedTarget;
   final int baseTarget;
 
@@ -73,7 +71,6 @@ class DailyAttendanceRepository {
     DateTime selectedDate, {
     DateTime? workDate,
   }) async {
-    final smartSort = await _storage.loadSmartSort();
     final pinnedTarget = await _storage.loadPinnedTarget();
     final baseTarget = await _storage.loadBaseTarget();
     final minTarget = await _storage.loadMinTarget();
@@ -88,7 +85,6 @@ class DailyAttendanceRepository {
         teamNo: null,
         holidayPlan: const {},
         dayData: const {},
-        smartSort: smartSort,
         pinnedTarget: pinnedTarget,
         baseTarget: baseTarget,
         minTarget: minTarget,
@@ -112,7 +108,6 @@ class DailyAttendanceRepository {
         teamNo: teamNo,
         holidayPlan: holidayPlan,
         dayData: dayData,
-        smartSort: smartSort,
         pinnedTarget: pinnedTarget,
         baseTarget: baseTarget,
         minTarget: minTarget,
@@ -128,7 +123,6 @@ class DailyAttendanceRepository {
         teamNo: teamNo,
         holidayPlan: holidayPlan,
         dayData: dayData,
-        smartSort: smartSort,
         pinnedTarget: pinnedTarget,
         baseTarget: baseTarget,
         minTarget: minTarget,
@@ -144,7 +138,6 @@ class DailyAttendanceRepository {
         teamNo: teamNo,
         holidayPlan: holidayPlan,
         dayData: dayData,
-        smartSort: smartSort,
         pinnedTarget: pinnedTarget,
         baseTarget: baseTarget,
         minTarget: minTarget,
@@ -160,7 +153,6 @@ class DailyAttendanceRepository {
         teamNo: teamNo,
         holidayPlan: holidayPlan,
         dayData: dayData,
-        smartSort: smartSort,
         pinnedTarget: pinnedTarget,
         baseTarget: baseTarget,
         minTarget: minTarget,
@@ -186,7 +178,6 @@ class DailyAttendanceRepository {
       holidayPlan: holidayPlan,
       dayData: dayData,
       attendanceData: attendanceData,
-      smartSort: smartSort,
       pinnedTarget: pinnedTarget,
       baseTarget: baseTarget,
       minTarget: minTarget,
@@ -373,7 +364,6 @@ class DailyAttendanceRepository {
     required String? teamNo,
     required Map<String, String> holidayPlan,
     required Map<String, dynamic> dayData,
-    required bool smartSort,
     required int? pinnedTarget,
     required int baseTarget,
     required int minTarget,
@@ -387,7 +377,6 @@ class DailyAttendanceRepository {
       attendanceData: attendanceData == null
           ? null
           : Map<String, dynamic>.from(attendanceData),
-      smartSort: smartSort,
       pinnedTarget: pinnedTarget,
       baseTarget: baseTarget,
       minTarget: minTarget,

@@ -41,8 +41,6 @@ class _SettingsScreenState extends State<SettingsScreen> {
   TimeOfDay _lunchStartTime = const TimeOfDay(hour: 12, minute: 0);
   TimeOfDay _lunchEndTime = const TimeOfDay(hour: 13, minute: 0);
 
-  // 智能排序开关
-  bool _smartSort = true;
 
   // 基础目标百分比
   int _baseTarget = 120;
@@ -85,7 +83,6 @@ class _SettingsScreenState extends State<SettingsScreen> {
 
       _lunchStartTime = _parseTime(snapshot.lunchStartTime, _lunchStartTime);
       _lunchEndTime = _parseTime(snapshot.lunchEndTime, _lunchEndTime);
-      _smartSort = snapshot.smartSort;
       _baseTarget = snapshot.baseTarget;
       _minTarget = snapshot.minTarget;
       _hapticMode =
@@ -226,7 +223,6 @@ class _SettingsScreenState extends State<SettingsScreen> {
                   const SizedBox(height: 12),
                   _buildBaseTargetSettings(),
                   const SizedBox(height: 12),
-                  _buildSmartSortSettings(),
                   const SizedBox(height: 24),
                   _buildSectionHeader('震动反馈', Icons.vibration),
                   const SizedBox(height: 12),
@@ -1238,68 +1234,6 @@ class _SettingsScreenState extends State<SettingsScreen> {
         ),
       );
     }
-  }
-
-  /// 智能排序设置卡片
-  Widget _buildSmartSortSettings() {
-    return Card(
-      elevation: 2,
-      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
-      child: Padding(
-        padding: const EdgeInsets.all(16),
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            Row(
-              children: [
-                Icon(Icons.sort, size: 20, color: Colors.purple[700]),
-                const SizedBox(width: 8),
-                const Expanded(
-                  child: Text(
-                    '智能排序',
-                    style: TextStyle(fontSize: 14, fontWeight: FontWeight.w600),
-                  ),
-                ),
-                Switch(
-                  value: _smartSort,
-                  onChanged: (value) async {
-                    await HapticUtils.selectionClick();
-                    setState(() => _smartSort = value);
-                    await _settingsRepository.saveSmartSort(value);
-                  },
-                  activeThumbColor: Colors.purple[700],
-                ),
-              ],
-            ),
-            const SizedBox(height: 8),
-            Text(
-              _smartSort ? '开启：最高达成 → 即将达成 → 其他(升序)' : '关闭：全部按目标从低到高排序',
-              style: TextStyle(fontSize: 12, color: Colors.grey[600]),
-            ),
-            const SizedBox(height: 12),
-            Container(
-              padding: const EdgeInsets.all(10),
-              decoration: BoxDecoration(
-                color: Colors.purple[50],
-                borderRadius: BorderRadius.circular(8),
-              ),
-              child: Row(
-                children: [
-                  Icon(Icons.info_outline, size: 16, color: Colors.purple[700]),
-                  const SizedBox(width: 8),
-                  Expanded(
-                    child: Text(
-                      '置顶目标始终显示在最前面',
-                      style: TextStyle(fontSize: 12, color: Colors.purple[700]),
-                    ),
-                  ),
-                ],
-              ),
-            ),
-          ],
-        ),
-      ),
-    );
   }
 
   /// 震动反馈设置卡片
