@@ -2488,10 +2488,13 @@ class MonthlyCalendarScreenState extends State<MonthlyCalendarScreen> {
             : null,
         child: Padding(
           padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
-          child: Row(
+          // Wrap 而非 Row：后面还跟着徽章，字体放大时会把文字顶出去
+          child: Wrap(
+            crossAxisAlignment: WrapCrossAlignment.center,
+            spacing: 6,
+            runSpacing: 4,
             children: [
               const Icon(Icons.check_circle, color: Colors.green, size: 18),
-              const SizedBox(width: 8),
               Text(
                 '$target% 目标已达成',
                 style: const TextStyle(
@@ -2500,7 +2503,7 @@ class MonthlyCalendarScreenState extends State<MonthlyCalendarScreen> {
                 ),
               ),
               if (isBaseTarget) ...[
-                const SizedBox(width: 6),
+                // Wrap 自带 spacing，这里不再需要手动间隔
                 Container(
                   padding: const EdgeInsets.symmetric(
                     horizontal: 6,
@@ -2863,7 +2866,11 @@ class MonthlyCalendarScreenState extends State<MonthlyCalendarScreen> {
       children: [
         Text(label, style: TextStyle(fontSize: 12, color: Colors.grey[600])),
         const SizedBox(height: 8),
-        Row(
+        // 这些统计项并排放在 spaceAround 的行里，各自宽度有限，
+        // 字体放大时数值会顶出去，整体缩放比裁切好
+        FittedBox(
+          fit: BoxFit.scaleDown,
+          child: Row(
           crossAxisAlignment: CrossAxisAlignment.end,
           mainAxisAlignment: MainAxisAlignment.center,
           children: [
@@ -2884,6 +2891,7 @@ class MonthlyCalendarScreenState extends State<MonthlyCalendarScreen> {
               ),
             ),
           ],
+          ),
         ),
       ],
     );

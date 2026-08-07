@@ -799,7 +799,11 @@ class DailyHoursScreenState extends State<DailyHoursScreen>
                   ),
                 ),
                 const SizedBox(height: 16),
-                Row(
+                // 56pt 的大数字加单位，字体一放大就会超出卡片宽度，
+                // 用 FittedBox 整体缩放而不是让它被裁掉
+                FittedBox(
+                  fit: BoxFit.scaleDown,
+                  child: Row(
                   mainAxisAlignment: MainAxisAlignment.center,
                   crossAxisAlignment: CrossAxisAlignment.baseline,
                   textBaseline: TextBaseline.alphabetic,
@@ -823,6 +827,7 @@ class DailyHoursScreenState extends State<DailyHoursScreen>
                       ),
                     ),
                   ],
+                  ),
                 ),
                 // 只有非加班、非休息日才显示工时百分比
                 if (type != AppConstants.typeOvertime &&
@@ -1025,67 +1030,106 @@ class DailyHoursScreenState extends State<DailyHoursScreen>
         child: Column(
           children: [
             // 信息1: 实际打卡工时
-            Row(
-              children: [
-                Icon(Icons.fact_check, size: 20, color: Colors.blue[700]),
-                const SizedBox(width: 8),
-                const Text(
-                  '按照打卡时间',
-                  style: TextStyle(fontSize: 14, fontWeight: FontWeight.w500),
-                ),
-                const SizedBox(width: 12),
-                Text(
-                  '工时: ${WorkTimeCalculator.formatHours(actualHours)}h',
-                  style: TextStyle(
-                    fontSize: 14,
-                    fontWeight: FontWeight.bold,
-                    color: getPercentageColor(actualPercentageRaw),
-                  ),
-                ),
-                const SizedBox(width: 12),
-                Text(
-                  '${WorkTimeCalculator.formatHours(actualPercentageRaw)}%',
-                  style: TextStyle(
-                    fontSize: 14,
-                    fontWeight: FontWeight.bold,
-                    color: getPercentageColor(actualPercentageRaw),
-                  ),
-                ),
-              ],
+            _buildEstimateRow(
+              icon: Icons.fact_check,
+              iconColor: Colors.blue[700]!,
+              label: '按照打卡时间',
+              hours: actualHours,
+              percentage: actualPercentageRaw,
+              color: getPercentageColor(actualPercentageRaw),
             ),
-            const SizedBox(height: 12),
+            const Divider(height: 20),
             // 信息2: 现在下班的预估工时
-            Row(
-              children: [
-                Icon(Icons.trending_up, size: 20, color: Colors.purple[700]),
-                const SizedBox(width: 8),
-                const Text(
-                  '如果现在下班',
-                  style: TextStyle(fontSize: 14, fontWeight: FontWeight.w500),
-                ),
-                const SizedBox(width: 12),
-                Text(
-                  '工时: ${WorkTimeCalculator.formatHours(estimatedHours)}h',
-                  style: TextStyle(
-                    fontSize: 14,
-                    fontWeight: FontWeight.bold,
-                    color: getPercentageColor(estimatedPercentageRaw),
-                  ),
-                ),
-                const SizedBox(width: 12),
-                Text(
-                  '${WorkTimeCalculator.formatHours(estimatedPercentageRaw)}%',
-                  style: TextStyle(
-                    fontSize: 14,
-                    fontWeight: FontWeight.bold,
-                    color: getPercentageColor(estimatedPercentageRaw),
-                  ),
-                ),
-              ],
+            _buildEstimateRow(
+              icon: Icons.trending_up,
+              iconColor: Colors.purple[700]!,
+              label: '如果现在下班',
+              hours: estimatedHours,
+              percentage: estimatedPercentageRaw,
+              color: getPercentageColor(estimatedPercentageRaw),
             ),
           ],
         ),
       ),
+    );
+  }
+
+  /// 工时预估行：标签在上，数字在下。
+  ///
+  /// 原先是「图标 + 标签 + 工时 + 百分比」挤在一行，四个定宽子项，
+  /// 系统字体一放大就把百分比顶出屏幕（实测 53.12% 被切成 53.12）。
+  ///
+  /// 改成两行之后，数字独占一行、字号反而可以放大——既不会溢出，也更醒目。
+  /// 百分比做成彩色胶囊，一眼能看出离目标还差多少。
+  Widget _buildEstimateRow({
+    required IconData icon,
+    required Color iconColor,
+    required String label,
+    required double hours,
+    required double percentage,
+    required Color color,
+  }) {
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Row(
+          children: [
+            Icon(icon, size: 18, color: iconColor),
+            const SizedBox(width: 6),
+            Expanded(
+              child: Text(
+                label,
+                style: TextStyle(
+                  fontSize: 13,
+                  fontWeight: FontWeight.w500,
+                  color: Colors.grey[700],
+                ),
+                maxLines: 1,
+                overflow: TextOverflow.ellipsis,
+              ),
+            ),
+          ],
+        ),
+        const SizedBox(height: 6),
+        Padding(
+          padding: const EdgeInsets.only(left: 24),
+          // Wrap 而非 Row：字号再大也只会换行，不会把内容顶出去
+          child: Wrap(
+            crossAxisAlignment: WrapCrossAlignment.center,
+            spacing: 10,
+            runSpacing: 4,
+            children: [
+              Text(
+                '${WorkTimeCalculator.formatHours(hours)}h',
+                style: TextStyle(
+                  fontSize: 24,
+                  height: 1.1,
+                  fontWeight: FontWeight.bold,
+                  color: color,
+                ),
+              ),
+              Container(
+                padding: const EdgeInsets.symmetric(
+                  horizontal: 10,
+                  vertical: 3,
+                ),
+                decoration: BoxDecoration(
+                  color: color.withValues(alpha: 0.14),
+                  borderRadius: BorderRadius.circular(12),
+                ),
+                child: Text(
+                  '${WorkTimeCalculator.formatHours(percentage)}%',
+                  style: TextStyle(
+                    fontSize: 15,
+                    fontWeight: FontWeight.bold,
+                    color: color,
+                  ),
+                ),
+              ),
+            ],
+          ),
+        ),
+      ],
     );
   }
 
@@ -1431,10 +1475,13 @@ class DailyHoursScreenState extends State<DailyHoursScreen>
             : null,
         child: Padding(
           padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
-          child: Row(
+          // Wrap 而非 Row：后面还跟着徽章，字体放大时会把文字顶出去
+          child: Wrap(
+            crossAxisAlignment: WrapCrossAlignment.center,
+            spacing: 6,
+            runSpacing: 4,
             children: [
               const Icon(Icons.check_circle, color: Colors.green, size: 18),
-              const SizedBox(width: 8),
               Text(
                 '$target% 目标已达成',
                 style: const TextStyle(
@@ -1443,7 +1490,7 @@ class DailyHoursScreenState extends State<DailyHoursScreen>
                 ),
               ),
               if (isBaseTarget) ...[
-                const SizedBox(width: 6),
+                // Wrap 自带 spacing，这里不再需要手动间隔
                 Container(
                   padding: const EdgeInsets.symmetric(
                     horizontal: 6,
