@@ -14,6 +14,9 @@ import '../utils/date_helper.dart';
 import '../utils/target_progress_helper.dart';
 
 import '../widgets/home_button.dart';
+import '../services/boss_session_runner.dart';
+import '../utils/work_log_boss_hours.dart';
+import '../utils/work_log_request_capture.dart';
 import 'work_report_webview_screen.dart';
 import '../widgets/haptic_refresh_indicator.dart';
 import '../widgets/team_selection_dialog.dart';
@@ -384,11 +387,92 @@ class MonthlyCalendarScreenState extends State<MonthlyCalendarScreen> {
 
   /// 同步当月 BOSS 已填工时。
   ///
-  /// BOSS 工时只能在网页会话里取——凭据在页面的每个请求体内，
-  /// 不能落到 APP 存储（见 docs/踩坑记录.md 3.12）。因此必须借道日志系统页面，
-  /// 但对用户而言是一次点击完成：进去、同步、自动退回。
+  /// 在后台网页会话里跑，**不跳转页面**。BOSS 工时只能在网页会话内取——
+  /// 凭据在页面的每个请求体里，不能落到 APP 存储（见 docs/踩坑记录.md 3.12）——
+  /// 但那是实现约束，没理由让用户看着页面跳进跳出。
+  ///
+  /// 只有在完全取不到会话（没登录 / 登录态过期）时，才引导去网页登录。
   Future<void> _syncBossHours() async {
-    final synced = await Navigator.push<bool>(
+    final monthKey = DateFormat('yyyy-MM').format(_selectedMonth);
+
+    if (mounted) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text('正在后台同步 $monthKey 的 BOSS 工时…'),
+          duration: const Duration(seconds: 3),
+        ),
+      );
+    }
+
+    final result = await BossSessionRunner.run<Map<String, double>>((
+      controller,
+    ) async {
+      final raw = await controller.evaluateJavascript(
+        source: WorkLogBossHours.buildFetchMonthScript(
+          year: _selectedMonth.year,
+          month: _selectedMonth.month,
+          captureStoreName: WorkLogRequestCapture.storeName,
+        ),
+      );
+      return WorkLogBossHours.parseResult(raw?.toString());
+    }, timeout: const Duration(seconds: 25));
+
+    if (!mounted) return;
+
+    if (result.status == BossSessionStatus.noSession) {
+      await _promptBossLogin();
+      return;
+    }
+
+    final hours = result.value;
+    if (!result.isOk || hours == null) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('BOSS 工时同步失败，海康打卡工时已更新')),
+      );
+      return;
+    }
+
+    // 逐日查询，整月一条都没有属正常（比如新月份），不当作失败
+    await _storage.saveBossHours(monthKey, hours);
+    if (!mounted) return;
+
+    setState(() => _bossHours = hours);
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(
+        content: Text(
+          hours.isEmpty
+              ? '$monthKey 在 BOSS 中没有填报记录'
+              : '已同步 $monthKey：${hours.length} 天有填报记录',
+        ),
+        backgroundColor: AppColors.success,
+      ),
+    );
+  }
+
+  /// 后台会话拿不到登录态时，问用户要不要去登录。
+  ///
+  /// 不直接把网页推到脸上：用户点的是「更新工时」，不是「打开网页」。
+  Future<void> _promptBossLogin() async {
+    final go = await showDialog<bool>(
+      context: context,
+      builder: (dialogContext) => AlertDialog(
+        title: const Text('BOSS 未登录'),
+        content: const Text('海康打卡工时已更新。\n要同步 BOSS 已填工时，需要先登录一次日志系统。'),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(dialogContext, false),
+            child: const Text('以后再说'),
+          ),
+          FilledButton(
+            onPressed: () => Navigator.pop(dialogContext, true),
+            child: const Text('去登录'),
+          ),
+        ],
+      ),
+    );
+    if (go != true || !mounted) return;
+
+    await Navigator.push(
       context,
       MaterialPageRoute(
         builder: (_) => WorkReportWebViewScreen(
@@ -399,19 +483,11 @@ class MonthlyCalendarScreenState extends State<MonthlyCalendarScreen> {
     );
     if (!mounted) return;
 
-    // 无论成功与否都重读一次：用户可能中途自己返回，
-    // 但此前已经同步成功过。
     final bossHours = await _storage.loadBossHours(
       DateFormat('yyyy-MM').format(_selectedMonth),
     );
     if (!mounted) return;
     setState(() => _bossHours = bossHours);
-
-    if (synced != true && bossHours.isEmpty) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('BOSS 工时未同步，海康打卡工时已更新')),
-      );
-    }
   }
 
   /// 公开方法: 静默触发智能更新（用于应用启动时）

@@ -12,7 +12,10 @@ import '../utils/date_helper.dart';
 import '../utils/haptic_utils.dart';
 import '../utils/work_log_csv_parser.dart';
 import '../utils/work_time_calculator.dart';
+import '../services/boss_session_runner.dart';
+import '../services/work_log_submit_service.dart';
 import '../widgets/boss_constants_dialog.dart';
+import '../widgets/work_log_confirm_dialog.dart';
 import '../widgets/week_strip.dart';
 import 'work_report_webview_screen.dart';
 
@@ -151,11 +154,8 @@ class WorkLogScreenState extends State<WorkLogScreen> {
     if (saved) _showMessage('配置已保存，现在可以一键提交了');
   }
 
-  /// 打开日志系统。
-  ///
-  /// [autoSubmit] 为 true 时进入后自动等待登录完成并发起提交，
-  /// 用户无需手动导航到填报页——提交走报文，与页面停在哪无关。
-  Future<void> _openReportSystem({required bool autoSubmit}) async {
+  /// 打开日志系统网页（登录、查看、排查用）。
+  Future<void> _openReportSystem({bool autoSubmit = false}) async {
     await Navigator.push(
       context,
       MaterialPageRoute(
@@ -167,6 +167,133 @@ class WorkLogScreenState extends State<WorkLogScreen> {
     );
     if (!mounted) return;
     await _reload();
+  }
+
+  /// 提交互斥锁。BOSS 不做幂等校验，重复提交会静默产生重复日志。
+  bool _submitting = false;
+
+  /// 就地提交当天日志，**不跳转网页**。
+  ///
+  /// 提交必须在 BOSS 网页会话里发（凭据在页面请求体内，不能落到 APP，
+  /// 见 docs/踩坑记录.md 3.12），但那是实现约束——用户点的是「提交日志」，
+  /// 没道理让他看着网页跳进跳出。这里走后台无头会话，只在真的没登录时
+  /// 才引导去网页登录一次。
+  Future<void> _submitLog() async {
+    if (_submitting) {
+      _showMessage('正在提交中，请稍候');
+      return;
+    }
+
+    final draft = _draft;
+    final entry = draft?.entry;
+    if (entry == null) {
+      _showMessage('CSV 中没有这一天的记录');
+      return;
+    }
+
+    _submitting = true;
+    setState(() {});
+    try {
+      await _runHeadlessSubmit(entry, draft!);
+    } finally {
+      _submitting = false;
+      if (mounted) setState(() {});
+    }
+  }
+
+  Future<void> _runHeadlessSubmit(WorkLogEntry entry, WorkLogDraft draft) async {
+    _showMessage('正在后台连接 BOSS…');
+
+    final prepared = await BossSessionRunner.run<_SubmitPreparation>((
+      controller,
+    ) async {
+      final service = WorkLogSubmitService(controller);
+      final constants = await service.resolveConstants(entry.projectName);
+      if (constants == null) {
+        final (conclusion, report) = await service.collectDiagnostics(
+          entry.projectName,
+        );
+        return _SubmitPreparation.failed(conclusion, report);
+      }
+      return _SubmitPreparation(
+        constants: constants,
+        existingHours: await service.queryExistingHours(draft.date),
+      );
+    });
+
+    if (!mounted) return;
+
+    if (prepared.status == BossSessionStatus.noSession) {
+      await _promptBossLogin();
+      return;
+    }
+    final prep = prepared.value;
+    if (!prepared.isOk || prep == null) {
+      _showMessage('连接 BOSS 失败，请稍后重试');
+      return;
+    }
+    if (prep.constants == null) {
+      await Clipboard.setData(ClipboardData(text: prep.diagnostics ?? ''));
+      if (!mounted) return;
+      _showMessage(
+        '${prep.conclusion ?? '未取到项目信息'}（诊断已复制到剪贴板）',
+      );
+      return;
+    }
+
+    // 面向公司真实系统，绝不静默提交；工时也在这里允许调整
+    final actWork = await WorkLogConfirmDialog.show(
+      context: context,
+      date: draft.date,
+      entry: entry,
+      hours: draft.hours,
+      existingHours: prep.existingHours,
+      constants: prep.constants!,
+    );
+    if (actWork == null || !mounted) return;
+
+    _showMessage('正在提交…');
+    final result = await BossSessionRunner.run<WorkLogSubmitResult>((
+      controller,
+    ) async {
+      return WorkLogSubmitService(controller).submit(
+        entry: entry,
+        actWork: actWork,
+        constants: prep.constants!,
+      );
+    });
+
+    if (!mounted) return;
+    final outcome = result.value;
+    if (result.isOk && outcome != null && outcome.ok) {
+      _showMessage('提交成功');
+      await _reload();
+      return;
+    }
+    _showMessage('提交失败：${outcome?.message ?? '未能连接 BOSS'}');
+  }
+
+  /// 后台会话拿不到登录态时，问用户要不要去登录。
+  Future<void> _promptBossLogin() async {
+    final go = await showDialog<bool>(
+      context: context,
+      builder: (dialogContext) => AlertDialog(
+        title: const Text('BOSS 未登录'),
+        content: const Text('提交日志需要先登录一次日志系统，之后就能在后台直接提交。'),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(dialogContext, false),
+            child: const Text('以后再说'),
+          ),
+          FilledButton(
+            onPressed: () => Navigator.pop(dialogContext, true),
+            child: const Text('去登录'),
+          ),
+        ],
+      ),
+    );
+    if (go != true || !mounted) return;
+    await _openReportSystem();
   }
 
   void _showMessage(String message) {
@@ -266,7 +393,7 @@ class WorkLogScreenState extends State<WorkLogScreen> {
               children: [
                 // 次要操作：只想看看网页、不提交时用
                 OutlinedButton(
-                  onPressed: () => _openReportSystem(autoSubmit: false),
+                  onPressed: _openReportSystem,
                   style: OutlinedButton.styleFrom(
                     minimumSize: const Size(52, 52),
                     padding: EdgeInsets.zero,
@@ -276,9 +403,7 @@ class WorkLogScreenState extends State<WorkLogScreen> {
                 const SizedBox(width: 10),
                 Expanded(
                   child: FilledButton.icon(
-                    onPressed: canSubmit
-                        ? () => _openReportSystem(autoSubmit: true)
-                        : null,
+                    onPressed: canSubmit && !_submitting ? _submitLog : null,
                     style: FilledButton.styleFrom(
                       minimumSize: const Size(0, 52),
                       textStyle: const TextStyle(
@@ -286,9 +411,17 @@ class WorkLogScreenState extends State<WorkLogScreen> {
                         fontWeight: FontWeight.bold,
                       ),
                     ),
-                    icon: const Icon(Icons.rocket_launch),
+                    icon: _submitting
+                        ? const SizedBox(
+                            width: 18,
+                            height: 18,
+                            child: CircularProgressIndicator(strokeWidth: 2),
+                          )
+                        : const Icon(Icons.rocket_launch),
                     label: Text(
-                      '提交 ${date.month}月${date.day}日 日志',
+                      _submitting
+                          ? '提交中…'
+                          : '提交 ${date.month}月${date.day}日 日志',
                       maxLines: 1,
                       overflow: TextOverflow.ellipsis,
                     ),
@@ -369,7 +502,7 @@ class WorkLogScreenState extends State<WorkLogScreen> {
                 ),
                 const SizedBox(width: 4),
                 FilledButton.icon(
-                  onPressed: () => _openReportSystem(autoSubmit: false),
+                  onPressed: _openReportSystem,
                   icon: const Icon(Icons.open_in_browser, size: 16),
                   label: const Text('打开日志系统', style: TextStyle(fontSize: 12)),
                   style: FilledButton.styleFrom(
@@ -649,4 +782,20 @@ class WorkLogScreenState extends State<WorkLogScreen> {
       ),
     );
   }
+}
+
+/// 提交前的准备结果：要么拿到了配置和已填工时，要么带回诊断信息。
+class _SubmitPreparation {
+  const _SubmitPreparation({this.constants, this.existingHours})
+    : conclusion = null,
+      diagnostics = null;
+
+  const _SubmitPreparation.failed(this.conclusion, this.diagnostics)
+    : constants = null,
+      existingHours = null;
+
+  final Map<String, String>? constants;
+  final double? existingHours;
+  final String? conclusion;
+  final String? diagnostics;
 }

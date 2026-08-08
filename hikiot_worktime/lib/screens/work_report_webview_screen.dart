@@ -7,17 +7,15 @@ import 'package:flutter_inappwebview/flutter_inappwebview.dart';
 
 import '../core/theme/theme.dart';
 import '../services/storage_service.dart';
+import '../services/work_log_submit_service.dart';
 import '../services/work_log_repository.dart';
 import '../utils/date_helper.dart';
 import '../utils/work_log_boss_hours.dart';
-import '../utils/work_log_constants_scanner.dart';
-import '../utils/work_log_csv_parser.dart';
-import '../utils/work_log_diagnostics_script.dart';
 import '../utils/work_log_fill_script.dart';
-import '../utils/work_log_history_lookup.dart';
 import '../utils/work_log_request_capture.dart';
 import '../utils/work_log_submit_script.dart';
 import '../utils/work_time_calculator.dart';
+import '../widgets/work_log_confirm_dialog.dart';
 
 /// 日志系统的可选入口。
 ///
@@ -457,24 +455,26 @@ class _WorkReportWebViewScreenState extends State<WorkReportWebViewScreen> {
     // 没有打卡工时不再直接拦下：确认框里可以手填，
     // 出差、补录、打卡异常这些场景本来就该由用户自己定工时。
 
+    final service = WorkLogSubmitService(controller);
     final constants = await _resolveBossConstants(
-      controller,
+      service,
       entry.projectName,
     );
     if (constants == null) return;
 
     // BOSS 允许同一天填多条，重复提交不报错而是静默产生重复记录，
     // 因此提交前先查当天是否已有填报。
-    final existingHours = await _queryExistingHours(controller, draft.date);
+    final existingHours = await service.queryExistingHours(draft.date);
 
     if (!mounted) return;
     // 用户可在确认框里调整工时，因此提交的是它返回的值而非打卡原值
-    final actWork = await _confirmSubmit(
-      draft.date,
-      entry,
-      draft.hours,
-      existingHours,
-      constants,
+    final actWork = await WorkLogConfirmDialog.show(
+      context: context,
+      date: draft.date,
+      entry: entry,
+      hours: draft.hours,
+      existingHours: existingHours,
+      constants: constants,
     );
     if (actWork == null) return;
 
@@ -515,24 +515,6 @@ class _WorkReportWebViewScreenState extends State<WorkReportWebViewScreen> {
     }
   }
 
-  /// 查询指定日期在 BOSS 已填报的工时，取不到返回 null（未知，不等于 0）。
-  Future<double?> _queryExistingHours(
-    InAppWebViewController controller,
-    String dateStr,
-  ) async {
-    try {
-      final raw = await controller.evaluateJavascript(
-        source: WorkLogBossHours.buildFetchSingleDayScript(
-          dateStr: dateStr,
-          captureStoreName: WorkLogRequestCapture.storeName,
-        ),
-      );
-      return WorkLogBossHours.parseSingleDay(raw?.toString());
-    } catch (e) {
-      return null;
-    }
-  }
-
   /// 后台学习是否已启动，避免每次 onLoadStop 都开一轮轮询。
   bool _learningStarted = false;
 
@@ -552,7 +534,7 @@ class _WorkReportWebViewScreenState extends State<WorkReportWebViewScreen> {
 
     final saved = await StorageService().loadBossConstants();
     // 项目对得上才算已配置：项目换了就得重新学，否则会用旧项目的 ID 提交
-    if (_constantsUsableFor(saved, projectName)) return;
+    if (WorkLogSubmitService.constantsUsableFor(saved, projectName)) return;
 
     // 轮询而非一次性扫描：用户何时登录、何时点开列表都不确定。
     // 2.5 秒一次、最多约 2 分钟，足够覆盖登录加浏览，也不会一直空转。
@@ -566,7 +548,9 @@ class _WorkReportWebViewScreenState extends State<WorkReportWebViewScreen> {
       final controller = _controller;
       if (controller == null) continue;
 
-      final learned = await _learnConstants(controller, projectName);
+      final learned = await WorkLogSubmitService(
+        controller,
+      ).learnConstants(projectName);
       if (learned != null) {
         if (!mounted) return;
         _notify('已自动获取 BOSS 提交配置，之后可直接一键提交');
@@ -578,116 +562,31 @@ class _WorkReportWebViewScreenState extends State<WorkReportWebViewScreen> {
     // 明确告诉他该做什么，比默默失败强。
     if (!mounted) return;
     final still = await StorageService().loadBossConstants();
-    if (!mounted || _constantsUsableFor(still, projectName)) return;
+    if (!mounted ||
+        WorkLogSubmitService.constantsUsableFor(still, projectName)) {
+      return;
+    }
     _notify('尚未获取到配置。到「我的工作日志」点开任意一个已填过的日期即可');
   }
 
-  /// 扫一次抓包，尝试学到提交配置；成功则落盘并返回。
+  /// 取提交所需的业务标识；学不到时给出诊断并复制到剪贴板。
   ///
-  /// 三种来源按可靠度依次尝试：
-  /// 1. 历史日志网格（`GetHisWorkLogList`）——按行解 JSON，三个值同源且能
-  ///    挑出与当天项目一致的那一行，还能拿到审核人姓名供用户核对。最优。
-  /// 2. 保存报文（用户刚在网页上填过一条）——语义精确，但要求用户先填过。
-  /// 3. 正则扫描其余响应——兜底。
-  Future<Map<String, String>?> _learnConstants(
-    InAppWebViewController controller,
-    String projectName,
-  ) async {
-    final fromHistory = _parseConstants(
-      await _runScriptRaw(
-        controller,
-        WorkLogHistoryLookup.build(
-          captureStoreName: WorkLogRequestCapture.storeName,
-          preferredProjectName: projectName,
-        ),
-      ),
-    );
-    if (fromHistory != null) {
-      await StorageService().saveBossConstants(fromHistory);
-      return fromHistory;
-    }
-
-    final fromSave = _parseConstants(
-      await _runScriptRaw(
-        controller,
-        WorkLogSubmitScript.buildExtractConstantsScript(
-          captureStoreName: WorkLogRequestCapture.storeName,
-        ),
-      ),
-    );
-    if (fromSave != null) {
-      await StorageService().saveBossConstants(fromSave);
-      return fromSave;
-    }
-
-    // 不自己构造列表查询：BOSS 的列表是有状态视图，必须先由 GetTitle 在
-    // 服务端建立上下文，单独调 GetDataGridList 只会返回空行（实测 200 且
-    // Rows 为空）。改为收割页面自己查出来的数据，稳健得多。
-    final scanned = _parseConstants(
-      await _runScriptRaw(
-        controller,
-        WorkLogConstantsScanner.build(
-          captureStoreName: WorkLogRequestCapture.storeName,
-          preferredProjectName: projectName,
-        ),
-      ),
-    );
-    if (scanned != null) {
-      await StorageService().saveBossConstants(scanned);
-      return scanned;
-    }
-
-    return null;
-  }
-
-  /// 当日 CSV 条目里的项目名，用于在多项目时挑对那一个；取不到返回空串。
-  ///
-  /// 只读 CSV 条目而不用 loadDraft：后者会顺带拉一次考勤工时，
-  /// 而这里只要项目名，没必要为此发一次网络请求。
-  Future<String> _preferredProjectName() async {
-    final date = widget.fillDate ?? DateHelper.getWorkDate();
-    final entry = await WorkLogRepository().loadEntry(
-      DateHelper.formatDate(date),
-    );
-    return entry?.projectName ?? '';
-  }
-
-  /// 已保存的配置是否可用于 [projectName] 这个项目。
-  ///
-  /// 用户的项目和审核人会换，一次学会就永久沿用是错的：换项目之后继续用
-  /// 旧的 PROJECTID，会把新项目的日志记到旧项目名下，而且不会报错。
-  ///
-  /// 没记项目名的（手工填写的旧数据）无从核对，按可用处理，
-  /// 否则会把用户自己填的值判死。
-  static bool _constantsUsableFor(
-    Map<String, String> saved,
-    String projectName,
-  ) {
-    if (saved['projectId']?.isNotEmpty != true) return false;
-    final savedName = saved['projectName'] ?? '';
-    if (savedName.isEmpty || projectName.isEmpty) return true;
-    return savedName == projectName;
-  }
-
-  /// 取提交所需的固定业务标识。
-  ///
-  /// 顺序：本地已保存且项目对得上 → 立刻再扫一次抓包。
-  /// 都取不到才提示用户，并把诊断复制到剪贴板。
-  ///
-  /// 早期版本还会模拟点击菜单去「催」页面加载列表，已删除：那条路依赖
-  /// 不透明的 SPA 菜单结构，是实测最不可靠的一条。
+  /// 业务编排在 [WorkLogSubmitService]，这里只负责提示与剪贴板这类界面动作，
+  /// 保证后台提交与网页内提交走的是同一套逻辑。
   Future<Map<String, String>?> _resolveBossConstants(
-    InAppWebViewController controller,
+    WorkLogSubmitService service,
     String projectName,
   ) async {
     final saved = await StorageService().loadBossConstants();
-    if (_constantsUsableFor(saved, projectName)) return saved;
+    if (WorkLogSubmitService.constantsUsableFor(saved, projectName)) {
+      return saved;
+    }
 
     final changedProject =
         saved['projectId']?.isNotEmpty == true &&
         (saved['projectName'] ?? '').isNotEmpty;
 
-    final learned = await _learnConstants(controller, projectName);
+    final learned = await service.learnConstants(projectName);
     if (learned != null) return learned;
 
     // 项目变了却学不到新配置时，宁可停下也不能拿旧项目的 ID 提交
@@ -702,283 +601,27 @@ class _WorkReportWebViewScreenState extends State<WorkReportWebViewScreen> {
 
     // Release 构建不开 Dart VM 服务，flutter logs 抓不到 debugPrint，
     // 因此失败时把诊断信息复制到剪贴板，便于直接反馈。
-    await _copyDiagnostics(controller, projectName);
+    final (conclusion, report) = await service.collectDiagnostics(projectName);
+    await Clipboard.setData(ClipboardData(text: report));
+    if (!mounted) return null;
+    _notify(
+      conclusion == null || conclusion.isEmpty
+          ? '未取到项目信息。请到「我的工作日志」点开任意一个已填过的日期（诊断已复制到剪贴板）'
+          : '$conclusion（诊断已复制到剪贴板）',
+    );
     return null;
   }
 
-  /// 学不到配置时收集诊断信息并复制到剪贴板。
-  Future<void> _copyDiagnostics(
-    InAppWebViewController controller,
-    String projectName,
-  ) async {
-    final probe = await _runScriptRaw(
-      controller,
-      WorkLogDiagnosticsScript.build(
-        captureStoreName: WorkLogRequestCapture.storeName,
-        preferredProjectName: projectName,
-      ),
-    );
-
-    final decoded = _tryDecode(probe);
-    final report = const JsonEncoder.withIndent('  ').convert({
-      'stage': 'learnConstantsFailed',
-      'preferredProjectName': projectName,
-      'diagnostics': decoded,
-    });
-
-    await Clipboard.setData(ClipboardData(text: report));
-    if (!mounted) return;
-
-    // 优先显示脚本给出的人话结论，它比通用文案更能指向下一步该做什么
-    final conclusion = (decoded is Map ? decoded['conclusion'] : null)
-        ?.toString();
-    _notify(
-      conclusion == null || conclusion.isEmpty
-          ? '未取到项目信息。请在网页上打开一次「我的工作日志」列表（诊断已复制到剪贴板）'
-          : '$conclusion（诊断已复制到剪贴板）',
-    );
-  }
-
-  static Object? _tryDecode(String? raw) {
-    if (raw == null || raw.isEmpty) return null;
-    try {
-      return jsonDecode(raw);
-    } catch (_) {
-      return raw;
-    }
-  }
-
-  Future<String?> _runScriptRaw(
-    InAppWebViewController controller,
-    String script,
-  ) async {
-    try {
-      final raw = await controller.evaluateJavascript(source: script);
-      debugPrint('[日志提交] 脚本返回=${raw?.toString()}');
-      return raw?.toString();
-    } catch (e) {
-      return '{"ok":false,"reason":"evalError","message":"$e"}';
-    }
-  }
-
-  /// 解析脚本返回的常量。
+  /// 当日 CSV 条目里的项目名，用于在多项目时挑对那一个；取不到返回空串。
   ///
-  /// **自动获取时审核人必须一并拿到**：BOSS 首页的「我的项目」网格里有
-  /// `PROJECT_xxx`，但完全没有工作日志的审核人；而抓包别处出现的 `USERINFO_`
-  /// 往往是用户自己的 ID。只要项目 ID 就落盘的话，会拿一个错的（或空的）
-  /// 审核人去提交，日志就发给了错误的审批人——这是公司真实系统上的后果，
-  /// 宁可让用户手工填，也不能猜。
-  ///
-  /// 手工填写不走这里，用户自己决定要不要留空。
-  Map<String, String>? _parseConstants(String? raw) {
-    try {
-      final decoded = jsonDecode(raw ?? '{}');
-      if (decoded is! Map || decoded['ok'] != true) return null;
-
-      final projectId = '${decoded['projectId'] ?? ''}';
-      final auditor = '${decoded['auditor'] ?? ''}';
-      if (projectId.isEmpty || auditor.isEmpty) return null;
-
-      return {
-        'projectId': projectId,
-        'projectCode': '${decoded['projectCode'] ?? ''}',
-        // BOSS 的保存报文里审核人带前导分号，而历史网格里不带，
-        // 统一补齐为提交时的形态
-        'auditor': auditor.startsWith(';') ? auditor : ';$auditor',
-        // 记下这套值属于哪个项目，供后续核对——项目会换，
-        // 换了以后旧值必须失效，不能拿旧项目的 ID 提交新项目的日志
-        'projectName': '${decoded['projectName'] ?? ''}',
-        // 审核人姓名只用于让用户在提交前肉眼核对，不参与报文
-        'auditorName': '${decoded['auditorName'] ?? ''}',
-      };
-    } catch (e) {
-      return null;
-    }
-  }
-
-  /// 提交前让用户核对内容，并允许调整工时。
-  ///
-  /// 面向公司真实系统，绝不静默提交。
-  /// 返回最终要提交的工时字符串；取消或输入非法时返回 null。
-  ///
-  /// 工时默认取打卡统计值，但必须可改：打卡异常、出差、补录等场景下
-  /// 打卡值并不等于该报的工时，而这是唯一能在提交前修正它的地方。
-  Future<String?> _confirmSubmit(
-    String date,
-    WorkLogEntry entry,
-    WorkLogHours hours,
-    double? existingHours,
-    Map<String, String> constants,
-  ) async {
-    final alreadyFiled = existingHours != null && existingHours > 0;
-
-    // 没有打卡数据时留空，由用户自己填，而不是拦在门外
-    final punchText = hours.hasData
-        ? WorkTimeCalculator.formatHours(hours.hours!)
-        : '';
-    final hoursController = TextEditingController(text: punchText);
-
-    final result = await showDialog<String>(
-      context: context,
-      builder: (dialogContext) => StatefulBuilder(
-        builder: (context, setDialogState) {
-          final parsed = WorkTimeCalculator.parseHoursInput(
-            hoursController.text,
-          );
-          final edited = parsed != null && punchText.isNotEmpty &&
-              WorkTimeCalculator.formatHours(parsed) != punchText;
-
-          return AlertDialog(
-            title: Text('提交 $date 的日志？'),
-            content: SingleChildScrollView(
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                mainAxisSize: MainAxisSize.min,
-                children: [
-                  // BOSS 不做去重，这里必须显式警示，否则会静默产生重复日志
-                  if (alreadyFiled)
-                    Container(
-                      margin: const EdgeInsets.only(bottom: 10),
-                      padding: const EdgeInsets.all(10),
-                      decoration: BoxDecoration(
-                        color: AppColors.warningLight,
-                        borderRadius: BorderRadius.circular(8),
-                        border: Border.all(color: AppColors.warning),
-                      ),
-                      child: Text(
-                        '⚠️ 这一天在 BOSS 已填报 '
-                        '${WorkTimeCalculator.formatHours(existingHours)} 小时。\n'
-                        '继续提交会新增一条记录，不会覆盖原有记录。',
-                        style: TextStyle(
-                          fontSize: 12,
-                          color: AppColors.warningDark,
-                        ),
-                      ),
-                    ),
-                  if (existingHours == null)
-                    Padding(
-                      padding: const EdgeInsets.only(bottom: 10),
-                      child: Text(
-                        '未能确认当天是否已填报，请提交后自行核对。',
-                        style: TextStyle(fontSize: 11, color: Colors.grey[600]),
-                      ),
-                    ),
-                  // 项目与审核人是这里最有后果的两项：填错项目会把工时记到
-                  // 别的项目名下，填错审核人会把日志提交给错误的审批人。
-                  // 两者都不是用户输入的，而是 APP 自动查来的，因此必须让他能核对。
-                  _confirmRow('项目', entry.projectName),
-                  _confirmRow(
-                    '审核人',
-                    constants['auditorName']?.isNotEmpty == true
-                        ? constants['auditorName']!
-                        : '（未知，仅有 ID）',
-                  ),
-                  _confirmRow('标题', entry.title),
-                  _confirmRow('工作类型', entry.workType),
-                  _confirmRow('项目阶段', entry.stage),
-                  _confirmRow('阶段活动', entry.activity),
-                  _buildHoursField(
-                    controller: hoursController,
-                    punchText: punchText,
-                    parsed: parsed,
-                    edited: edited,
-                    onChanged: () => setDialogState(() {}),
-                  ),
-                  const Divider(),
-                  _confirmRow('工作内容', entry.content),
-                ],
-              ),
-            ),
-            actions: [
-              TextButton(
-                onPressed: () => Navigator.pop(dialogContext, null),
-                child: const Text('取消'),
-              ),
-              FilledButton(
-                // 工时非法时不给提交，避免把脏值发到公司系统
-                onPressed: parsed == null
-                    ? null
-                    : () => Navigator.pop(
-                        dialogContext,
-                        WorkTimeCalculator.formatHours(parsed),
-                      ),
-                // 已填报时改用「仍要提交」，让重复提交成为一个需要刻意确认的动作
-                child: Text(alreadyFiled ? '仍要提交' : '确认提交'),
-              ),
-            ],
-          );
-        },
-      ),
+  /// 只读 CSV 条目而不用 loadDraft：后者会顺带拉一次考勤工时，
+  /// 而这里只要项目名，没必要为此发一次网络请求。
+  Future<String> _preferredProjectName() async {
+    final date = widget.fillDate ?? DateHelper.getWorkDate();
+    final entry = await WorkLogRepository().loadEntry(
+      DateHelper.formatDate(date),
     );
-
-    hoursController.dispose();
-    return result;
-  }
-
-  /// 可编辑的工时输入行。
-  ///
-  /// 打卡值作为默认值和参照同时显示：改过之后仍能看到原始打卡工时是多少，
-  /// 否则用户改完就无从判断自己偏离了多少。
-  Widget _buildHoursField({
-    required TextEditingController controller,
-    required String punchText,
-    required double? parsed,
-    required bool edited,
-    required VoidCallback onChanged,
-  }) {
-    final String helper;
-    if (punchText.isEmpty) {
-      helper = '当天没有打卡工时，请手动填写';
-    } else if (edited) {
-      helper = '打卡工时为 $punchText，已手动调整';
-    } else {
-      helper = '来自打卡统计，可修改';
-    }
-
-    return Padding(
-      padding: const EdgeInsets.only(bottom: 6, top: 2),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          const Text(
-            '工时',
-            style: TextStyle(fontSize: 11, color: Colors.grey),
-          ),
-          TextField(
-            controller: controller,
-            autofocus: false,
-            keyboardType: const TextInputType.numberWithOptions(decimal: true),
-            style: const TextStyle(fontSize: 13),
-            decoration: InputDecoration(
-              isDense: true,
-              suffixText: '小时',
-              helperText: parsed == null ? null : helper,
-              helperStyle: TextStyle(
-                fontSize: 10,
-                color: edited ? AppColors.warningDark : Colors.grey[600],
-              ),
-              // 非法时说清楚合法范围，而不是只说「错了」
-              errorText: parsed == null ? '请填 0 到 24 之间的数字' : null,
-              errorStyle: const TextStyle(fontSize: 10),
-            ),
-            onChanged: (_) => onChanged(),
-          ),
-        ],
-      ),
-    );
-  }
-
-  Widget _confirmRow(String label, String value) {
-    return Padding(
-      padding: const EdgeInsets.only(bottom: 6),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          Text(label, style: const TextStyle(fontSize: 11, color: Colors.grey)),
-          Text(value.isEmpty ? '（空）' : value, style: const TextStyle(fontSize: 13)),
-        ],
-      ),
-    );
+    return entry?.projectName ?? '';
   }
 
   /// 自动同步是否已触发，避免多次 onLoadStop 重复开轮询。
