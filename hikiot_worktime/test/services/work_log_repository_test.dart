@@ -250,6 +250,33 @@ void main() {
       expect(byDate['2026-08-06']!.isSubmitted, isFalse);
     });
 
+    test('从没同步过 BOSS 的月份标记为未同步', () async {
+      // 「没同步过」和「同步过但当天没填」必须分开，
+      // 否则界面会把不知道的事说成没做。
+      final repository = buildRepository();
+
+      final week = await repository.loadWeek(saturday);
+
+      expect(week.every((d) => d.bossSynced), isFalse);
+      expect(week.every((d) => d.bossHours == null), isTrue);
+    });
+
+    test('同步过的月份即使当天没填，也算已同步', () async {
+      final storage = StorageService();
+      await storage.saveBossHours('2026-08', {'2026-08-04': 8.0});
+
+      final week = await WorkLogRepository(
+        storage: storage,
+        loadWorkHours: (_) async => const WorkLogHours(),
+      ).loadWeek(saturday);
+      final byDate = {for (final d in week) d.dateStr: d};
+
+      expect(byDate['2026-08-04']!.bossSynced, isTrue);
+      // 8-06 没填，但所属月份确实同步过，因此「未提交」是可信结论
+      expect(byDate['2026-08-06']!.bossSynced, isTrue);
+      expect(byDate['2026-08-06']!.isSubmitted, isFalse);
+    });
+
     test('跨月的那一周会读取两个月的缓存', () async {
       // 2026-08-31 是星期一，该周跨到 9 月
       final storage = StorageService();

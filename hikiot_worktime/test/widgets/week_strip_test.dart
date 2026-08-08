@@ -125,6 +125,7 @@ void main() {
       required Set<int> submitted,
       required Set<int> withEntry,
       required Set<int> withHours,
+      bool bossSynced = true,
     }) {
       return (anyDayInWeek) async {
         final monday = DateTime(
@@ -141,6 +142,7 @@ void main() {
             hasEntry: withEntry.contains(i),
             hours: withHours.contains(i) ? 8.0 : null,
             bossHours: submitted.contains(i) ? 8.0 : null,
+            bossSynced: bossSynced,
           );
         });
       };
@@ -223,6 +225,73 @@ void main() {
 
       expect(circles.length, 1);
       expect((circles.first.decoration as BoxDecoration).border, isNull);
+    });
+
+    testWidgets('本月没同步过 BOSS 时不标红，并说明状态未知', (tester) async {
+      // 没同步过时 bossHours 恒为 null，那只代表「不知道」。
+      // 据此标红会让整个未同步的月份都变成欠账，是纯粹的误报。
+      final past = DateTime(2020, 1, 8);
+      await pumpStrip(
+        tester,
+        past,
+        weekWith(
+          submitted: const {},
+          withEntry: const {0, 1},
+          withHours: const {0, 1, 2, 3, 4},
+          bossSynced: false,
+        ),
+      );
+
+      // 一个实心点都不该有——包括红色的
+      final circles = tester
+          .widgetList<Container>(
+            find.descendant(
+              of: find.byType(PageView),
+              matching: find.byType(Container),
+            ),
+          )
+          .where(
+            (c) => (c.decoration as BoxDecoration?)?.shape == BoxShape.circle,
+          );
+      expect(
+        circles.every((c) => (c.decoration as BoxDecoration).border != null),
+        isTrue,
+        reason: '未同步时不得出现任何实心点',
+      );
+
+      // 而且要明说状态未知，不能摆一套看着很准的图例
+      expect(find.textContaining('提交状态未知'), findsOneWidget);
+      expect(find.text('待补交'), findsNothing);
+    });
+
+    testWidgets('已同步且已过期未提交才标红', (tester) async {
+      final past = DateTime(2020, 1, 8);
+      await pumpStrip(
+        tester,
+        past,
+        weekWith(
+          submitted: const {},
+          withEntry: const {},
+          withHours: const {0},
+          bossSynced: true,
+        ),
+      );
+
+      final circles = tester
+          .widgetList<Container>(
+            find.descendant(
+              of: find.byType(PageView),
+              matching: find.byType(Container),
+            ),
+          )
+          .where(
+            (c) => (c.decoration as BoxDecoration?)?.shape == BoxShape.circle,
+          );
+
+      expect(circles.length, 1);
+      final decoration = circles.first.decoration as BoxDecoration;
+      expect(decoration.border, isNull, reason: '待补交是实心点');
+      expect(decoration.color, const Color(0xFFE53935));
     });
 
     testWidgets('图例把三种点都画出来', (tester) async {

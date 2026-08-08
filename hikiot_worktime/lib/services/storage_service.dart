@@ -471,6 +471,16 @@ class StorageService {
     await prefs.setString(StorageKeys.bossHoursKey(monthKey), jsonEncode(hours));
   }
 
+  /// 该月是否同步过 BOSS 工时。
+  ///
+  /// 空表既可能是「同步过但一条都没填」，也可能是「从没同步过」。
+  /// 两者在界面上必须分开：把「不知道」显示成「没填报」，
+  /// 会让没同步过的月份整片误报成欠账。
+  Future<bool> hasBossHoursSynced(String monthKey) async {
+    final prefs = await SharedPreferences.getInstance();
+    return prefs.containsKey(StorageKeys.bossHoursKey(monthKey));
+  }
+
   Future<Map<String, double>> loadBossHours(String monthKey) async {
     final prefs = await SharedPreferences.getInstance();
     final jsonStr = prefs.getString(StorageKeys.bossHoursKey(monthKey));

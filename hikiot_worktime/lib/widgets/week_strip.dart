@@ -303,7 +303,10 @@ class WeekStripState extends State<WeekStrip> {
         filled: true,
       );
     }
-    if (isPast && summary.hasHours) {
+    // 只有确实同步过 BOSS 才敢说「没提交」。
+    // 没同步过时 bossHours 恒为 null，那只代表不知道——
+    // 据此标红会让整个没同步过的月份都变成欠账，是纯粹的误报。
+    if (summary.bossSynced && isPast && summary.hasHours) {
       return _dot(
         fill: isSelected ? Colors.white : _overdueColor,
         filled: true,
@@ -344,7 +347,32 @@ class WeekStripState extends State<WeekStrip> {
 
   /// 状态点的图例。自造的符号不解释没人看得懂，
   /// 与月历页一样把符号本身画出来，而不是只用文字描述。
+  ///
+  /// 当前这一周所在月份没同步过 BOSS 时，图例换成一句说明：
+  /// 此时提交状态根本无从判断，摆着一套颜色说明只会让人以为是准的。
   Widget _buildLegend() {
+    final days = _cache[DateHelper.formatDate(_mondayOf(widget.selectedDate))];
+    final synced = days == null || days.any((d) => d.bossSynced);
+
+    if (!synced) {
+      return Padding(
+        padding: const EdgeInsets.only(top: 8, left: 14, right: 14),
+        child: Row(
+          children: [
+            Icon(Icons.help_outline, size: 12, color: Colors.grey[500]),
+            const SizedBox(width: 4),
+            Expanded(
+              child: Text(
+                '本月未同步 BOSS，提交状态未知（可在月度页「全量更新工时」同步）',
+                style: TextStyle(fontSize: 10, color: Colors.grey[600]),
+                maxLines: 2,
+              ),
+            ),
+          ],
+        ),
+      );
+    }
+
     return Padding(
       padding: const EdgeInsets.only(top: 8, left: 14, right: 14),
       child: Wrap(

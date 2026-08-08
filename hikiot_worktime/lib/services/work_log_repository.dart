@@ -48,6 +48,7 @@ class WorkLogDaySummary {
     required this.hasEntry,
     this.hours,
     this.bossHours,
+    this.bossSynced = false,
   });
 
   final DateTime date;
@@ -66,8 +67,14 @@ class WorkLogDaySummary {
   /// 周条上要能区分「这天没上班」和「还没同步过」。
   final double? hours;
 
-  /// BOSS 里已填报的工时，null 表示该月还没同步过 BOSS 工时。
+  /// BOSS 里已填报的工时。
   final double? bossHours;
+
+  /// 该日所属月份是否同步过 BOSS 工时。
+  ///
+  /// 没同步过时 [bossHours] 恒为 null，但那只代表**不知道**，
+  /// 不能据此判定未提交——否则从没同步过的月份会整片标成欠账。
+  final bool bossSynced;
 
   bool get hasHours => hours != null && hours! > 0;
 
@@ -164,10 +171,12 @@ class WorkLogRepository {
 
     // BOSS 已填报工时按月存放，与月历页共用同一份缓存
     final bossCache = <String, Map<String, double>>{};
+    final bossSyncedCache = <String, bool>{};
     Future<Map<String, double>> bossData(DateTime date) async {
       final monthKey = DateHelper.formatMonth(date);
       if (bossCache.containsKey(monthKey)) return bossCache[monthKey]!;
 
+      bossSyncedCache[monthKey] = await _storage.hasBossHoursSynced(monthKey);
       final loaded = await _storage.loadBossHours(monthKey);
       bossCache[monthKey] = loaded;
       return loaded;
@@ -199,6 +208,7 @@ class WorkLogRepository {
           hasEntry: entries.containsKey(dateStr),
           hours: (data?[dateStr]?['hours'] as num?)?.toDouble(),
           bossHours: boss[dateStr],
+          bossSynced: bossSyncedCache[DateHelper.formatMonth(date)] ?? false,
         ),
       );
     }
