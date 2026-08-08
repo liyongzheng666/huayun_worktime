@@ -6,7 +6,7 @@
 - Java：Temurin JDK `17.0.20`
 - Android SDK：API 36，最低支持 API 24
 - 应用 ID：`com.hikiot.worktime`
-- 当前版本：`2.3.1+3`
+- 当前版本：`2.4.0+4`
 - 分发方式：公司内部直接安装 APK，不上架应用商店
 - 正式版本来源：GitHub Releases；国内网络不可达时可转发同一个 APK
 
@@ -27,8 +27,8 @@ Android Studio 自带的 JDK 25 当前不能用于本项目的 Gradle 构建。�
 脚本会从 macOS 钥匙串读取 release 签名密码，构建 APK，并在以下目录生成带版本号的安装包和 SHA-256 文件：
 
 ```text
-build/app/outputs/flutter-apk/huayun-worktime-v<版本号>.apk
-build/app/outputs/flutter-apk/huayun-worktime-v<版本号>.apk.sha256
+build/app/outputs/flutter-apk/huayun-worktime-v<版本名+构建号>.apk
+build/app/outputs/flutter-apk/huayun-worktime-v<版本名+构建号>.apk.sha256
 ```
 
 普通同事只需取得 APK，在 Android 系统中允许对应来源安装未知应用，然后直接安装。以后只要应用 ID、release keystore 和签名别名保持不变，新版本就能覆盖升级；版本号必须同步递增。
@@ -47,7 +47,7 @@ build/app/outputs/flutter-apk/huayun-worktime-v<版本号>.apk.sha256
 
 ## 发布前检查
 
-1. 更新 `pubspec.yaml` 中的版本，例如从 `2.3.1+3` 提升到 `2.3.2+4`。
+1. 更新 `pubspec.yaml` 中的版本，例如从 `2.4.0+4` 提升到 `2.4.1+5`。
 2. 运行 `flutter analyze` 和 `flutter test`。
 3. 运行 `./scripts/build_android_release.sh`。
 4. 使用 `apksigner verify --verbose --print-certs <APK>` 验证签名。
@@ -55,13 +55,32 @@ build/app/outputs/flutter-apk/huayun-worktime-v<版本号>.apk.sha256
 6. 先在一台 Android 设备上安装；已有旧版时再验证覆盖升级和数据保留。
 7. 将验证过的同一个 APK 上传 GitHub Release；国内网络不可达时仅转发该文件，不重新签名或二次打包。
 
-## 后续自动发布
+## GitHub 自动发布
 
-GitHub Actions 需要从 Secrets 还原相同的 keystore，并注入以下环境变量：
+`.github/workflows/android-release.yml` 已配置四个 GitHub Actions Secrets：
 
-- `HUAYUN_ANDROID_KEYSTORE_PATH`
+- `HUAYUN_ANDROID_KEYSTORE_BASE64`
 - `HUAYUN_ANDROID_STORE_PASSWORD`
 - `HUAYUN_ANDROID_KEY_ALIAS`
 - `HUAYUN_ANDROID_KEY_PASSWORD`
 
-自动发布流程应在版本 tag 触发，依次执行测试、release 构建、签名校验、SHA-256 生成和 GitHub Release 上传。App 内更新功能必须以 GitHub Releases 为唯一版本源，并在 GitHub 不可达时快速失败，不影响正常使用。
+普通 `workflow_dispatch` 只做云端构建验证，不发布 Release。正式发布时推送与 `pubspec.yaml` 完整版本严格一致的 tag：
+
+```bash
+git tag v2.4.0+4
+git push origin v2.4.0+4
+```
+
+工作流会依次执行依赖安装、静态检查、完整测试、release 构建、签名证书指纹验证、SHA-256 生成和 GitHub Release 上传。tag、APK 名称和 `pubspec.yaml` 任一版本不一致都会失败。
+
+## App 内更新
+
+- Android 启动后异步访问公开 GitHub Releases API；5 秒内无法完成检查则静默失败，不影响登录、工时和提醒功能。
+- 设置页提供“检查 Android 更新”，用户主动检查失败时可选择打开 GitHub Releases 页面。
+- 版本比较只使用 Android `versionCode`，不按版本名称字符串排序。
+- 只接受 `huayun-worktime-v<版本名>+<构建号>.apk` 以及同名 `.sha256` 文件；Release tag 必须是同一完整版本。
+- APK 下载到应用私有缓存目录，下载完成后由 Android 原生层重新计算 SHA-256；校验通过才交给系统安装器。
+- Android 8 及以上首次更新需要允许本 App“安装未知应用”；App 只负责打开授权页和系统安装确认页，不进行静默安装。
+- 超过 7 天的 APK 临时文件会在启动检查前清理。
+
+GitHub 在中国大陆不可达时，自动检查保持静默。使用者可以从公司群、网盘或离线传输取得 GitHub Release 中同一个 APK，直接点击覆盖安装；不要卸载旧版本，否则本地数据会被清除。

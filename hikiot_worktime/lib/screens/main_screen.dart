@@ -1,11 +1,15 @@
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 import '../core/theme/theme.dart';
+import '../services/app_update_service.dart';
 import 'daily_hours_screen.dart';
 import 'monthly_calendar_screen.dart';
 import 'settings_screen.dart';
 import 'work_log_screen.dart';
 import '../utils/startup_refresh_coordinator.dart';
 import '../widgets/home_button.dart';
+import '../widgets/app_update_dialog.dart';
 
 /// 主框架页面 - 包含底部导航栏
 class MainScreen extends StatefulWidget {
@@ -19,6 +23,7 @@ class MainScreen extends StatefulWidget {
 
 class _MainScreenState extends State<MainScreen> {
   int _currentIndex = 0;
+  final AppUpdateService _appUpdateService = AppUpdateService();
 
   final GlobalKey<MonthlyCalendarScreenState> _monthlyKey = GlobalKey();
   final GlobalKey<DailyHoursScreenState> _dailyKey = GlobalKey();
@@ -29,8 +34,25 @@ class _MainScreenState extends State<MainScreen> {
     super.initState();
     // 应用启动时自动刷新数据
     WidgetsBinding.instance.addPostFrameCallback((_) {
-      _runStartupRefresh();
+      unawaited(_runStartupRefresh());
+      unawaited(_checkForUpdateSilently());
     });
+  }
+
+  Future<void> _checkForUpdateSilently() async {
+    if (!_appUpdateService.isSupported) return;
+    try {
+      await _appUpdateService.cleanupStaleDownloads();
+      final update = await _appUpdateService.checkForUpdate();
+      if (!mounted || update == null) return;
+      await showAppUpdateDialog(
+        context: context,
+        service: _appUpdateService,
+        update: update,
+      );
+    } catch (_) {
+      // 启动期检查失败必须静默，不能让 GitHub 网络影响核心功能。
+    }
   }
 
   Future<void> _runStartupRefresh() async {

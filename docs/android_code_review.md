@@ -1,9 +1,9 @@
 # Android 代码全面审查与修复进度
 
 初始审查日期：2026-06-08
-最近更新日期：2026-06-10
+最近更新日期：2026-08-08
 审查口径：按 `AGENTS.md` 要求，以 BUG、正确性、性能、可维护性、测试缺口和工程元数据为主；安全项只保留会影响 Android 发布或运行的严重问题。
-审查范围：当前 Android-only 主工程，即 `hikiot_worktime/android` 与 `hikiot_worktime/lib`。
+审查范围：Flutter 双平台主工程，重点检查 `hikiot_worktime/android` 与 Android 共享业务代码。
 API 参考：见 `docs/hikiot_api_reference.md`。
 
 ## 当前基线
@@ -15,11 +15,11 @@ API 参考：见 `docs/hikiot_api_reference.md`。
 当前验证基线：
 
 - `flutter analyze`：无问题。
-- `flutter test`：93/93 通过。
+- `flutter test`：263/263 通过。
 - `flutter build apk --debug`：已验证可构建。
-- Android `release` 不再默认使用 debug 签名；WebView 调试只在非 release 构建打开；明文流量已关闭。
+- Android `release` 已使用固定 release keystore，`apksigner` 验证通过；WebView 调试只在非 release 构建打开；明文流量已关闭。
 
-仍不属于代码侧可凭空完成的事项：正式 release keystore 注入。该项需要用户提供 keystore 或 CI 注入方案。
+固定 keystore 已保存在仓库外，密码在 macOS 钥匙串；GitHub Actions Secrets 已配置同一签名资产。仍需外部完成的是 keystore 离机加密备份与 Android 真机覆盖升级验证。
 
 ## 2026-06-10 复审发现
 
@@ -122,7 +122,15 @@ API 参考：见 `docs/hikiot_api_reference.md`。
 
 ## 当前剩余事项
 
-代码侧复审项已完成。
+代码侧复审项已完成。Android 发布剩余真机首次安装、覆盖升级、数据保留与国产 ROM 提醒验证。
+
+## 2026-08-08 Android 内部更新链路
+
+- 增加 GitHub tag 自动构建、测试、固定签名、证书指纹核对和 Release 上传；普通手工触发仅验证、不发布。
+- 增加 App 启动静默检查与设置页主动检查；GitHub 请求 5 秒超时，失败不影响核心功能。
+- 增加 APK 下载进度、SHA-256 原生复核、未知来源授权和系统安装确认页；不实现普通 App 无权执行的静默安装。
+- APK 与 tag 同时编码 `versionName + versionCode`，远端更新只按 `versionCode` 判断，避免字符串版本比较错误。
+- 本地 `2.4.0+4` release APK 已使用固定证书构建并通过 `apksigner` 验证。
 
 ## 2026-06-10 追加再审：浮点显示、午休范围与跨天判断
 

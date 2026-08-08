@@ -1,8 +1,11 @@
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
+import 'package:url_launcher/url_launcher.dart';
 import 'dart:io';
 import 'dart:async';
+import '../services/app_update_platform.dart';
+import '../services/app_update_service.dart';
 import '../services/session_service.dart';
 import '../services/storage_service.dart';
 import '../services/hikiot_api_client.dart';
@@ -15,6 +18,7 @@ import '../services/team_context_service.dart';
 import '../utils/haptic_utils.dart';
 import '../utils/date_helper.dart';
 import '../widgets/haptic_refresh_indicator.dart';
+import '../widgets/app_update_dialog.dart';
 import '../widgets/team_selection_dialog.dart';
 import 'login_screen.dart';
 import 'main_screen.dart';
@@ -33,14 +37,16 @@ class _SettingsScreenState extends State<SettingsScreen> {
   final StorageService _storage = StorageService();
   final SessionService _sessionService = SessionService();
   final ReminderCoordinator _reminderCoordinator = ReminderCoordinator();
+  final AppUpdateService _appUpdateService = AppUpdateService();
   late final SettingsRepository _settingsRepository;
   HikiotApiClient? _apiClient;
   bool _isLoading = true;
+  bool _isCheckingUpdate = false;
+  InstalledAppVersion? _installedAppVersion;
 
   // 午休时间设置
   TimeOfDay _lunchStartTime = const TimeOfDay(hour: 12, minute: 0);
   TimeOfDay _lunchEndTime = const TimeOfDay(hour: 13, minute: 0);
-
 
   // 基础目标百分比
   int _baseTarget = 120;
@@ -72,6 +78,17 @@ class _SettingsScreenState extends State<SettingsScreen> {
     super.initState();
     _settingsRepository = SettingsRepository(storage: _storage);
     _loadSettings();
+    _loadInstalledAppVersion();
+  }
+
+  Future<void> _loadInstalledAppVersion() async {
+    if (!_appUpdateService.isSupported) return;
+    try {
+      final version = await _appUpdateService.loadInstalledVersion();
+      if (mounted) setState(() => _installedAppVersion = version);
+    } catch (_) {
+      // 版本读取失败不影响设置页面其它功能。
+    }
   }
 
   /// 加载设置
@@ -232,6 +249,12 @@ class _SettingsScreenState extends State<SettingsScreen> {
                   const SizedBox(height: 12),
                   _buildAccountSettings(),
                   const SizedBox(height: 24),
+                  if (_appUpdateService.isSupported) ...[
+                    _buildSectionHeader('应用更新', Icons.system_update),
+                    const SizedBox(height: 12),
+                    _buildAppUpdateSettings(),
+                    const SizedBox(height: 24),
+                  ],
                   _buildSectionHeader('帮助与反馈(其实没有反馈功能)', Icons.help_outline),
                   const SizedBox(height: 12),
                   _buildHelpSettings(),
@@ -1830,6 +1853,103 @@ class _SettingsScreenState extends State<SettingsScreen> {
           ],
         ),
       ),
+    );
+  }
+
+  Widget _buildAppUpdateSettings() {
+    final versionText = _installedAppVersion == null
+        ? '正在读取当前版本…'
+        : '当前版本 ${_installedAppVersion!.displayName}';
+
+    return Card(
+      elevation: 2,
+      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+      child: InkWell(
+        onTap: _isCheckingUpdate ? null : _checkForUpdate,
+        borderRadius: BorderRadius.circular(12),
+        child: Padding(
+          padding: const EdgeInsets.all(16),
+          child: Row(
+            children: [
+              Container(
+                padding: const EdgeInsets.all(8),
+                decoration: BoxDecoration(
+                  color: Colors.green[50],
+                  borderRadius: BorderRadius.circular(8),
+                ),
+                child: Icon(Icons.android, color: Colors.green[700], size: 22),
+              ),
+              const SizedBox(width: 12),
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    const Text(
+                      '检查 Android 更新',
+                      style: TextStyle(
+                        fontSize: 14,
+                        fontWeight: FontWeight.w600,
+                      ),
+                    ),
+                    const SizedBox(height: 2),
+                    Text(
+                      versionText,
+                      style: const TextStyle(fontSize: 12, color: Colors.grey),
+                    ),
+                  ],
+                ),
+              ),
+              if (_isCheckingUpdate)
+                const SizedBox(
+                  width: 20,
+                  height: 20,
+                  child: CircularProgressIndicator(strokeWidth: 2),
+                )
+              else
+                Icon(Icons.chevron_right, color: Colors.grey[400]),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+
+  Future<void> _checkForUpdate() async {
+    setState(() => _isCheckingUpdate = true);
+    try {
+      final update = await _appUpdateService.checkForUpdate();
+      if (!mounted) return;
+      if (update == null) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(
+            content: Text('当前已经是最新版本'),
+            backgroundColor: Colors.green,
+          ),
+        );
+        return;
+      }
+      await showAppUpdateDialog(
+        context: context,
+        service: _appUpdateService,
+        update: update,
+      );
+    } catch (error) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text(error.toString()),
+          action: SnackBarAction(label: '打开发布页', onPressed: _openReleasesPage),
+        ),
+      );
+    } finally {
+      if (mounted) setState(() => _isCheckingUpdate = false);
+    }
+  }
+
+  Future<void> _openReleasesPage() async {
+    await launchUrl(
+      AppUpdateService.releasesPage,
+      mode: LaunchMode.externalApplication,
     );
   }
 

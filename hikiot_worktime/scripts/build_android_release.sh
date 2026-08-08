@@ -33,10 +33,9 @@ cd "${PROJECT_DIR}"
 flutter build apk --release "$@"
 
 readonly APP_VERSION="$(awk '/^version: / { print $2; exit }' pubspec.yaml)"
-readonly VERSION_NAME="${APP_VERSION%%+*}"
 readonly OUTPUT_DIR="${PROJECT_DIR}/build/app/outputs/flutter-apk"
 readonly SOURCE_APK="${OUTPUT_DIR}/app-release.apk"
-readonly DISTRIBUTION_APK="${OUTPUT_DIR}/huayun-worktime-v${VERSION_NAME}.apk"
+readonly DISTRIBUTION_APK="${OUTPUT_DIR}/huayun-worktime-v${APP_VERSION}.apk"
 
 cp "${SOURCE_APK}" "${DISTRIBUTION_APK}"
 (
