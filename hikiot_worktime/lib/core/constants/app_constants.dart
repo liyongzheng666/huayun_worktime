@@ -7,9 +7,6 @@ class AppConstants {
   /// 应用名称
   static const String appName = '华云工时查询工具';
 
-  /// 应用版本
-  static const String appVersion = '2.0.0';
-
   // ============ 工时计算 ============
   /// 标准工作时长（小时）
   static const double standardWorkHours = 8.0;

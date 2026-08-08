@@ -351,24 +351,6 @@ class _SplashScreenState extends State<SplashScreen>
                 },
               ),
             ),
-            // 底部版本信息
-            Positioned(
-              bottom: 40,
-              left: 0,
-              right: 0,
-              child: FadeTransition(
-                opacity: _fadeAnimation,
-                child: const Text(
-                  'v2.0',
-                  textAlign: TextAlign.center,
-                  style: TextStyle(
-                    color: Colors.white38,
-                    fontSize: 12,
-                    letterSpacing: 1,
-                  ),
-                ),
-              ),
-            ),
           ],
         ),
       ),
