@@ -309,7 +309,10 @@ class WorkLogScreenState extends State<WorkLogScreen> {
   /// `PROJECT_xxxxxxxx` 是什么，更没义务去哪里翻出来。正常打开一次日志系统，
   /// APP 会在后台从网页会话里自己学到。手工填写只作为学不到时的兜底。
   Widget _buildConfigPrompt() {
+    // 与「每日工时」页的跨天打卡提示卡同一形态：
+    // 浅色底 + 同色描边 + 同色图标，elevation 与其它卡片一致
     return Card(
+      elevation: 2,
       color: AppColors.warningLight,
       shape: RoundedRectangleBorder(
         borderRadius: BorderRadius.circular(12),
@@ -322,7 +325,11 @@ class WorkLogScreenState extends State<WorkLogScreen> {
           children: [
             Row(
               children: [
-                Icon(Icons.auto_fix_high, color: AppColors.warningDark),
+                Icon(
+                  Icons.auto_fix_high,
+                  size: 20,
+                  color: AppColors.warningDark,
+                ),
                 const SizedBox(width: 12),
                 Expanded(
                   child: Column(
@@ -331,6 +338,7 @@ class WorkLogScreenState extends State<WorkLogScreen> {
                       Text(
                         'BOSS 提交配置未就绪',
                         style: TextStyle(
+                          fontSize: 14,
                           fontWeight: FontWeight.w600,
                           color: AppColors.warningDark,
                         ),
@@ -377,54 +385,84 @@ class WorkLogScreenState extends State<WorkLogScreen> {
     );
   }
 
-  Widget _buildImportCard() {
-    final hasData = _totalCount > 0;
+  /// 统一的卡片外壳：彩色图标 + 加粗标题 + 可选右侧操作 + 内容。
+  ///
+  /// 前两个页签的卡片都是「elevation 2 / 圆角 12 / 彩色图标配加粗标题」这套，
+  /// 本页原先各写各的，三个页签风格对不上。收敛到同一个外壳，
+  /// 以后再加卡片也不会又长出第四种样式。
+  Widget _buildSectionCard({
+    required IconData icon,
+    required Color iconColor,
+    required String title,
+    Widget? trailing,
+    required Widget child,
+  }) {
     return Card(
+      elevation: 2,
       shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
       child: Padding(
         padding: const EdgeInsets.all(14),
-        child: Row(
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            Icon(
-              hasData ? Icons.description : Icons.upload_file,
-              color: hasData ? Colors.teal : Colors.grey,
-            ),
-            const SizedBox(width: 12),
-            Expanded(
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  Text(
-                    hasData ? '已导入 $_totalCount 条日志' : '尚未导入日志 CSV',
-                    style: const TextStyle(fontWeight: FontWeight.w600),
+            Row(
+              children: [
+                Icon(icon, size: 20, color: iconColor),
+                const SizedBox(width: 8),
+                Expanded(
+                  child: Text(
+                    title,
+                    style: const TextStyle(
+                      fontSize: 14,
+                      fontWeight: FontWeight.w600,
+                    ),
                   ),
-                  const SizedBox(height: 2),
-                  Text(
-                    hasData
-                        ? '${_sourceName ?? '未知文件'}'
-                              '${_importedAt == null ? '' : ' · ${DateHelper.formatDate(_importedAt!)}'}'
-                        : '点右上角导入按钮选择 CSV 文件',
-                    style: TextStyle(fontSize: 12, color: Colors.grey[600]),
-                  ),
-                ],
-              ),
+                ),
+                ?trailing,
+              ],
             ),
-            TextButton(onPressed: _importCsv, child: const Text('导入')),
+            const SizedBox(height: 10),
+            child,
           ],
         ),
       ),
     );
   }
 
+  Widget _buildImportCard() {
+    final hasData = _totalCount > 0;
+    return _buildSectionCard(
+      icon: hasData ? Icons.description : Icons.upload_file,
+      iconColor: hasData ? Colors.teal[700]! : Colors.grey,
+      title: hasData ? '已导入 $_totalCount 条日志' : '尚未导入日志 CSV',
+      trailing: TextButton(onPressed: _importCsv, child: const Text('导入')),
+      child: Text(
+        hasData
+            ? '${_sourceName ?? '未知文件'}'
+                  '${_importedAt == null ? '' : ' · ${DateHelper.formatDate(_importedAt!)}'}'
+            : '点右上角或此处的导入按钮选择 CSV 文件',
+        style: TextStyle(fontSize: 12, color: Colors.grey[600]),
+      ),
+    );
+  }
+
+  /// 日期栏。与「每日工时」页的日期卡同一套外观（日历图标 + 加粗日期 + 今日），
+  /// 只是这里多了左右翻页箭头。
   Widget _buildDateBar() {
+    final isToday =
+        DateHelper.formatDate(_selectedDate) ==
+        DateHelper.formatDate(DateHelper.getWorkDate());
+
     return Card(
+      elevation: 2,
       shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
       child: Padding(
-        padding: const EdgeInsets.symmetric(horizontal: 4, vertical: 4),
+        padding: const EdgeInsets.symmetric(horizontal: 4, vertical: 6),
         child: Row(
           children: [
             IconButton(
               icon: const Icon(Icons.chevron_left),
+              tooltip: '前一天',
               onPressed: () => _changeDate(-1),
             ),
             Expanded(
@@ -432,20 +470,40 @@ class WorkLogScreenState extends State<WorkLogScreen> {
                 onTap: _pickDate,
                 borderRadius: BorderRadius.circular(8),
                 child: Padding(
-                  padding: const EdgeInsets.symmetric(vertical: 10),
-                  child: Text(
-                    DateHelper.formatDateChinese(_selectedDate),
-                    textAlign: TextAlign.center,
-                    style: const TextStyle(
-                      fontSize: 15,
-                      fontWeight: FontWeight.w600,
-                    ),
+                  padding: const EdgeInsets.symmetric(vertical: 8),
+                  child: Row(
+                    mainAxisAlignment: MainAxisAlignment.center,
+                    children: [
+                      Icon(
+                        Icons.calendar_today,
+                        size: 18,
+                        color: Colors.blue[700],
+                      ),
+                      const SizedBox(width: 8),
+                      Flexible(
+                        child: Text(
+                          DateHelper.formatDateChinese(_selectedDate),
+                          style: TextStyle(
+                            fontSize: 16,
+                            fontWeight: FontWeight.bold,
+                            color: Colors.grey[800],
+                          ),
+                          maxLines: 1,
+                          overflow: TextOverflow.ellipsis,
+                        ),
+                      ),
+                      if (isToday) ...[
+                        const SizedBox(width: 6),
+                        _buildChip('今日', Colors.blue[700]!),
+                      ],
+                    ],
                   ),
                 ),
               ),
             ),
             IconButton(
               icon: const Icon(Icons.chevron_right),
+              tooltip: '后一天',
               onPressed: () => _changeDate(1),
             ),
           ],
@@ -454,66 +512,103 @@ class WorkLogScreenState extends State<WorkLogScreen> {
     );
   }
 
-  /// 工作时长卡片，数据来自打卡记录，与「每日工时」页同一口径。
+  /// 月度页统计芯片的同款样式，用于短标签。
+  Widget _buildChip(String label, Color color) {
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
+      decoration: BoxDecoration(
+        color: color.withValues(alpha: 0.1),
+        borderRadius: BorderRadius.circular(16),
+        border: Border.all(color: color.withValues(alpha: 0.3)),
+      ),
+      child: Text(
+        label,
+        style: TextStyle(
+          fontSize: 12,
+          fontWeight: FontWeight.w500,
+          color: color.withValues(alpha: 0.9),
+        ),
+      ),
+    );
+  }
+
+  /// 工作时长卡片，数据来自打卡记录，与「每日工时」页同一口径、同一种呈现：
+  /// 大号彩色数字加单位，下面跟打卡区间。
   Widget _buildHoursCard() {
     final hours = _draft?.hours;
     final hasHours = hours?.hasData == true;
     // 复用工时计算器的格式化规则（浮点截断两位，不四舍五入）。
     final display = hasHours
         ? WorkTimeCalculator.formatHours(hours!.hours!)
-        : '未获取到';
+        : '--';
+    final color = hasHours ? Colors.indigo[700]! : Colors.grey;
 
-    return Card(
-      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
-      child: Padding(
-        padding: const EdgeInsets.all(14),
-        child: Row(
-          children: [
-            Icon(
-              Icons.timer_outlined,
-              color: hasHours ? Colors.indigo : Colors.grey,
+    return _buildSectionCard(
+      icon: Icons.timer_outlined,
+      iconColor: color,
+      title: '工作时长',
+      trailing: hasHours
+          ? IconButton(
+              icon: const Icon(Icons.copy, size: 18),
+              tooltip: '复制工作时长',
+              visualDensity: VisualDensity.compact,
+              onPressed: () => _copy('工作时长', display),
+            )
+          : null,
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          // 大号数字容易在字体放大时溢出，整体缩放而不是裁切
+          FittedBox(
+            fit: BoxFit.scaleDown,
+            alignment: Alignment.centerLeft,
+            child: Row(
+              crossAxisAlignment: CrossAxisAlignment.baseline,
+              textBaseline: TextBaseline.alphabetic,
+              children: [
+                Text(
+                  display,
+                  style: TextStyle(
+                    fontSize: 30,
+                    height: 1.1,
+                    fontWeight: FontWeight.bold,
+                    color: color,
+                  ),
+                ),
+                const SizedBox(width: 6),
+                Text(
+                  hasHours ? '小时' : '未获取到打卡',
+                  style: TextStyle(
+                    fontSize: 14,
+                    fontWeight: FontWeight.w500,
+                    color: color.withValues(alpha: 0.8),
+                  ),
+                ),
+              ],
             ),
-            const SizedBox(width: 12),
-            Expanded(
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
+          ),
+          if (hasHours && (hours!.checkIn != null || hours.checkOut != null))
+            Padding(
+              padding: const EdgeInsets.only(top: 6),
+              child: Row(
                 children: [
-                  const Text(
-                    '工作时长',
-                    style: TextStyle(fontSize: 12, color: Colors.grey),
-                  ),
-                  const SizedBox(height: 2),
+                  Icon(Icons.login, size: 14, color: Colors.green[600]),
+                  const SizedBox(width: 4),
                   Text(
-                    display,
-                    style: TextStyle(
-                      fontSize: 20,
-                      fontWeight: FontWeight.bold,
-                      color: hasHours ? Colors.indigo : Colors.grey,
-                    ),
+                    hours.checkIn ?? '--:--',
+                    style: TextStyle(fontSize: 13, color: Colors.grey[700]),
                   ),
-                  if (hasHours &&
-                      (hours!.checkIn != null || hours.checkOut != null))
-                    Padding(
-                      padding: const EdgeInsets.only(top: 2),
-                      child: Text(
-                        '${hours.checkIn ?? '-'} ~ ${hours.checkOut ?? '-'}',
-                        style: TextStyle(
-                          fontSize: 12,
-                          color: Colors.grey[600],
-                        ),
-                      ),
-                    ),
+                  const SizedBox(width: 12),
+                  Icon(Icons.logout, size: 14, color: Colors.orange[600]),
+                  const SizedBox(width: 4),
+                  Text(
+                    hours.checkOut ?? '--:--',
+                    style: TextStyle(fontSize: 13, color: Colors.grey[700]),
+                  ),
                 ],
               ),
             ),
-            if (hasHours)
-              IconButton(
-                icon: const Icon(Icons.copy, size: 20),
-                tooltip: '复制工作时长',
-                onPressed: () => _copy('工作时长', display),
-              ),
-          ],
-        ),
+        ],
       ),
     );
   }
@@ -523,18 +618,20 @@ class WorkLogScreenState extends State<WorkLogScreen> {
 
     if (entry == null) {
       return Card(
+        elevation: 2,
         shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
         child: Padding(
-          padding: const EdgeInsets.all(20),
+          padding: const EdgeInsets.all(24),
           child: Column(
             children: [
-              Icon(Icons.event_busy, size: 36, color: Colors.grey[400]),
-              const SizedBox(height: 10),
+              Icon(Icons.event_busy, size: 40, color: Colors.grey[400]),
+              const SizedBox(height: 12),
               Text(
                 _totalCount == 0
                     ? '请先导入日志 CSV'
                     : 'CSV 中没有 ${_draft?.date ?? ''} 的记录',
-                style: TextStyle(color: Colors.grey[600]),
+                style: TextStyle(fontSize: 14, color: Colors.grey[600]),
+                textAlign: TextAlign.center,
               ),
             ],
           ),
@@ -542,27 +639,44 @@ class WorkLogScreenState extends State<WorkLogScreen> {
       );
     }
 
-    return Card(
-      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
-      child: Padding(
-        padding: const EdgeInsets.symmetric(vertical: 4),
-        child: Column(
-          children: [
-            _buildField('标题', entry.title),
-            _buildField('工作内容', entry.content, multiline: true),
-            _buildField('项目名称', entry.projectName),
-            _buildField('BOSS工作类型', entry.workType),
-            _buildField('项目阶段', entry.stage),
-            _buildField('阶段活动', entry.activity),
-          ],
-        ),
+    return _buildSectionCard(
+      icon: Icons.notes,
+      iconColor: Colors.deepPurple[400]!,
+      title: '日志内容',
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          _buildField('标题', entry.title, emphasize: true),
+          _buildField('工作内容', entry.content, multiline: true),
+          _buildField('项目名称', entry.projectName),
+          const SizedBox(height: 4),
+          // 类型、阶段、活动都是短标签，做成芯片比三行「标签+值」清爽得多，
+          // 也和月度页的统计芯片对上了
+          Wrap(
+            spacing: 8,
+            runSpacing: 8,
+            children: [
+              if (entry.workType.isNotEmpty)
+                _buildChip(entry.workType, Colors.deepPurple[400]!),
+              if (entry.stage.isNotEmpty)
+                _buildChip(entry.stage, Colors.blue[700]!),
+              if (entry.activity.isNotEmpty)
+                _buildChip(entry.activity, Colors.teal[700]!),
+            ],
+          ),
+        ],
       ),
     );
   }
 
-  Widget _buildField(String label, String value, {bool multiline = false}) {
+  Widget _buildField(
+    String label,
+    String value, {
+    bool multiline = false,
+    bool emphasize = false,
+  }) {
     return Padding(
-      padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 8),
+      padding: const EdgeInsets.only(bottom: 12),
       child: Row(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
@@ -572,12 +686,19 @@ class WorkLogScreenState extends State<WorkLogScreen> {
               children: [
                 Text(
                   label,
-                  style: const TextStyle(fontSize: 11, color: Colors.grey),
+                  style: TextStyle(fontSize: 11, color: Colors.grey[500]),
                 ),
                 const SizedBox(height: 3),
                 Text(
                   value.isEmpty ? '-' : value,
-                  style: const TextStyle(fontSize: 14, height: 1.5),
+                  style: TextStyle(
+                    fontSize: emphasize ? 15 : 14,
+                    height: 1.5,
+                    fontWeight: emphasize
+                        ? FontWeight.bold
+                        : FontWeight.normal,
+                    color: Colors.grey[850],
+                  ),
                   maxLines: multiline ? null : 2,
                   overflow: multiline ? null : TextOverflow.ellipsis,
                 ),
