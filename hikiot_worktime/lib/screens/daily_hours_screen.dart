@@ -16,7 +16,6 @@ import '../widgets/haptic_refresh_indicator.dart';
 import '../widgets/pull_refresh_guide.dart';
 import 'feature_guide_page.dart';
 import 'photo_preview_screen.dart';
-import 'work_report_webview_screen.dart';
 
 class DailyHoursScreen extends StatefulWidget {
   final bool autoLoad;
@@ -153,25 +152,6 @@ class DailyHoursScreenState extends State<DailyHoursScreen>
   }
 
   DateTime get selectedDate => _selectedDate;
-
-  /// 一键提交当前选中日期的 BOSS 工作日志。
-  ///
-  /// 直接进入网页页并开启自动提交：登录态就绪后即发报文，
-  /// 无需用户手动导航到填报页，也无需事先准备项目信息（会自动自举）。
-  Future<void> _submitWorkLog() async {
-    await HapticUtils.mediumImpact();
-    if (!mounted) return;
-
-    await Navigator.push(
-      context,
-      MaterialPageRoute(
-        builder: (_) => WorkReportWebViewScreen(
-          fillDate: _selectedDate,
-          autoSubmit: true,
-        ),
-      ),
-    );
-  }
 
   /// 加载每日数据
   Future<void> _loadDailyData() async {
@@ -461,13 +441,6 @@ class DailyHoursScreenState extends State<DailyHoursScreen>
           appBar: AppBar(
             title: const Text('每日工时'),
             actions: [
-              // 一键提交当日 BOSS 日志。放在主界面是为了免去先切到
-              // 工作日志页再进网页的多层跳转。
-              IconButton(
-                icon: const Icon(Icons.rocket_launch),
-                tooltip: '一键提交今日日志',
-                onPressed: _submitWorkLog,
-              ),
               IconButton(
                 icon: const Icon(Icons.refresh),
                 onPressed: _isLoading

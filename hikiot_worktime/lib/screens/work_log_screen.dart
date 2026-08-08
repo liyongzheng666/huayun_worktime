@@ -220,32 +220,85 @@ class WorkLogScreenState extends State<WorkLogScreen> {
                   _buildHoursCard(),
                   const SizedBox(height: 12),
                   _buildEntryCard(),
-                  const SizedBox(height: 80),
+                  const SizedBox(height: 12),
                 ],
               ),
             ),
-      floatingActionButton: Column(
-        mainAxisSize: MainAxisSize.min,
-        crossAxisAlignment: CrossAxisAlignment.end,
-        children: [
-          FloatingActionButton.small(
-            heroTag: 'openWeb',
-            tooltip: '打开日志系统',
-            onPressed: () => _openReportSystem(autoSubmit: false),
-            child: const Icon(Icons.open_in_browser),
-          ),
-          const SizedBox(height: 10),
-          // 主入口：打开后自动等登录完成并提交，不用手动翻到填报页
-          FloatingActionButton.extended(
-            heroTag: 'oneTapSubmit',
-            onPressed: _draft?.hasEntry == true
-                ? () => _openReportSystem(autoSubmit: true)
-                : null,
-            backgroundColor: _draft?.hasEntry == true ? null : Colors.grey,
-            icon: const Icon(Icons.rocket_launch),
-            label: const Text('一键提交'),
-          ),
-        ],
+      bottomNavigationBar: _buildSubmitBar(),
+    );
+  }
+
+  /// 底部常驻的提交栏。
+  ///
+  /// 提交是这个页面唯一的主操作，原先它是每日工时页 AppBar 上的一个小图标，
+  /// 藏在最上面很容易被忽略。改为常驻底栏的整宽按钮，位置固定、面积足够大，
+  /// 不像悬浮按钮那样会飘在内容上或被误当成装饰。
+  ///
+  /// 按钮上带日期：日期栏可以往前翻，不写清楚容易在翻到别的日期后
+  /// 误以为提交的是今天。
+  Widget _buildSubmitBar() {
+    final canSubmit = _draft?.hasEntry == true;
+    final date = _selectedDate;
+
+    return SafeArea(
+      top: false,
+      child: Container(
+        padding: const EdgeInsets.fromLTRB(12, 10, 12, 10),
+        decoration: BoxDecoration(
+          color: Theme.of(context).colorScheme.surface,
+          border: Border(top: BorderSide(color: Colors.grey.shade300)),
+        ),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            // 不能提交时说明原因，而不是只把按钮置灰让人猜
+            if (!canSubmit)
+              Padding(
+                padding: const EdgeInsets.only(bottom: 8),
+                child: Text(
+                  _totalCount == 0
+                      ? '请先导入日志 CSV'
+                      : 'CSV 中没有 ${DateHelper.formatDate(date)} 的记录',
+                  style: TextStyle(fontSize: 12, color: Colors.grey[600]),
+                  textAlign: TextAlign.center,
+                ),
+              ),
+            Row(
+              children: [
+                // 次要操作：只想看看网页、不提交时用
+                OutlinedButton(
+                  onPressed: () => _openReportSystem(autoSubmit: false),
+                  style: OutlinedButton.styleFrom(
+                    minimumSize: const Size(52, 52),
+                    padding: EdgeInsets.zero,
+                  ),
+                  child: const Icon(Icons.open_in_browser),
+                ),
+                const SizedBox(width: 10),
+                Expanded(
+                  child: FilledButton.icon(
+                    onPressed: canSubmit
+                        ? () => _openReportSystem(autoSubmit: true)
+                        : null,
+                    style: FilledButton.styleFrom(
+                      minimumSize: const Size(0, 52),
+                      textStyle: const TextStyle(
+                        fontSize: 16,
+                        fontWeight: FontWeight.bold,
+                      ),
+                    ),
+                    icon: const Icon(Icons.rocket_launch),
+                    label: Text(
+                      '提交 ${date.month}月${date.day}日 日志',
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                    ),
+                  ),
+                ),
+              ],
+            ),
+          ],
+        ),
       ),
     );
   }
