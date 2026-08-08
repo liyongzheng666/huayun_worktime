@@ -211,6 +211,45 @@ void main() {
       expect(byDate['2026-08-06']!.hours, isNull);
     });
 
+    test('已提交与「CSV 里有素材」是两回事', () async {
+      // 这是本页最容易误导人的地方：导入 CSV 只是准备好素材，
+      // 一条都没提交时也会有 hasEntry，绝不能据此认为已完成。
+      final storage = StorageService();
+      final repository = WorkLogRepository(
+        storage: storage,
+        loadWorkHours: (_) async => const WorkLogHours(),
+      );
+      await repository.importFromCsv(csv);
+      await storage.saveBossHours('2026-08', {'2026-08-04': 8.0});
+
+      final week = await repository.loadWeek(saturday);
+      final byDate = {for (final d in week) d.dateStr: d};
+
+      // 8-04：CSV 有、BOSS 也有 → 已提交
+      expect(byDate['2026-08-04']!.hasEntry, isTrue);
+      expect(byDate['2026-08-04']!.isSubmitted, isTrue);
+
+      // 8-05：CSV 有、BOSS 没有 → 素材就绪但**未**提交
+      expect(byDate['2026-08-05']!.hasEntry, isTrue);
+      expect(byDate['2026-08-05']!.isSubmitted, isFalse);
+    });
+
+    test('BOSS 工时为 0 或未同步都不算已提交', () async {
+      final storage = StorageService();
+      await storage.saveBossHours('2026-08', {'2026-08-04': 0.0});
+
+      final week = await WorkLogRepository(
+        storage: storage,
+        loadWorkHours: (_) async => const WorkLogHours(),
+      ).loadWeek(saturday);
+      final byDate = {for (final d in week) d.dateStr: d};
+
+      expect(byDate['2026-08-04']!.isSubmitted, isFalse);
+      // 未同步过的日期 bossHours 为 null，同样不算已提交
+      expect(byDate['2026-08-06']!.bossHours, isNull);
+      expect(byDate['2026-08-06']!.isSubmitted, isFalse);
+    });
+
     test('跨月的那一周会读取两个月的缓存', () async {
       // 2026-08-31 是星期一，该周跨到 9 月
       final storage = StorageService();

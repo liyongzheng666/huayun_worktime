@@ -133,6 +133,7 @@ class WeekStripState extends State<WeekStrip> {
                 },
               ),
             ),
+            _buildLegend(),
           ],
         ),
       ),
@@ -280,21 +281,95 @@ class WeekStripState extends State<WeekStrip> {
     );
   }
 
-  /// 日志填报状态点：实心＝已写，空心＝有工时未写，无＝没有数据。
+  /// 提交状态点。
+  ///
+  /// **这个点回答的是「这天提交了没有」，不是「CSV 里有没有素材」。**
+  /// 早期版本按 CSV 有无着色，结果导入一次 CSV 整月立刻全是实心点，
+  /// 看着像全都提交完了，实际一条都没提交——这是本页最容易误导人的地方。
+  ///
+  /// 四种状态，与月历页的 BOSS 状态条同一套语义：
+  /// - 实心中性色 → 已提交到 BOSS
+  /// - 红色实心   → 已过去、当天有打卡，却还没提交，是真正的欠账
+  /// - 空心蓝     → 素材已就绪（CSV 里有），等着提交
+  /// - 不显示     → 这天没有任何相关数据
   Widget _buildStatusDot(WorkLogDaySummary? summary, bool isSelected) {
-    if (summary == null || (!summary.hasEntry && !summary.hasHours)) {
-      return const SizedBox(height: 8);
-    }
+    if (summary == null) return const SizedBox(height: 8);
 
-    final color = isSelected ? Colors.white : Colors.blue[700]!;
+    final isPast = _isPast(summary.date);
+
+    if (summary.isSubmitted) {
+      return _dot(
+        fill: isSelected ? Colors.white : Colors.grey.shade500,
+        filled: true,
+      );
+    }
+    if (isPast && summary.hasHours) {
+      return _dot(
+        fill: isSelected ? Colors.white : _overdueColor,
+        filled: true,
+      );
+    }
+    if (summary.hasEntry) {
+      return _dot(
+        fill: isSelected ? Colors.white : Colors.blue.shade700,
+        filled: false,
+      );
+    }
+    return const SizedBox(height: 8);
+  }
+
+  /// 已过期未提交的警示色，与月历页保持一致。
+  static const Color _overdueColor = Color(0xFFE53935);
+
+  static bool _isPast(DateTime date) {
+    final today = DateHelper.getWorkDate();
+    return DateTime(
+      date.year,
+      date.month,
+      date.day,
+    ).isBefore(DateTime(today.year, today.month, today.day));
+  }
+
+  Widget _dot({required Color fill, required bool filled}) {
     return Container(
       width: 6,
       height: 6,
       decoration: BoxDecoration(
         shape: BoxShape.circle,
-        color: summary.hasEntry ? color : Colors.transparent,
-        border: summary.hasEntry ? null : Border.all(color: color, width: 1.2),
+        color: filled ? fill : Colors.transparent,
+        border: filled ? null : Border.all(color: fill, width: 1.2),
       ),
+    );
+  }
+
+  /// 状态点的图例。自造的符号不解释没人看得懂，
+  /// 与月历页一样把符号本身画出来，而不是只用文字描述。
+  Widget _buildLegend() {
+    return Padding(
+      padding: const EdgeInsets.only(top: 8, left: 14, right: 14),
+      child: Wrap(
+        spacing: 12,
+        runSpacing: 4,
+        children: [
+          _legendItem(_dot(fill: Colors.grey.shade500, filled: true), '已提交'),
+          _legendItem(_dot(fill: _overdueColor, filled: true), '待补交'),
+          _legendItem(
+            _dot(fill: Colors.blue.shade700, filled: false),
+            '素材已就绪',
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _legendItem(Widget sample, String label) {
+    return Row(
+      mainAxisSize: MainAxisSize.min,
+      children: [
+        sample,
+        const SizedBox(width: 4),
+        Text(label, style: TextStyle(fontSize: 10, color: Colors.grey[600])),
+      ],
     );
   }
 }

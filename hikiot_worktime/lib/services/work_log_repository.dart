@@ -47,6 +47,7 @@ class WorkLogDaySummary {
     required this.dateStr,
     required this.hasEntry,
     this.hours,
+    this.bossHours,
   });
 
   final DateTime date;
@@ -54,14 +55,24 @@ class WorkLogDaySummary {
   /// yyyy-MM-dd
   final String dateStr;
 
-  /// CSV 里有没有这天的日志
+  /// CSV 里有没有这天的素材。
+  ///
+  /// **这不等于「已提交」**——导入 CSV 只是把素材准备好，
+  /// 真正提交与否要看 [bossHours]。早期把两者混为一谈，
+  /// 导致导入后整月都显示成已完成。
   final bool hasEntry;
 
   /// 打卡工时。null 表示本地还没有这天的数据，**不等于 0**——
   /// 周条上要能区分「这天没上班」和「还没同步过」。
   final double? hours;
 
+  /// BOSS 里已填报的工时，null 表示该月还没同步过 BOSS 工时。
+  final double? bossHours;
+
   bool get hasHours => hours != null && hours! > 0;
+
+  /// 是否确实已提交到 BOSS。
+  bool get isSubmitted => bossHours != null && bossHours! > 0;
 }
 
 /// 导入结果
@@ -151,6 +162,17 @@ class WorkLogRepository {
     final entries = await _storage.loadWorkLogEntries();
     final teamNo = await _storage.loadTeamNo();
 
+    // BOSS 已填报工时按月存放，与月历页共用同一份缓存
+    final bossCache = <String, Map<String, double>>{};
+    Future<Map<String, double>> bossData(DateTime date) async {
+      final monthKey = DateHelper.formatMonth(date);
+      if (bossCache.containsKey(monthKey)) return bossCache[monthKey]!;
+
+      final loaded = await _storage.loadBossHours(monthKey);
+      bossCache[monthKey] = loaded;
+      return loaded;
+    }
+
     // 同一个月只读一次（跨月的那一周会涉及两个月）
     final monthCache = <String, Map<String, Map<String, dynamic>>?>{};
     Future<Map<String, Map<String, dynamic>>?> monthData(DateTime date) async {
@@ -168,6 +190,7 @@ class WorkLogRepository {
       final date = monday.add(Duration(days: i));
       final dateStr = DateHelper.formatDate(date);
       final data = await monthData(date);
+      final boss = await bossData(date);
 
       result.add(
         WorkLogDaySummary(
@@ -175,6 +198,7 @@ class WorkLogRepository {
           dateStr: dateStr,
           hasEntry: entries.containsKey(dateStr),
           hours: (data?[dateStr]?['hours'] as num?)?.toDouble(),
+          bossHours: boss[dateStr],
         ),
       );
     }

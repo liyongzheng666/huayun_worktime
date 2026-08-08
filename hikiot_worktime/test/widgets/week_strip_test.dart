@@ -118,4 +118,127 @@ void main() {
 
     expect(find.text('本周'), findsNothing);
   });
+
+  group('提交状态点', () {
+    /// 造一周数据：可分别指定每天是否已提交 / 有素材 / 有打卡工时
+    Future<List<WorkLogDaySummary>> Function(DateTime) weekWith({
+      required Set<int> submitted,
+      required Set<int> withEntry,
+      required Set<int> withHours,
+    }) {
+      return (anyDayInWeek) async {
+        final monday = DateTime(
+          anyDayInWeek.year,
+          anyDayInWeek.month,
+          anyDayInWeek.day,
+        ).subtract(Duration(days: anyDayInWeek.weekday - 1));
+
+        return List.generate(7, (i) {
+          final date = monday.add(Duration(days: i));
+          return WorkLogDaySummary(
+            date: date,
+            dateStr: DateHelper.formatDate(date),
+            hasEntry: withEntry.contains(i),
+            hours: withHours.contains(i) ? 8.0 : null,
+            bossHours: submitted.contains(i) ? 8.0 : null,
+          );
+        });
+      };
+    }
+
+    Future<void> pumpStrip(
+      WidgetTester tester,
+      DateTime selected,
+      Future<List<WorkLogDaySummary>> Function(DateTime) loader,
+    ) async {
+      await tester.pumpWidget(
+        MaterialApp(
+          home: Scaffold(
+            body: WeekStrip(
+              selectedDate: selected,
+              onDateSelected: (_) {},
+              loadWeek: loader,
+            ),
+          ),
+        ),
+      );
+      await tester.pumpAndSettle();
+    }
+
+    testWidgets('有素材但未提交，不能显示成已完成', (tester) async {
+      // 导入一次 CSV 就整月实心点、看着像全提交了，是这里最严重的误导
+      final past = DateTime(2020, 1, 8);
+      await pumpStrip(
+        tester,
+        past,
+        weekWith(
+          submitted: const {},
+          withEntry: const {0, 1, 2, 3, 4, 5, 6},
+          withHours: const {},
+        ),
+      );
+
+      // 一个「已提交」的灰点都不该出现
+      expect(find.text('已提交'), findsOneWidget); // 图例本身
+      final dots = tester.widgetList<Container>(
+        find.descendant(
+          of: find.byType(PageView),
+          matching: find.byType(Container),
+        ),
+      );
+      // 页面内的点全部是空心（decoration 带 border）
+      final circles = dots.where(
+        (c) => (c.decoration as BoxDecoration?)?.shape == BoxShape.circle,
+      );
+      expect(circles, isNotEmpty);
+      expect(
+        circles.every((c) => (c.decoration as BoxDecoration).border != null),
+        isTrue,
+        reason: '未提交的日子必须是空心点',
+      );
+    });
+
+    testWidgets('已提交的日子是实心点', (tester) async {
+      final past = DateTime(2020, 1, 8);
+      await pumpStrip(
+        tester,
+        past,
+        weekWith(
+          submitted: const {0},
+          withEntry: const {0},
+          withHours: const {0},
+        ),
+      );
+
+      final circles = tester
+          .widgetList<Container>(
+            find.descendant(
+              of: find.byType(PageView),
+              matching: find.byType(Container),
+            ),
+          )
+          .where(
+            (c) => (c.decoration as BoxDecoration?)?.shape == BoxShape.circle,
+          );
+
+      expect(circles.length, 1);
+      expect((circles.first.decoration as BoxDecoration).border, isNull);
+    });
+
+    testWidgets('图例把三种点都画出来', (tester) async {
+      await pumpStrip(
+        tester,
+        DateTime(2020, 1, 8),
+        weekWith(
+          submitted: const {},
+          withEntry: const {},
+          withHours: const {},
+        ),
+      );
+
+      expect(find.text('已提交'), findsOneWidget);
+      expect(find.text('待补交'), findsOneWidget);
+      expect(find.text('素材已就绪'), findsOneWidget);
+    });
+  });
 }
