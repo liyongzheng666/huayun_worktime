@@ -13,6 +13,7 @@ import '../utils/haptic_utils.dart';
 import '../utils/work_log_csv_parser.dart';
 import '../utils/work_time_calculator.dart';
 import '../widgets/boss_constants_dialog.dart';
+import '../widgets/week_strip.dart';
 import 'work_report_webview_screen.dart';
 
 /// 工作日志填报页
@@ -28,6 +29,7 @@ class WorkLogScreen extends StatefulWidget {
 
 class WorkLogScreenState extends State<WorkLogScreen> {
   final WorkLogRepository _repository = WorkLogRepository();
+  final GlobalKey<WeekStripState> _weekStripKey = GlobalKey();
 
   DateTime _selectedDate = DateHelper.getWorkDate();
   WorkLogDraft? _draft;
@@ -65,6 +67,9 @@ class WorkLogScreenState extends State<WorkLogScreen> {
 
     // 已经有更新的一次加载在跑，本次结果作废
     if (!mounted || seq != _loadSeq) return;
+
+    // CSV 可能刚被导入、日志可能刚提交，周条上的状态点要跟着更新
+    _weekStripKey.currentState?.refresh();
     setState(() {
       _draft = draft;
       _sourceName = sourceName;
@@ -75,23 +80,12 @@ class WorkLogScreenState extends State<WorkLogScreen> {
     });
   }
 
-  Future<void> _changeDate(int deltaDays) async {
-    HapticUtils.selectionClick();
-    setState(() {
-      _selectedDate = _selectedDate.add(Duration(days: deltaDays));
-    });
-    await _reload();
-  }
-
-  Future<void> _pickDate() async {
-    final picked = await showDatePicker(
-      context: context,
-      initialDate: _selectedDate,
-      firstDate: DateTime(2020),
-      lastDate: DateTime(2100),
-    );
-    if (picked == null) return;
-    setState(() => _selectedDate = picked);
+  /// 周条选中某一天。
+  Future<void> _selectDate(DateTime date) async {
+    if (DateHelper.formatDate(date) == DateHelper.formatDate(_selectedDate)) {
+      return;
+    }
+    setState(() => _selectedDate = date);
     await _reload();
   }
 
@@ -215,7 +209,12 @@ class WorkLogScreenState extends State<WorkLogScreen> {
                   ],
                   _buildImportCard(),
                   const SizedBox(height: 12),
-                  _buildDateBar(),
+                  WeekStrip(
+                    key: _weekStripKey,
+                    selectedDate: _selectedDate,
+                    onDateSelected: _selectDate,
+                    loadWeek: _repository.loadWeek,
+                  ),
                   const SizedBox(height: 12),
                   _buildHoursCard(),
                   const SizedBox(height: 12),
@@ -442,72 +441,6 @@ class WorkLogScreenState extends State<WorkLogScreen> {
                   '${_importedAt == null ? '' : ' · ${DateHelper.formatDate(_importedAt!)}'}'
             : '点右上角或此处的导入按钮选择 CSV 文件',
         style: TextStyle(fontSize: 12, color: Colors.grey[600]),
-      ),
-    );
-  }
-
-  /// 日期栏。与「每日工时」页的日期卡同一套外观（日历图标 + 加粗日期 + 今日），
-  /// 只是这里多了左右翻页箭头。
-  Widget _buildDateBar() {
-    final isToday =
-        DateHelper.formatDate(_selectedDate) ==
-        DateHelper.formatDate(DateHelper.getWorkDate());
-
-    return Card(
-      elevation: 2,
-      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
-      child: Padding(
-        padding: const EdgeInsets.symmetric(horizontal: 4, vertical: 6),
-        child: Row(
-          children: [
-            IconButton(
-              icon: const Icon(Icons.chevron_left),
-              tooltip: '前一天',
-              onPressed: () => _changeDate(-1),
-            ),
-            Expanded(
-              child: InkWell(
-                onTap: _pickDate,
-                borderRadius: BorderRadius.circular(8),
-                child: Padding(
-                  padding: const EdgeInsets.symmetric(vertical: 8),
-                  child: Row(
-                    mainAxisAlignment: MainAxisAlignment.center,
-                    children: [
-                      Icon(
-                        Icons.calendar_today,
-                        size: 18,
-                        color: Colors.blue[700],
-                      ),
-                      const SizedBox(width: 8),
-                      Flexible(
-                        child: Text(
-                          DateHelper.formatDateChinese(_selectedDate),
-                          style: TextStyle(
-                            fontSize: 16,
-                            fontWeight: FontWeight.bold,
-                            color: Colors.grey[800],
-                          ),
-                          maxLines: 1,
-                          overflow: TextOverflow.ellipsis,
-                        ),
-                      ),
-                      if (isToday) ...[
-                        const SizedBox(width: 6),
-                        _buildChip('今日', Colors.blue[700]!),
-                      ],
-                    ],
-                  ),
-                ),
-              ),
-            ),
-            IconButton(
-              icon: const Icon(Icons.chevron_right),
-              tooltip: '后一天',
-              onPressed: () => _changeDate(1),
-            ),
-          ],
-        ),
       ),
     );
   }

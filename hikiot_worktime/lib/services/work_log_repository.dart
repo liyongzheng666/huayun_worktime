@@ -40,6 +40,30 @@ class WorkLogDraft {
   bool get hasEntry => entry != null;
 }
 
+/// 周条上单日的概览
+class WorkLogDaySummary {
+  const WorkLogDaySummary({
+    required this.date,
+    required this.dateStr,
+    required this.hasEntry,
+    this.hours,
+  });
+
+  final DateTime date;
+
+  /// yyyy-MM-dd
+  final String dateStr;
+
+  /// CSV 里有没有这天的日志
+  final bool hasEntry;
+
+  /// 打卡工时。null 表示本地还没有这天的数据，**不等于 0**——
+  /// 周条上要能区分「这天没上班」和「还没同步过」。
+  final double? hours;
+
+  bool get hasHours => hours != null && hours! > 0;
+}
+
 /// 导入结果
 class WorkLogImportResult {
   const WorkLogImportResult({
@@ -107,6 +131,54 @@ class WorkLogRepository {
       entry: await loadEntry(dateStr),
       hours: await _loadWorkHours(date),
     );
+  }
+
+  /// 读取 [anyDayInWeek] 所在那一周（周一至周日）的概览。
+  ///
+  /// 工时取自**本地月度缓存**而非逐日调接口：周条一次要七天，
+  /// 逐日请求就是七次网络往返，滑动切周时更会成倍放大。
+  /// 缓存里没有的日期返回 null 工时，界面显示为「未同步」，
+  /// 而不是伪装成 0 小时。
+  ///
+  /// 一周可能横跨两个月，因此按需读取涉及到的每个月。
+  Future<List<WorkLogDaySummary>> loadWeek(DateTime anyDayInWeek) async {
+    final monday = DateTime(
+      anyDayInWeek.year,
+      anyDayInWeek.month,
+      anyDayInWeek.day,
+    ).subtract(Duration(days: anyDayInWeek.weekday - 1));
+
+    final entries = await _storage.loadWorkLogEntries();
+    final teamNo = await _storage.loadTeamNo();
+
+    // 同一个月只读一次（跨月的那一周会涉及两个月）
+    final monthCache = <String, Map<String, Map<String, dynamic>>?>{};
+    Future<Map<String, Map<String, dynamic>>?> monthData(DateTime date) async {
+      if (teamNo == null) return null;
+      final monthKey = DateHelper.formatMonth(date);
+      if (monthCache.containsKey(monthKey)) return monthCache[monthKey];
+
+      final loaded = await _storage.loadMonthlyData(teamNo, monthKey);
+      monthCache[monthKey] = loaded;
+      return loaded;
+    }
+
+    final result = <WorkLogDaySummary>[];
+    for (var i = 0; i < 7; i++) {
+      final date = monday.add(Duration(days: i));
+      final dateStr = DateHelper.formatDate(date);
+      final data = await monthData(date);
+
+      result.add(
+        WorkLogDaySummary(
+          date: date,
+          dateStr: dateStr,
+          hasEntry: entries.containsKey(dateStr),
+          hours: (data?[dateStr]?['hours'] as num?)?.toDouble(),
+        ),
+      );
+    }
+    return result;
   }
 
   /// 返回 (来源文件名, 导入时间)。

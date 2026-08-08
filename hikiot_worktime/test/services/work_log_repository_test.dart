@@ -141,4 +141,95 @@ void main() {
       expect(draft.hours.hours, isNull);
     });
   });
+
+  group('周条概览 loadWeek', () {
+    /// 2026-08-08 是星期六，所在周为 8/3(一) ~ 8/9(日)
+    final saturday = DateTime(2026, 8, 8);
+
+    test('返回周一到周日七天，顺序固定', () async {
+      final repository = buildRepository();
+
+      final week = await repository.loadWeek(saturday);
+
+      expect(week.length, 7);
+      expect(week.first.dateStr, '2026-08-03');
+      expect(week.last.dateStr, '2026-08-09');
+      expect(week.first.date.weekday, DateTime.monday);
+      expect(week.last.date.weekday, DateTime.sunday);
+    });
+
+    test('周内任意一天都能定位到同一周', () async {
+      final repository = buildRepository();
+
+      for (final day in [3, 5, 8, 9]) {
+        final week = await repository.loadWeek(DateTime(2026, 8, day));
+        expect(week.first.dateStr, '2026-08-03', reason: '8月$day日');
+      }
+    });
+
+    test('CSV 里有的日期标记为已填报', () async {
+      final repository = buildRepository();
+      await repository.importFromCsv(csv);
+
+      final week = await repository.loadWeek(saturday);
+      final byDate = {for (final d in week) d.dateStr: d};
+
+      expect(byDate['2026-08-04']!.hasEntry, isTrue);
+      expect(byDate['2026-08-05']!.hasEntry, isTrue);
+      expect(byDate['2026-08-06']!.hasEntry, isFalse);
+    });
+
+    test('本地没有月度缓存时工时为 null，而不是 0', () async {
+      // 「还没同步」和「当天没上班」是两回事，周条上要能分开显示
+      final repository = buildRepository();
+
+      final week = await repository.loadWeek(saturday);
+
+      expect(week.every((d) => d.hours == null), isTrue);
+      expect(week.every((d) => d.hasHours), isFalse);
+    });
+
+    test('有月度缓存时读出当天工时', () async {
+      final storage = StorageService();
+      await storage.saveTeamContext(teamNo: 'team-1');
+      await storage.saveMonthlyData('team-1', '2026-08', {
+        '2026-08-04': {'hours': 11.1},
+        '2026-08-05': {'hours': 0.0},
+      });
+
+      final week = await WorkLogRepository(
+        storage: storage,
+        loadWorkHours: (_) async => const WorkLogHours(),
+      ).loadWeek(saturday);
+      final byDate = {for (final d in week) d.dateStr: d};
+
+      expect(byDate['2026-08-04']!.hours, 11.1);
+      expect(byDate['2026-08-04']!.hasHours, isTrue);
+      // 缓存里明确是 0 —— 有数据但没工时，与「未同步」不同
+      expect(byDate['2026-08-05']!.hours, 0.0);
+      expect(byDate['2026-08-05']!.hasHours, isFalse);
+      expect(byDate['2026-08-06']!.hours, isNull);
+    });
+
+    test('跨月的那一周会读取两个月的缓存', () async {
+      // 2026-08-31 是星期一，该周跨到 9 月
+      final storage = StorageService();
+      await storage.saveTeamContext(teamNo: 'team-1');
+      await storage.saveMonthlyData('team-1', '2026-08', {
+        '2026-08-31': {'hours': 8.0},
+      });
+      await storage.saveMonthlyData('team-1', '2026-09', {
+        '2026-09-01': {'hours': 9.0},
+      });
+
+      final week = await WorkLogRepository(
+        storage: storage,
+        loadWorkHours: (_) async => const WorkLogHours(),
+      ).loadWeek(DateTime(2026, 8, 31));
+      final byDate = {for (final d in week) d.dateStr: d};
+
+      expect(byDate['2026-08-31']!.hours, 8.0);
+      expect(byDate['2026-09-01']!.hours, 9.0);
+    });
+  });
 }
