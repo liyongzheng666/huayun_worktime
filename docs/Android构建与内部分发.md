@@ -73,7 +73,7 @@ git push origin v2.4.0+4
 
 工作流会依次执行依赖安装、静态检查、完整测试、release 构建、签名证书指纹验证、SHA-256 生成和 GitHub Release 上传。tag、APK 名称和 `pubspec.yaml` 任一版本不一致都会失败。
 
-2026-08-08 已用 `workflow_dispatch` 完成不发布干跑：Actions run `31259428064` 的静态检查、263 条测试、release 构建、产物命名、SHA-256 和固定证书指纹检查全部通过，且未创建 GitHub Release。
+2026-08-08 已用 `workflow_dispatch` 完成当前代码提交的不发布干跑：Actions run `31260530249` 的静态检查、263 条测试、release 构建、产物命名、SHA-256 和固定证书指纹检查全部通过，且未创建 GitHub Release。
 
 ## App 内更新
 

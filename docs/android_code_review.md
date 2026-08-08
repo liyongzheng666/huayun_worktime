@@ -131,7 +131,7 @@ API 参考：见 `docs/hikiot_api_reference.md`。
 - 增加 APK 下载进度、SHA-256 原生复核、未知来源授权和系统安装确认页；不实现普通 App 无权执行的静默安装。
 - APK 与 tag 同时编码 `versionName + versionCode`，远端更新只按 `versionCode` 判断，避免字符串版本比较错误。
 - 本地 `2.4.0+4` release APK 已使用固定证书构建并通过 `apksigner` 验证。
-- GitHub Actions 不发布干跑 `31259428064` 已通过静态检查、263 条测试、release 构建、产物命名、SHA-256 和证书指纹检查，未创建 Release。
+- 当前代码提交的 GitHub Actions 不发布干跑 `31260530249` 已通过静态检查、263 条测试、release 构建、产物命名、SHA-256 和证书指纹检查，未创建 Release。
 - Android 15 / API 35 模拟器从固定签名 `2.3.1+3` 原地升级至 `2.4.0+4` 成功，冷启动无崩溃，且免责声明确认状态保留。
 - 清理启动页硬编码 `v2.0` 和未使用的过期版本常量，避免新 APK 仍展示旧版本。
 
