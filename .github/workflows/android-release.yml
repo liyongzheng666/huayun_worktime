@@ -124,9 +124,9 @@ jobs:
           apk_path="build/app/outputs/flutter-apk/${APK_NAME}"
           apksigner_path="$(find "${ANDROID_HOME}/build-tools" -mindepth 2 -maxdepth 2 -type f -name apksigner | sort -V | tail -n 1)"
           "${apksigner_path}" verify --verbose --print-certs "${apk_path}" | tee "${RUNNER_TEMP}/apksigner.txt"
-          actual_fingerprint="$(sed -n 's/^Signer #1 certificate SHA-256 digest: //p' "${RUNNER_TEMP}/apksigner.txt")"
+          actual_fingerprint="$(sed -n 's/^.*certificate SHA-256 digest: //p' "${RUNNER_TEMP}/apksigner.txt" | head -n 1)"
 
-          if [[ "${actual_fingerprint}" != "${EXPECTED_CERT_SHA256}" ]]; then
+          if [[ -z "${actual_fingerprint}" || "${actual_fingerprint}" != "${EXPECTED_CERT_SHA256}" ]]; then
             echo "APK 签名证书与项目固定证书不一致" >&2
             exit 1
           fi
