@@ -75,6 +75,8 @@ git push origin v2.4.0+4
 
 2026-08-08 已用 `workflow_dispatch` 完成当前代码提交的不发布干跑：Actions run `31260530249` 的静态检查、263 条测试、release 构建、产物命名、SHA-256 和固定证书指纹检查全部通过，且未创建 GitHub Release。
 
+2026-08-08 已推送 tag `v2.4.0+4` 并完成首次正式发布：Actions run `31261635489` 全部通过，GitHub Release 已上传 `huayun-worktime-v2.4.0+4.apk` 和同名 `.sha256`。云端 APK SHA-256 为 `4bcdf45bc4d073c21adf3dfb582157f784da18d17fcf9104387b597ff1a9b346`。
+
 ## App 内更新
 
 - Android 启动后异步访问公开 GitHub Releases API；5 秒内无法完成检查则静默失败，不影响登录、工时和提醒功能。
@@ -91,4 +93,4 @@ GitHub 在中国大陆不可达时，自动检查保持静默。使用者可以�
 
 - Android 15 / API 35 模拟器已验证：固定签名的 `2.3.1+3` 可通过 `adb install -r` 覆盖升级到 `2.4.0+4`，新版能正常冷启动，已确认的免责声明状态保留。
 - 模拟器已覆盖“同签名覆盖安装 + 基础本地状态保留 + 启动无崩溃”，但不替代实际手机的 ROM 和权限差异验收。
-- 首个正式 Release 前仍需：在公司实际 Android 手机上验证 App 内发现更新、下载、“安装未知应用”授权、系统安装确认、业务数据保留，并完成 keystore 离机加密备份。
+- 正式 Release 已按用户要求创建。发放给更多同事前仍需在公司实际 Android 手机上验证 App 内发现更新、下载、“安装未知应用”授权、系统安装确认、业务数据保留，并完成 keystore 离机加密备份。

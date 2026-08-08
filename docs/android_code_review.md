@@ -132,6 +132,7 @@ API 参考：见 `docs/hikiot_api_reference.md`。
 - APK 与 tag 同时编码 `versionName + versionCode`，远端更新只按 `versionCode` 判断，避免字符串版本比较错误。
 - 本地 `2.4.0+4` release APK 已使用固定证书构建并通过 `apksigner` 验证。
 - 当前代码提交的 GitHub Actions 不发布干跑 `31260530249` 已通过静态检查、263 条测试、release 构建、产物命名、SHA-256 和证书指纹检查，未创建 Release。
+- tag `v2.4.0+4` 的正式发布任务 `31261635489` 已全部通过，GitHub Release 已上传签名 APK 与 SHA-256 文件；下载后复核证书指纹与项目固定证书一致。
 - Android 15 / API 35 模拟器从固定签名 `2.3.1+3` 原地升级至 `2.4.0+4` 成功，冷启动无崩溃，且免责声明确认状态保留。
 - 清理启动页硬编码 `v2.0` 和未使用的过期版本常量，避免新 APK 仍展示旧版本。
 
