@@ -787,7 +787,18 @@ class _WorkReportWebViewScreenState extends State<WorkReportWebViewScreen> {
       if (!mounted) return;
 
       if (projects.isEmpty) {
-        _notify('没扫到项目。请在网页上打开一次首页或「我的工作日志」');
+        // 光说「没扫到」等于把排查甩回给用户。抓包为空、没登录、
+        // 形状不认识是三种完全不同的原因，诊断脚本本来就分得清，
+        // 直接把结论讲出来，省掉一轮「导出报告→找人看」
+        final (conclusion, _) = await WorkLogSubmitService(
+          controller,
+        ).collectDiagnostics(await _preferredProjectName());
+        if (!mounted) return;
+        _notify(
+          conclusion == null || conclusion.isEmpty
+              ? '没扫到项目。请在网页上打开一次首页或「我的工作日志」'
+              : '没扫到项目：$conclusion',
+        );
         return;
       }
 
@@ -796,7 +807,7 @@ class _WorkReportWebViewScreenState extends State<WorkReportWebViewScreen> {
       if (!mounted) return;
       _notify('已复制 ${projects.length} 个项目候选（不含凭据）');
     } catch (e) {
-      _notify('导出项目候选失败: \$e');
+      _notify('导出项目候选失败: $e');
     }
   }
 
@@ -814,12 +825,18 @@ class _WorkReportWebViewScreenState extends State<WorkReportWebViewScreen> {
 
     try {
       final service = WorkLogSubmitService(controller);
-      final (_, report) = await service.collectDiagnostics(
+      final (conclusion, report) = await service.collectDiagnostics(
         await _preferredProjectName(),
       );
       await Clipboard.setData(ClipboardData(text: report));
       if (!mounted) return;
-      _notify('已复制服务清单（凭据已打码，${report.length} 字符）');
+      // 结论比字符数有用得多：抓包为空时，报告里全是零，
+      // 而「未捕获到会话」这一句才是用户真正要看到的
+      _notify(
+        conclusion == null || conclusion.isEmpty
+            ? '已复制服务清单（凭据已打码）'
+            : '已复制服务清单。$conclusion',
+      );
     } catch (e) {
       _notify('导出服务清单失败: $e');
     }
