@@ -208,6 +208,34 @@ void main() {
       expect(find.text('某项目'), findsOneWidget);
       expect(find.textContaining('CSV 里写的是'), findsNothing);
     });
+
+    testWidgets('没有 BOSS 名时必须说破，并把项目 ID 摆出来', (tester) async {
+      // 实际踩过：没有 BOSS 名时界面只显示 CSV 的写法且不加任何提示，
+      // 看起来完全正常，用户于是把日志提交到了别的项目下也毫无察觉。
+      // 没有任何东西能证明这个名字和 PROJECTID 指向同一个项目。
+      await pumpDialog(
+        tester,
+        hours: const WorkLogHours(hours: 8),
+        constants: const {'auditorName': '张三', 'projectId': 'PROJECT_aaa'},
+      );
+
+      expect(find.textContaining('未能确认 BOSS 那边的项目名'), findsOneWidget);
+      expect(find.textContaining('PROJECT_aaa'), findsOneWidget);
+    });
+
+    testWidgets('有 BOSS 名时不挂这条警告，免得喧宾夺主', (tester) async {
+      await pumpDialog(
+        tester,
+        hours: const WorkLogHours(hours: 8),
+        constants: const {
+          'auditorName': '张三',
+          'projectId': 'PROJECT_aaa',
+          'projectName': '某项目(2)',
+        },
+      );
+
+      expect(find.textContaining('未能确认 BOSS 那边的项目名'), findsNothing);
+    });
   });
 
   group('改选项目入口', () {

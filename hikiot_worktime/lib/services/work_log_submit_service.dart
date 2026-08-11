@@ -71,6 +71,19 @@ class WorkLogSubmitService {
   /// 记录「这份配置是为 CSV 里的哪个项目名学的」，作为缓存匹配键。
   static const String bindingKey = 'csvProjectName';
 
+  /// 标记这份配置是用户在「提交配置」里**手工填**的。
+  ///
+  /// 必须把手工配置和「自动学到但没带项目名」区分开。两者存下来长得一模一样
+  /// （都只有三个 ID、没有 `projectName`），但含义相反：手工填的是用户自己
+  /// 负责、有意为之；自动学到却没名字的那份**恰恰是最可疑的一种**——
+  /// `learnConstants` 的第 2、3 条来源（保存报文 / 正则扫描）只吐三个 ID，
+  /// 名字一律为空，而它们扫到的可能根本是别的项目。
+  ///
+  /// 早先两者共用同一条「没名字就放行」的分支，后果是：这类配置对**任何**
+  /// CSV 项目名都判为可用，于是永远命中缓存、永不重学、永不弹选择框，
+  /// 确认框里也因为没有 BOSS 名而不做任何提示——项目对不上却一路畅通。
+  static const String manualKey = 'manual';
+
   /// 已保存的配置是否可用于 CSV 里的 [csvProjectName] 这个项目。
   ///
   /// 用户的项目和审核人会换，一次学会就永久沿用是错的：换项目后继续用
@@ -87,13 +100,23 @@ class WorkLogSubmitService {
   ) {
     if (saved['projectId']?.isNotEmpty != true) return false;
 
+    // 手工填的配置没有项目名可比，拦下来只会让用户没法用自己填的东西。
+    // 这是他自己的决定，也只有他能判断对不对。
+    if (saved[manualKey] == 'true') return true;
+
     final boundTo = saved[bindingKey];
     if (boundTo == null) {
       // 旧版本存的配置没有绑定键。名字一致的可以就地认作已绑定；
       // 不一致的恰恰可能是当初静默 fallback 学来的，不能无声沿用，
-      // 交给调用方重学一次并让用户确认。
+      // 交给调用方重新解析一次并让用户确认。
       final bossName = saved['projectName'] ?? '';
-      if (bossName.isEmpty || csvProjectName.isEmpty) return true;
+
+      // **没有 BOSS 项目名 = 无从核对，一律视为未绑定。**
+      // 这里以前是无条件放行，结果自动学到的无名配置对任何 CSV 项目名都算数，
+      // 于是永远命中缓存、永不重学，项目对不上也一路畅通直到提交成功。
+      if (bossName.isEmpty) return false;
+
+      if (csvProjectName.isEmpty) return true;
       return bossName == csvProjectName;
     }
 
@@ -135,11 +158,12 @@ class WorkLogSubmitService {
   Future<BossConstantsResolution> resolveConstants(String csvProjectName) async {
     final remembered = await _rememberedConstants(csvProjectName);
     if (remembered != null) {
+      // 已经绑好了，不该为了「万一用户要改选」去等清单——扫一次就走，
+      // 扫到就在确认框里给「改选」入口，扫不到这次就没有，不影响提交
+      final projects = await listProjects(retries: 0);
       return BossConstantsResolution(
-        constants: remembered,
-        // 已经绑好了，不该为了「万一用户要改选」去等清单——扫一次就走，
-        // 扫到就在确认框里给「改选」入口，扫不到这次就没有，不影响提交
-        projects: await listProjects(retries: 0),
+        constants: fillProjectName(remembered, projects),
+        projects: projects,
       );
     }
 
@@ -236,6 +260,37 @@ class WorkLogSubmitService {
     final id = learned?['auditor'] ?? '';
     if (!id.startsWith(';USERINFO_')) return null;
     return BossAuditor(id: id, name: learned?['auditorName'] ?? '');
+  }
+
+  /// 配置里缺 BOSS 项目名时，按 `projectId` 从清单里反查补上。
+  ///
+  /// 「有 ID 没名字」的配置是历史遗留：`learnConstants` 的保存报文 / 正则扫描
+  /// 两条来源只吐三个 ID。名字缺失的直接后果是**用户没法在确认框里核对**——
+  /// 界面只能显示 CSV 的写法，看起来一切正常，实际可能指向别的项目。
+  /// 现在既然爬得到全量清单，就地把名字补回去，这类配置自己就治好了。
+  ///
+  /// 查不到就保持原样：补不上时确认框会挂出「未能确认 BOSS 那边的项目名」，
+  /// 那也比编一个名字强。
+  static Map<String, String> fillProjectName(
+    Map<String, String> constants,
+    List<BossProject> projects,
+  ) {
+    if (constants['projectName']?.isNotEmpty == true) return constants;
+
+    final id = constants['projectId'] ?? '';
+    if (id.isEmpty) return constants;
+
+    for (final project in projects) {
+      if (project.id != id) continue;
+      return {
+        ...constants,
+        'projectName': project.name,
+        // 编码同样可能是空的，顺手补齐；但绝不覆盖已有的值
+        if (constants['projectCode']?.isNotEmpty != true && project.code.isNotEmpty)
+          'projectCode': project.code,
+      };
+    }
+    return constants;
   }
 
   /// 清单里名字与 [csvProjectName] 一字不差的项目，没有则返回 null。

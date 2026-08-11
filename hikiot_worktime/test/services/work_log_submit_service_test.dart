@@ -62,10 +62,47 @@ void main() {
     });
 
     test('手工配置（没有任何项目名）不被阻塞', () {
-      // 手工填的只有三个 ID，没有项目名可比，此时不该拦下用户
-      final manual = {'projectId': 'PROJECT_aaa', 'auditor': ';USERINFO_ccc'};
+      // 手工填的只有三个 ID，没有项目名可比，此时不该拦下用户。
+      // 但必须带上手工标记才算数，见下一条。
+      final manual = {
+        'projectId': 'PROJECT_aaa',
+        'auditor': ';USERINFO_ccc',
+        WorkLogSubmitService.manualKey: 'true',
+      };
 
       expect(WorkLogSubmitService.constantsUsableFor(manual, _csvName), isTrue);
+    });
+
+    test('自动学到却没有项目名的配置，一律视为未绑定', () async {
+      // 这是实际发生过的一次静默错误提交的根因。
+      //
+      // learnConstants 的第 2、3 条来源（保存报文 / 正则扫描）只吐三个 ID，
+      // projectName 一律为空。这类配置以前和手工配置共用「没名字就放行」
+      // 的分支，于是对**任何** CSV 项目名都判为可用：永远命中缓存、
+      // 永不重学、永不弹选择框；确认框又因为没有 BOSS 名而不做任何提示。
+      // 结果是 CSV 项目名与实际项目对不上，却一路畅通直到提交成功。
+      final learned = {
+        'projectId': 'PROJECT_aaa',
+        'projectCode': 'PROJECT_bbb',
+        'auditor': ';USERINFO_ccc',
+        'projectName': '',
+        'auditorName': '',
+      };
+
+      expect(
+        WorkLogSubmitService.constantsUsableFor(learned, _csvName),
+        isFalse,
+      );
+    });
+
+    test('手工标记只认真正手工填的那一份', () {
+      // 免得将来有人顺手把 manualKey 抄进自动学习的产物里，把洞又开回来
+      final learned = {'projectId': 'PROJECT_aaa', 'projectName': ''};
+
+      expect(
+        WorkLogSubmitService.constantsUsableFor(learned, _csvName),
+        isFalse,
+      );
     });
   });
 
@@ -191,6 +228,57 @@ void main() {
       );
 
       expect(await storage.loadBossBindings(), isEmpty);
+    });
+  });
+
+  group('从清单反查补上缺失的项目名', () {
+    // 「有 ID 没名字」的配置来自 learnConstants 的保存报文 / 正则扫描两条来源。
+    // 名字缺失的直接后果是用户在确认框里无从核对——界面只能显示 CSV 的写法，
+    // 看起来一切正常，实际可能指向别的项目。现在爬得到全量清单，就地补回去。
+    const projects = [
+      BossProject(id: 'PROJECT_aaa', name: _bossName, code: 'PROJECT_bbb'),
+      BossProject(id: 'PROJECT_zzz', name: '运维平台三期'),
+    ];
+
+    test('按项目 ID 补上名字，顺带补编码', () {
+      final filled = WorkLogSubmitService.fillProjectName(
+        {'projectId': 'PROJECT_aaa', 'auditor': ';USERINFO_ccc'},
+        projects,
+      );
+
+      expect(filled['projectName'], _bossName);
+      expect(filled['projectCode'], 'PROJECT_bbb');
+    });
+
+    test('已有的名字和编码绝不覆盖', () {
+      final filled = WorkLogSubmitService.fillProjectName(
+        {
+          'projectId': 'PROJECT_aaa',
+          'projectName': '用户自己确认过的写法',
+          'projectCode': 'PROJECT_原本的',
+        },
+        projects,
+      );
+
+      expect(filled['projectName'], '用户自己确认过的写法');
+      expect(filled['projectCode'], 'PROJECT_原本的');
+    });
+
+    test('清单里查不到就保持原样，不编一个名字', () {
+      // 补不上时确认框会挂出「未能确认 BOSS 那边的项目名」，那也比编强
+      final filled = WorkLogSubmitService.fillProjectName(
+        {'projectId': 'PROJECT_不在清单里'},
+        projects,
+      );
+
+      expect(filled['projectName'] ?? '', '');
+    });
+
+    test('没有项目 ID 时原样返回，不至于崩', () {
+      expect(
+        WorkLogSubmitService.fillProjectName(const {}, projects),
+        isEmpty,
+      );
     });
   });
 

@@ -107,6 +107,7 @@ class WorkLogConfirmDialog {
                   _buildProjectRow(
                     csvName: entry.projectName,
                     bossName: constants['projectName'] ?? '',
+                    projectId: constants['projectId'] ?? '',
                     onChange: canChangeProject
                         ? () => Navigator.pop(
                             dialogContext,
@@ -235,6 +236,7 @@ class WorkLogConfirmDialog {
   static Widget _buildProjectRow({
     required String csvName,
     required String bossName,
+    String projectId = '',
     VoidCallback? onChange,
   }) {
     // 手工配置的没有 BOSS 名，此时提交的就是 CSV 的写法
@@ -277,6 +279,17 @@ class WorkLogConfirmDialog {
             Text(
               'CSV 里写的是「$csvName」，已按 BOSS 的名称提交',
               style: TextStyle(fontSize: 10, color: Colors.grey[600]),
+            ),
+          // 没有 BOSS 项目名时，上面显示的其实是 CSV 的写法，**没有任何东西
+          // 证明它和 PROJECTID 指向同一个项目**。这里必须说破：以前不说，
+          // 用户看到的是一个「看起来完全正常」的项目名，于是把日志提交到了
+          // 别的项目下也毫无察觉。
+          if (bossName.isEmpty)
+            Text(
+              '⚠️ 未能确认 BOSS 那边的项目名，上面是 CSV 的写法。'
+              '决定工时记到哪个项目的是项目 ID，请核对：'
+              '${projectId.isEmpty ? '（空）' : projectId}',
+              style: TextStyle(fontSize: 10, color: AppColors.warningDark),
             ),
         ],
       ),

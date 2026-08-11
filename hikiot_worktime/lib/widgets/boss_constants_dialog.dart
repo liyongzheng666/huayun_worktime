@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 
 import '../core/theme/theme.dart';
 import '../services/storage_service.dart';
+import '../services/work_log_submit_service.dart';
 
 /// BOSS 提交配置对话框
 ///
@@ -72,6 +73,10 @@ class _BossConstantsDialogState extends State<BossConstantsDialog> {
       'projectId': _projectIdController.text.trim(),
       'projectCode': _projectCodeController.text.trim(),
       'auditor': _auditorController.text.trim(),
+      // 标明是手工填的。手工配置和「自动学到但没带项目名」存下来长得一样，
+      // 但只有前者该在没有项目名时照样放行——后者恰恰最可疑，
+      // 不打标记的话两者会共用同一条放行分支，项目对不上也不会有人拦
+      WorkLogSubmitService.manualKey: 'true',
     });
     if (!mounted) return;
     Navigator.pop(context, true);
