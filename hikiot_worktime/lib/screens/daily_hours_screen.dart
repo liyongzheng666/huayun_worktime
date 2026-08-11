@@ -7,6 +7,7 @@ import '../services/daily_attendance_repository.dart';
 import '../services/storage_service.dart';
 import '../services/token_expired_service.dart';
 import '../utils/work_time_calculator.dart';
+import '../widgets/collapsed_target_goal.dart';
 import '../utils/haptic_utils.dart';
 import '../utils/date_helper.dart';
 import '../utils/target_progress_helper.dart';
@@ -1402,77 +1403,22 @@ class DailyHoursScreenState extends State<DailyHoursScreen>
   }
 
   /// 折叠的目标显示
+  ///
+  /// 卡片本体在 [CollapsedTargetGoal]：每日与月度两页要求完全一致，
+  /// 各抄一份的结果是同一个渲染 BUG 犯两次。
   Widget _buildCollapsedGoal(
     int target,
     double currentHours,
     double targetHours, {
     bool isBaseTarget = false,
   }) {
-    final isPinned = _pinnedTarget == target;
-    return GestureDetector(
-      onLongPress: () async {
-        await HapticFeedback.mediumImpact();
-        _togglePinnedTarget(target);
-      },
-      child: Card(
-        color: Colors.green[50],
-        margin: const EdgeInsets.only(bottom: 8),
-        shape: isPinned
-            ? RoundedRectangleBorder(
-                borderRadius: BorderRadius.circular(4),
-                side: const BorderSide(color: Colors.amber, width: 2),
-              )
-            : null,
-        child: Padding(
-          padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
-          // Wrap 而非 Row：后面还跟着徽章，字体放大时会把文字顶出去
-          child: Wrap(
-            crossAxisAlignment: WrapCrossAlignment.center,
-            spacing: 6,
-            runSpacing: 4,
-            children: [
-              const Icon(Icons.check_circle, color: Colors.green, size: 18),
-              Text(
-                '$target% 目标已达成',
-                style: const TextStyle(
-                  fontSize: 13,
-                  fontWeight: FontWeight.bold,
-                ),
-              ),
-              if (isBaseTarget) ...[
-                // Wrap 自带 spacing，这里不再需要手动间隔
-                Container(
-                  padding: const EdgeInsets.symmetric(
-                    horizontal: 6,
-                    vertical: 2,
-                  ),
-                  decoration: BoxDecoration(
-                    color: Colors.orange,
-                    borderRadius: BorderRadius.circular(4),
-                  ),
-                  child: const Text(
-                    '基准',
-                    style: TextStyle(
-                      fontSize: 10,
-                      color: Colors.white,
-                      fontWeight: FontWeight.bold,
-                    ),
-                  ),
-                ),
-              ],
-              if (isPinned) ...[
-                const SizedBox(width: 6),
-                Icon(Icons.push_pin, size: 14, color: Colors.amber[700]),
-              ],
-              const Spacer(),
-              Text(
-                '${WorkTimeCalculator.formatHours(currentHours)}h / ${WorkTimeCalculator.formatHours(targetHours)}h',
-                style: TextStyle(fontSize: 11, color: Colors.grey[600]),
-              ),
-            ],
-          ),
-        ),
-      ),
+    return CollapsedTargetGoal(
+      target: target,
+      currentHours: currentHours,
+      targetHours: targetHours,
+      isBaseTarget: isBaseTarget,
+      isPinned: _pinnedTarget == target,
+      onPinToggle: () => _togglePinnedTarget(target),
     );
   }
 
