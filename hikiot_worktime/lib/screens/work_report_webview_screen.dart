@@ -132,12 +132,15 @@ class _WorkReportWebViewScreenState extends State<WorkReportWebViewScreen> {
                   _clearCapture();
                 case 'exportCapture':
                   _exportCapture();
+                case 'exportProjects':
+                  _exportProjects();
               }
             },
             itemBuilder: (_) => const [
               PopupMenuItem(value: 'dom', child: Text('导出页面结构')),
               PopupMenuItem(value: 'clearCapture', child: Text('① 清空抓包')),
               PopupMenuItem(value: 'exportCapture', child: Text('② 导出抓包')),
+              PopupMenuItem(value: 'exportProjects', child: Text('导出项目候选')),
             ],
           ),
         ],
@@ -596,18 +599,23 @@ class _WorkReportWebViewScreenState extends State<WorkReportWebViewScreen> {
       if (!resolution.needsBindingConfirm) return learned;
 
       // 项目名对不上，必须先确认是同一个项目——弹的是与后台提交同一个框
+      final projects = await service.listProjects();
       if (!mounted) return null;
-      final sameProject = await WorkLogBindingConfirmDialog.show(
+      final choice = await WorkLogBindingConfirmDialog.show(
         context: context,
         csvProjectName: projectName,
         constants: learned,
+        projects: projects,
       );
       if (!mounted) return null;
-      if (!sameProject) {
+      if (!choice.confirmed) {
         _notify('已取消。请在工作日志页的「提交配置」里手工填写正确的项目 ID');
         return null;
       }
-      return WorkLogSubmitService.bindConstants(learned, projectName);
+      final chosen = choice.project == null
+          ? learned
+          : WorkLogSubmitService.constantsForProject(learned, choice.project!);
+      return WorkLogSubmitService.bindConstants(chosen, projectName);
     }
 
     // 项目变了却学不到新配置时，宁可停下也不能拿旧项目的 ID 提交
@@ -759,6 +767,33 @@ class _WorkReportWebViewScreenState extends State<WorkReportWebViewScreen> {
       _notify('已复制抓包结果（${text.length} 字符）');
     } catch (e) {
       _notify('导出抓包失败: $e');
+    }
+  }
+
+  /// 导出扫到的项目候选，用于核对「我的项目」网格有没有被抓到。
+  ///
+  /// 与「导出抓包」不同，**这份输出可以安全外发**：只含项目名与
+  /// `PROJECT_` 标识，不含任何凭据。原始抓包里每个请求体都带明文
+  /// `Password`（见 docs/踩坑记录.md 3.12），那份绝不能外发。
+  Future<void> _exportProjects() async {
+    final controller = _controller;
+    if (controller == null) return;
+
+    try {
+      final projects = await WorkLogSubmitService(controller).listProjects();
+      if (!mounted) return;
+
+      if (projects.isEmpty) {
+        _notify('没扫到项目。请在网页上打开一次首页或「我的工作日志」');
+        return;
+      }
+
+      final text = projects.map((p) => '\${p.name}\t\${p.id}').join('\n');
+      await Clipboard.setData(ClipboardData(text: text));
+      if (!mounted) return;
+      _notify('已复制 \${projects.length} 个项目候选（不含凭据）');
+    } catch (e) {
+      _notify('导出项目候选失败: \$e');
     }
   }
 

@@ -8,6 +8,7 @@ import '../utils/work_log_constants_scanner.dart';
 import '../utils/work_log_csv_parser.dart';
 import '../utils/work_log_diagnostics_script.dart';
 import '../utils/work_log_history_lookup.dart';
+import '../utils/work_log_project_list_lookup.dart';
 import '../utils/work_log_request_capture.dart';
 import '../utils/work_log_submit_script.dart';
 import 'storage_service.dart';
@@ -130,6 +131,25 @@ class WorkLogSubmitService {
       ? constants['projectName']!
       : csvProjectName;
 
+  /// 用户在确认框里改选了别的项目时，据此重建配置。
+  ///
+  /// **`projectCode` 必须清空**：它属于原来那个项目，带过去就是一个
+  /// 确定错误的值；留空则由服务端兜底（手工配置一直是这么用的）。
+  ///
+  /// **`auditor` 保留**：我们只从项目清单拿到了名字和 ID，没有新项目的
+  /// 审核人。清空会直接提交失败，沿用则大概率正确——工作日志的审核人
+  /// 通常跟着人走而不是跟着项目走。但这终究是个假设，因此界面上必须
+  /// 提示用户去核对，不能默默替换。
+  static Map<String, String> constantsForProject(
+    Map<String, String> constants,
+    BossProject project,
+  ) => {
+    ...constants,
+    'projectId': project.id,
+    'projectName': project.name,
+    'projectCode': '',
+  };
+
   /// 记住「这份配置对应 CSV 里的哪个项目」，之后同名项目不再询问也不再重学。
   ///
   /// 做成静态方法是因为它只写存储、不碰网页：用户在确认框上点「是同一个」时，
@@ -193,6 +213,28 @@ class WorkLogSubmitService {
     }
 
     return null;
+  }
+
+  /// 扫出抓包里能认出的所有 BOSS 项目。
+  ///
+  /// **必须重试**：会话就绪的判定只要求抓到任意一条带 `para` 的请求
+  /// （见 `BossSessionRunner._awaitSession`），而首页的「我的项目」网格
+  /// 往往稍晚才返回。第一次扫空就断定「没有项目」是错的。
+  ///
+  /// 扫不到时返回空列表，调用方应退回到不依赖项目清单的老路径。
+  Future<List<BossProject>> listProjects({
+    int retries = 6,
+    Duration interval = const Duration(milliseconds: 500),
+  }) async {
+    for (var attempt = 0; ; attempt++) {
+      final projects = WorkLogProjectListLookup.parse(
+        await runScript(
+          WorkLogProjectListLookup.build(captureStoreName: _store),
+        ),
+      );
+      if (projects.isNotEmpty || attempt >= retries) return projects;
+      await Future.delayed(interval);
+    }
   }
 
   /// 查询该日在 BOSS 已填报的工时，取不到返回 null（未知，不等于 0）。

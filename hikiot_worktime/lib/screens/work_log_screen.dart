@@ -11,6 +11,7 @@ import '../services/work_log_repository.dart';
 import '../utils/date_helper.dart';
 import '../utils/haptic_utils.dart';
 import '../utils/work_log_csv_parser.dart';
+import '../utils/work_log_project_list_lookup.dart';
 import '../utils/work_time_calculator.dart';
 import '../services/boss_session_runner.dart';
 import '../services/work_log_submit_service.dart';
@@ -220,6 +221,11 @@ class WorkLogScreenState extends State<WorkLogScreen> {
         constants: resolution.constants,
         existingHours: await service.queryExistingHours(draft.date),
         needsBindingConfirm: resolution.needsBindingConfirm,
+        // 只在真要弹确认框时才扫：listProjects 带重试，
+        // 无谓地挂在每次提交上会白白拖慢正常路径
+        projects: resolution.needsBindingConfirm
+            ? await service.listProjects()
+            : const [],
       );
     });
 
@@ -247,15 +253,27 @@ class WorkLogScreenState extends State<WorkLogScreen> {
     // 名字对不上意味着自动匹配没命中，学到的可能根本是别的项目的 ID。
     var constants = prep.constants!;
     if (prep.needsBindingConfirm) {
-      final sameProject = await WorkLogBindingConfirmDialog.show(
+      final choice = await WorkLogBindingConfirmDialog.show(
         context: context,
         csvProjectName: entry.projectName,
         constants: constants,
+        projects: prep.projects,
       );
       if (!mounted) return;
-      if (!sameProject) {
-        _showMessage('已取消提交。请在「提交配置」里手工填写正确的项目 ID');
+      if (!choice.confirmed) {
+        _showMessage(
+          prep.projects.isEmpty
+              ? '已取消提交。请在「提交配置」里手工填写正确的项目 ID'
+              : '已取消提交。若清单里没有正确的项目，可在「提交配置」里手工填 ID',
+        );
         return;
+      }
+      // 用户改选了别的项目时按新项目重建配置
+      if (choice.project != null) {
+        constants = WorkLogSubmitService.constantsForProject(
+          constants,
+          choice.project!,
+        );
       }
       // 确认后才落绑定：用户否认时不留下错误的对应关系
       constants = await WorkLogSubmitService.bindConstants(
@@ -814,13 +832,15 @@ class _SubmitPreparation {
     this.constants,
     this.existingHours,
     this.needsBindingConfirm = false,
+    this.projects = const [],
   }) : conclusion = null,
        diagnostics = null;
 
   const _SubmitPreparation.failed(this.conclusion, this.diagnostics)
     : constants = null,
       existingHours = null,
-      needsBindingConfirm = false;
+      needsBindingConfirm = false,
+      projects = const [];
 
   final Map<String, String>? constants;
   final double? existingHours;
@@ -829,4 +849,7 @@ class _SubmitPreparation {
 
   /// 学到的项目名与 CSV 对不上，提交前要先让用户确认是同一个项目。
   final bool needsBindingConfirm;
+
+  /// 抓包里扫到的 BOSS 项目清单，供确认框列候选；扫不到时为空。
+  final List<BossProject> projects;
 }

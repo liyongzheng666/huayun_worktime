@@ -147,6 +147,57 @@ class BossSessionScript {
     ''';
   }
 
+  /// 网格响应的解包工具。
+  ///
+  /// BOSS 的列表类响应统一是「多层转义的 JSON 里包一个 Rows 网格」，
+  /// 每行是一组 `{ColName, ColText, ColValue}` 列对象。历史日志查询和
+  /// 项目清单扫描都要拆它，因此收在这里共用。
+  ///
+  /// **同一列里谁是标识并不固定**：`PROJECTID` 列的 ID 在 `ColValue`、
+  /// 项目名反而在 `ColText`，而伴生列 `PROJECTID$DBValue` 的 ID 在 `ColText`。
+  /// 所以 [pickId] 两边都试，以前缀判定谁才是真正的标识。
+  static String gridPreamble() {
+    return '''
+      // 响应是多层转义的 JSON，逐层解开后取出网格对象
+      function unwrapGrid(text) {
+        try {
+          var lvl1 = JSON.parse(text).d;
+          var lvl2 = (typeof lvl1 === 'string') ? JSON.parse(lvl1) : lvl1;
+          var grid = (lvl2 && lvl2.d !== undefined) ? lvl2.d : lvl2;
+          return (grid && grid.Rows && grid.Rows.length) ? grid : null;
+        } catch (e) {
+          return null;
+        }
+      }
+
+      // 一行 = 一组列对象，转成 列名 -> {text, value} 便于按名取值
+      function rowMap(row) {
+        var map = {};
+        for (var i = 0; i < row.length; i++) {
+          var col = row[i];
+          if (!col || !col.ColName) continue;
+          map[col.ColName] = { text: col.ColText, value: col.ColValue };
+        }
+        return map;
+      }
+
+      // 取某列符合前缀的那个值，ColValue / ColText 两边都试
+      function pickId(map, colName, prefix) {
+        var names = [colName, colName + '\$DBValue'];
+        for (var n = 0; n < names.length; n++) {
+          var col = map[names[n]];
+          if (!col) continue;
+          var candidates = [col.value, col.text];
+          for (var c = 0; c < candidates.length; c++) {
+            var v = candidates[c];
+            if (typeof v === 'string' && v.indexOf(prefix) === 0) return v;
+          }
+        }
+        return '';
+      }
+    ''';
+  }
+
   /// 生成「未捕获到会话」的统一返回值，各脚本提示文案保持一致。
   static const String noSessionResult =
       '''JSON.stringify({

@@ -49,6 +49,7 @@ class WorkLogHistoryLookup {
       (function() {
         ${BossSessionScript.sessionPreamble(captureStoreName: captureStoreName)}
         ${BossSessionScript.callPreamble()}
+        ${BossSessionScript.gridPreamble()}
 
         var SERVICE_URI = ${jsonEncode(serviceUri)};
         var PREFERRED = ${jsonEncode(preferredProjectName)};
@@ -68,47 +69,6 @@ class WorkLogHistoryLookup {
             } catch (err) {}
           }
           return null;
-        }
-
-        // 响应是多层转义的 JSON，逐层解开后取出网格对象
-        function unwrapGrid(text) {
-          try {
-            var lvl1 = JSON.parse(text).d;
-            var lvl2 = (typeof lvl1 === 'string') ? JSON.parse(lvl1) : lvl1;
-            var grid = (lvl2 && lvl2.d !== undefined) ? lvl2.d : lvl2;
-            return (grid && grid.Rows && grid.Rows.length) ? grid : null;
-          } catch (e) {
-            return null;
-          }
-        }
-
-        // 一行 = 一组列对象，转成 列名 -> {text, value} 便于按名取值
-        function rowMap(row) {
-          var map = {};
-          for (var i = 0; i < row.length; i++) {
-            var col = row[i];
-            if (!col || !col.ColName) continue;
-            map[col.ColName] = { text: col.ColText, value: col.ColValue };
-          }
-          return map;
-        }
-
-        // 取某列符合前缀的那个值。
-        // 同一列里 ColText 与 ColValue 谁是标识并不固定
-        // （PROJECTID 的 ID 在 ColValue，而 PROJECTID\$DBValue 的在 ColText），
-        // 因此两边都试，并以前缀判定谁才是真正的标识。
-        function pickId(map, colName, prefix) {
-          var names = [colName, colName + '\$DBValue'];
-          for (var n = 0; n < names.length; n++) {
-            var col = map[names[n]];
-            if (!col) continue;
-            var candidates = [col.value, col.text];
-            for (var c = 0; c < candidates.length; c++) {
-              var v = candidates[c];
-              if (typeof v === 'string' && v.indexOf(prefix) === 0) return v;
-            }
-          }
-          return '';
         }
 
         function readRow(map) {

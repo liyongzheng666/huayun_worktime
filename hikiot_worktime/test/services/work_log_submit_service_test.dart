@@ -1,6 +1,7 @@
 import 'package:flutter_test/flutter_test.dart';
 import 'package:hikiot_worktime/services/storage_service.dart';
 import 'package:hikiot_worktime/services/work_log_submit_service.dart';
+import 'package:hikiot_worktime/utils/work_log_project_list_lookup.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
 /// BOSS 那边的项目名比 CSV 多一个「(2)」——用户实际遇到的差异
@@ -133,6 +134,48 @@ void main() {
         ),
         _csvName,
       );
+    });
+  });
+
+  group('改选项目后重建配置', () {
+    const learned = {
+      'projectId': 'PROJECT_aaa',
+      'projectCode': 'PROJECT_bbb',
+      'auditor': ';USERINFO_ccc',
+      'auditorName': '张三',
+      'projectName': _bossName,
+    };
+    const picked = BossProject(id: 'PROJECT_zzz', name: '运维平台三期');
+
+    test('项目 ID 与名称换成新选的', () {
+      final rebuilt = WorkLogSubmitService.constantsForProject(learned, picked);
+
+      expect(rebuilt['projectId'], 'PROJECT_zzz');
+      expect(rebuilt['projectName'], '运维平台三期');
+    });
+
+    test('项目编码必须清空', () {
+      // 它属于原来那个项目，带过去就是一个确定错误的值；
+      // 留空则由服务端兜底（手工配置一直是这么用的）
+      final rebuilt = WorkLogSubmitService.constantsForProject(learned, picked);
+
+      expect(rebuilt['projectCode'], isEmpty);
+    });
+
+    test('审核人保留', () {
+      // 项目清单只给了名字和 ID，没有新项目的审核人。清空会直接提交失败；
+      // 沿用是个假设，因此界面上必须提示用户核对（见弹窗测试）
+      final rebuilt = WorkLogSubmitService.constantsForProject(learned, picked);
+
+      expect(rebuilt['auditor'], ';USERINFO_ccc');
+      expect(rebuilt['auditorName'], '张三');
+    });
+
+    test('不就地改动传入的那份配置', () {
+      final source = Map<String, String>.from(learned);
+      WorkLogSubmitService.constantsForProject(source, picked);
+
+      expect(source['projectId'], 'PROJECT_aaa');
     });
   });
 }
