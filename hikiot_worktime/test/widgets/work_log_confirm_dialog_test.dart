@@ -28,6 +28,8 @@ Future<Answer> pumpDialog(
   Map<String, String> constants = const {'auditorName': '张三'},
   bool canChangeProject = false,
   bool canChangeAuditor = false,
+  String date = '2026-08-11',
+  DateTime? now,
 }) async {
   final answer = Answer();
   await tester.pumpWidget(
@@ -37,13 +39,14 @@ Future<Answer> pumpDialog(
           onPressed: () async {
             answer.value = await WorkLogConfirmDialog.show(
               context: context,
-              date: '2026-08-11',
+              date: date,
               entry: _entry,
               hours: hours,
               existingHours: existingHours,
               constants: constants,
               canChangeProject: canChangeProject,
               canChangeAuditor: canChangeAuditor,
+              now: now,
             );
             answer.returned = true;
           },
@@ -326,6 +329,158 @@ void main() {
 
       expect(answer.returned, isTrue);
       expect(answer.value, isNull);
+    });
+  });
+
+  group('工时来源切换（打卡 / 当前时间）', () {
+    // 时间全部注入，测试不依赖「今天恰好是几号」「此刻几点」
+    final today = DateTime(2026, 8, 11, 14, 0);
+    const todayStr = '2026-08-11';
+
+    // 08:30 上班，注入的此刻是 14:00 → 5.5 小时扣 1 小时午休 = 4.50
+    const punched = WorkLogHours(
+      hours: 3.0,
+      checkIn: '08:30',
+      checkOut: '11:30',
+    );
+
+    testWidgets('今天且有上班打卡时给出两个来源，各自标出小时数', (tester) async {
+      // 切换前就能看清两边差多少，不用切过去才知道
+      await pumpDialog(
+        tester,
+        hours: punched,
+        date: todayStr,
+        now: today,
+      );
+
+      expect(find.text('工时来源'), findsOneWidget);
+      expect(find.text('打卡 3.00 h'), findsOneWidget);
+      expect(find.text('当前时间 4.50 h'), findsOneWidget);
+    });
+
+    testWidgets('默认按打卡，输入框是打卡值', (tester) async {
+      await pumpDialog(tester, hours: punched, date: todayStr, now: today);
+
+      expect(find.widgetWithText(TextField, '3.00'), findsOneWidget);
+      expect(find.textContaining('来自打卡工时'), findsOneWidget);
+    });
+
+    testWidgets('切到当前时间后，输入框跟着变成按此刻算的值', (tester) async {
+      final answer = await pumpDialog(
+        tester,
+        hours: punched,
+        date: todayStr,
+        now: today,
+      );
+
+      await tester.tap(find.text('当前时间 4.50 h'));
+      await tester.pumpAndSettle();
+
+      expect(find.widgetWithText(TextField, '4.50'), findsOneWidget);
+      expect(find.textContaining('来自按当前时间'), findsOneWidget);
+
+      // 提交出去的必须是切换后的值
+      await tester.tap(find.text('确认提交'));
+      await tester.pumpAndSettle();
+      expect(answer.value!.actWork, '4.50');
+    });
+
+    testWidgets('能切回打卡，值也跟着回去', (tester) async {
+      // 「自由切换」意味着来回都得成立，不是单向的
+      await pumpDialog(tester, hours: punched, date: todayStr, now: today);
+
+      await tester.tap(find.text('当前时间 4.50 h'));
+      await tester.pumpAndSettle();
+      await tester.tap(find.text('打卡 3.00 h'));
+      await tester.pumpAndSettle();
+
+      expect(find.widgetWithText(TextField, '3.00'), findsOneWidget);
+      expect(find.textContaining('来自打卡工时'), findsOneWidget);
+    });
+
+    testWidgets('切换后不该还挂着「已手动调整」', (tester) async {
+      // 判定基准要跟着来源走，否则切一次就永远显示已调整
+      await pumpDialog(tester, hours: punched, date: todayStr, now: today);
+
+      await tester.tap(find.text('当前时间 4.50 h'));
+      await tester.pumpAndSettle();
+
+      expect(find.textContaining('已手动调整'), findsNothing);
+    });
+
+    testWidgets('切换会覆盖手改的值——点开关就是要求按该来源重算', (tester) async {
+      await pumpDialog(tester, hours: punched, date: todayStr, now: today);
+
+      await tester.enterText(find.byType(TextField), '7.77');
+      await tester.pumpAndSettle();
+      expect(find.textContaining('已手动调整'), findsOneWidget);
+
+      await tester.tap(find.text('当前时间 4.50 h'));
+      await tester.pumpAndSettle();
+
+      expect(find.widgetWithText(TextField, '4.50'), findsOneWidget);
+    });
+
+    testWidgets('不是今天就不给这个开关', (tester) async {
+      // 拿此刻去减一个过去日期的上班时间，算出来的是个毫无意义的大数
+      await pumpDialog(
+        tester,
+        hours: punched,
+        date: '2026-08-10',
+        now: today,
+      );
+
+      expect(find.text('工时来源'), findsNothing);
+      expect(find.textContaining('当前时间'), findsNothing);
+    });
+
+    testWidgets('没有上班打卡时不给这个开关', (tester) async {
+      await pumpDialog(
+        tester,
+        hours: const WorkLogHours(hours: 3.0),
+        date: todayStr,
+        now: today,
+      );
+
+      expect(find.text('工时来源'), findsNothing);
+    });
+
+    testWidgets('没有打卡工时但有上班卡时，仍可按当前时间报', (tester) async {
+      // 只打了上班卡、还没下班卡，正是这个功能最该管用的场景
+      await pumpDialog(
+        tester,
+        hours: const WorkLogHours(checkIn: '08:30'),
+        date: todayStr,
+        now: today,
+      );
+
+      expect(find.text('打卡（无数据）'), findsOneWidget);
+      await tester.tap(find.text('当前时间 4.50 h'));
+      await tester.pumpAndSettle();
+
+      expect(find.widgetWithText(TextField, '4.50'), findsOneWidget);
+    });
+
+    testWidgets('按当前时间时，凑整提示从此刻起算而不是下班打卡', (tester) async {
+      // 给错了，「打卡到几点」会指向一个用户照着做反而更错的时间
+      await pumpDialog(
+        tester,
+        hours: const WorkLogHours(
+          hours: 3.0,
+          checkIn: '08:25',
+          checkOut: '11:30',
+        ),
+        date: todayStr,
+        now: DateTime(2026, 8, 11, 14, 0),
+      );
+
+      await tester.tap(find.textContaining('当前时间'));
+      await tester.pumpAndSettle();
+
+      // 08:25 → 14:00 共 335 分钟，扣 60 分钟午休 = 275 分钟 = 4.58 小时。
+      // 275 距下一个 6 分钟刻度（276）差 1 分钟，且必须从 14:00 起算。
+      expect(find.textContaining('再待 1 分钟'), findsOneWidget);
+      expect(find.textContaining('14:01'), findsOneWidget);
     });
   });
 }

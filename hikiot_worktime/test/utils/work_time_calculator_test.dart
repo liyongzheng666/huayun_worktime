@@ -160,4 +160,53 @@ void main() {
       }
     });
   });
+
+  group('从上班打卡算到此刻', () {
+    // 提交日报时的「按当前时间」和每日工时页的目标进度共用这一个算法，
+    // 两处必须算得一样，所以它收在工具类里而不是各自实现
+    test('跨过午休时自动扣掉午休', () {
+      // 08:30 → 14:00 共 5.5 小时，扣 1 小时午休 = 4.5
+      final hours = WorkTimeCalculator.hoursFromCheckInToNow(
+        '08:30',
+        now: DateTime(2026, 8, 11, 14, 0),
+      );
+
+      expect(hours, 4.5);
+    });
+
+    test('没跨过午休时不扣', () {
+      // 08:30 → 11:30 共 3 小时，整段都在午休之前
+      final hours = WorkTimeCalculator.hoursFromCheckInToNow(
+        '08:30',
+        now: DateTime(2026, 8, 11, 11, 30),
+      );
+
+      expect(hours, 3.0);
+    });
+
+    test('上班时间解析不了时返回 null，而不是 0', () {
+      // 「不知道」和「零工时」在界面上必须分开：
+      // 把不知道显示成 0，用户会以为自己今天没打过卡
+      for (final bad in [null, '', '不是时间', '25']) {
+        expect(
+          WorkTimeCalculator.hoursFromCheckInToNow(
+            bad,
+            now: DateTime(2026, 8, 11, 14, 0),
+          ),
+          isNull,
+          reason: '「$bad」不该算出工时',
+        );
+      }
+    });
+
+    test('此刻早于上班时间时不给负数', () {
+      final hours = WorkTimeCalculator.hoursFromCheckInToNow(
+        '08:30',
+        now: DateTime(2026, 8, 11, 7, 0),
+      );
+
+      expect(hours, isNotNull);
+      expect(hours, greaterThanOrEqualTo(0));
+    });
+  });
 }

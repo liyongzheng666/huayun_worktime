@@ -110,6 +110,22 @@ class DateHelper {
     return DateFormat('yyyy-MM').format(date);
   }
 
+  /// `yyyy-MM-dd` 字符串是不是今天。
+  ///
+  /// 「按当前时间算工时」这类功能只对今天成立——拿此刻去减一个过去日期的
+  /// 上班时间，算出来的是个毫无意义的大数。[now] 只为测试注入。
+  static bool isTodayStr(String? dateStr, {DateTime? now}) {
+    if (dateStr == null || dateStr.isEmpty) return false;
+    return dateStr == formatDate(getWorkDate(now: now));
+  }
+
+  /// 此刻的 `HH:mm`。[now] 只为测试注入。
+  static String nowClock({DateTime? now}) {
+    final moment = now ?? DateTime.now();
+    return '${moment.hour.toString().padLeft(2, '0')}:'
+        '${moment.minute.toString().padLeft(2, '0')}';
+  }
+
   /// 格式化日期为中文显示 yyyy年MM月dd日 星期X
   static String formatDateChinese(DateTime date) {
     return DateFormat('yyyy年MM月dd日 EEEE', 'zh_CN').format(date);

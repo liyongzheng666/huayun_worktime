@@ -201,6 +201,23 @@ class WorkTimeCalculator {
     return calculateWorkHours(inMinutes, outMinutes, deductLunch: deductLunch);
   }
 
+  /// 从上班打卡时间算到**此刻**的工时。
+  ///
+  /// 用于「还没下班打卡，但想按当前时间估一下」的场景：每日工时页的目标进度、
+  /// 以及提交日报时的工时来源切换都要用它。
+  ///
+  /// [now] 只为测试注入，正常调用不传。
+  ///
+  /// 返回 null 表示上班时间解析不了——**不是 0**。「不知道」和「零工时」在
+  /// 界面上必须分开：把不知道显示成 0，用户会以为自己今天没打过卡。
+  static double? hoursFromCheckInToNow(String? checkIn, {DateTime? now}) {
+    final checkInMinutes = parseTimeToMinutes(checkIn);
+    if (checkInMinutes == null) return null;
+
+    final moment = now ?? DateTime.now();
+    return calculateWorkHours(checkInMinutes, moment.hour * 60 + moment.minute);
+  }
+
   /// 解析时间字符串为分钟数
   ///
   /// [timeStr] 时间字符串，格式 "HH:mm" 或 "HH:MM:SS"

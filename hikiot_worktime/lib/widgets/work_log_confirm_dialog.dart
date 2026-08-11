@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 
 import '../core/theme/theme.dart';
 import '../services/work_log_repository.dart';
+import '../utils/date_helper.dart';
 import '../utils/work_log_csv_parser.dart';
 import '../utils/work_time_calculator.dart';
 
@@ -58,6 +59,7 @@ class WorkLogConfirmDialog {
     required Map<String, String> constants,
     bool canChangeProject = false,
     bool canChangeAuditor = false,
+    DateTime? now,
   }) async {
     final alreadyFiled = existingHours != null && existingHours > 0;
 
@@ -67,15 +69,44 @@ class WorkLogConfirmDialog {
         : '';
     final hoursController = TextEditingController(text: punchText);
 
+    // 「按当前时间」只在**今天**且有上班打卡时才谈得上：拿此刻去减一个
+    // 过去日期的上班时间，算出来的是个毫无意义的大数。
+    final canUseNow =
+        hours.checkIn?.isNotEmpty == true &&
+        DateHelper.isTodayStr(date, now: now);
+    var useCheckIn = true;
+
     final result = await showDialog<WorkLogConfirmOutcome>(
       context: context,
       builder: (dialogContext) => StatefulBuilder(
         builder: (context, setDialogState) {
+          // 「当前时间」是随时在走的，每次重建都重算一次，
+          // 而不是打开对话框那一刻算完就钉死
+          final nowHours = canUseNow
+              ? WorkTimeCalculator.hoursFromCheckInToNow(hours.checkIn, now: now)
+              : null;
+          final nowText = nowHours == null
+              ? ''
+              : WorkTimeCalculator.formatHours(nowHours);
+
+          // 当前模式下「未经手改」的基准值。改模式时输入框会跟着回到它，
+          // edited 的判定也以它为准——否则切一次模式就永远显示「已手动调整」
+          final sourceText = useCheckIn || !canUseNow ? punchText : nowText;
+
           final parsed = WorkTimeCalculator.parseHoursInput(
             hoursController.text,
           );
-          final edited = parsed != null && punchText.isNotEmpty &&
-              WorkTimeCalculator.formatHours(parsed) != punchText;
+          final edited = parsed != null && sourceText.isNotEmpty &&
+              WorkTimeCalculator.formatHours(parsed) != sourceText;
+
+          void switchSource(bool toCheckIn) {
+            setDialogState(() {
+              useCheckIn = toCheckIn;
+              // 切换即以新来源的值为准。手改过的值也会被覆盖——
+              // 用户点这个开关就是在说「按这个来源重算」
+              hoursController.text = toCheckIn ? punchText : nowText;
+            });
+          }
 
           return AlertDialog(
             title: Text('提交 $date 的日志？'),
@@ -139,18 +170,33 @@ class WorkLogConfirmDialog {
                   _confirmRow('工作类型', entry.workType),
                   _confirmRow('项目阶段', entry.stage),
                   _confirmRow('阶段活动', entry.activity),
+                  if (canUseNow)
+                    _buildSourceSwitch(
+                      useCheckIn: useCheckIn,
+                      punchText: punchText,
+                      nowText: nowText,
+                      onSwitch: switchSource,
+                    ),
                   _buildHoursField(
                     controller: hoursController,
-                    punchText: punchText,
+                    sourceText: sourceText,
+                    sourceLabel: useCheckIn || !canUseNow ? '打卡工时' : '按当前时间',
                     parsed: parsed,
                     edited: edited,
                     onChanged: () => setDialogState(() {}),
                   ),
                   _buildStepHint(
                     parsed: parsed,
-                    // 手改过工时之后，打卡时刻和输入框里的数已经对不上，
-                    // 再给「打卡到几点」只会指向一个错的时间
-                    checkOut: edited ? null : hours.checkOut,
+                    // 手改过工时之后，参照时刻和输入框里的数已经对不上，
+                    // 再给「几点」只会指向一个错的时间。
+                    //
+                    // 参照时刻随来源走：按打卡算时是下班打卡时刻，
+                    // 按当前时间算时就是此刻——「再待 3 分钟」是从现在起算的。
+                    baseClock: edited
+                        ? null
+                        : (useCheckIn || !canUseNow
+                              ? hours.checkOut
+                              : DateHelper.nowClock(now: now)),
                   ),
                   const Divider(),
                   _confirmRow('工作内容', entry.content),
@@ -185,24 +231,113 @@ class WorkLogConfirmDialog {
     return result;
   }
 
+  /// 工时来源切换：按打卡 / 按当前时间。
+  ///
+  /// **为什么需要它**：下班卡还没打的时候，打卡统计出来的工时要么是空的、
+  /// 要么停在中午。想现在就把日报报掉，就得按「此刻」算。每日工时页早就有
+  /// 这个开关，提交日报这里反而只能按打卡走，得手算了再手填。
+  ///
+  /// 两个选项都把各自算出来的小时数写在标签上，切换前就能看清差多少，
+  /// 不用切过去才知道。
+  static Widget _buildSourceSwitch({
+    required bool useCheckIn,
+    required String punchText,
+    required String nowText,
+    required ValueChanged<bool> onSwitch,
+  }) {
+    return Padding(
+      padding: const EdgeInsets.only(top: 4),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          const Text(
+            '工时来源',
+            style: TextStyle(fontSize: 11, color: Colors.grey),
+          ),
+          const SizedBox(height: 4),
+          // Wrap 而非 Row：两个按钮带上小时数之后不算短，
+          // 系统字体放大时挤在一行会溢出
+          Wrap(
+            spacing: 8,
+            runSpacing: 6,
+            children: [
+              _sourceChip(
+                label: punchText.isEmpty ? '打卡（无数据）' : '打卡 $punchText h',
+                selected: useCheckIn,
+                onTap: () => onSwitch(true),
+              ),
+              _sourceChip(
+                label: nowText.isEmpty ? '当前时间（算不出）' : '当前时间 $nowText h',
+                selected: !useCheckIn,
+                onTap: () => onSwitch(false),
+              ),
+            ],
+          ),
+        ],
+      ),
+    );
+  }
+
+  static Widget _sourceChip({
+    required String label,
+    required bool selected,
+    required VoidCallback onTap,
+  }) {
+    return InkWell(
+      onTap: onTap,
+      borderRadius: BorderRadius.circular(16),
+      child: Container(
+        padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
+        decoration: BoxDecoration(
+          color: selected ? AppColors.infoLight : null,
+          borderRadius: BorderRadius.circular(16),
+          border: Border.all(
+            color: selected ? AppColors.info : Colors.grey.shade300,
+            width: selected ? 1.5 : 1,
+          ),
+        ),
+        child: Row(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Icon(
+              selected ? Icons.radio_button_checked : Icons.radio_button_unchecked,
+              size: 14,
+              color: selected ? AppColors.info : Colors.grey,
+            ),
+            const SizedBox(width: 4),
+            Text(
+              label,
+              style: TextStyle(
+                fontSize: 12,
+                fontWeight: selected ? FontWeight.w600 : null,
+                color: selected ? AppColors.infoDark : Colors.grey[700],
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
   /// 可编辑的工时输入行。
   ///
-  /// 打卡值作为默认值和参照同时显示：改过之后仍能看到原始打卡工时是多少，
+  /// 来源值作为默认值和参照同时显示：改过之后仍能看到原始值是多少，
   /// 否则用户改完就无从判断自己偏离了多少。
   static Widget _buildHoursField({
     required TextEditingController controller,
-    required String punchText,
+    required String sourceText,
+    required String sourceLabel,
     required double? parsed,
     required bool edited,
     required VoidCallback onChanged,
   }) {
     final String helper;
-    if (punchText.isEmpty) {
-      helper = '当天没有打卡工时，请手动填写';
+    if (sourceText.isEmpty) {
+      helper = '当天没有可用工时，请手动填写';
     } else if (edited) {
-      helper = '打卡工时为 $punchText，已手动调整';
+      helper = '$sourceLabel为 $sourceText，已手动调整';
     } else {
-      helper = '来自打卡统计，可修改';
+      helper = '来自$sourceLabel，可修改';
     }
 
     return Padding(
@@ -382,9 +517,13 @@ class WorkLogConfirmDialog {
   ///
   /// 基准取输入框当前值而非打卡工时——提交出去的是前者，
   /// 用户手改之后提示还盯着打卡值会自相矛盾。
+  ///
+  /// [baseClock] 是「再待 N 分钟」的起算时刻，随工时来源走：按打卡算时是
+  /// 下班打卡时刻，按当前时间算时就是此刻。给错了，「打卡到几点」会指向
+  /// 一个用户照着做反而更错的时间。
   static Widget _buildStepHint({
     required double? parsed,
-    required String? checkOut,
+    required String? baseClock,
   }) {
     // 工时非法时提交按钮本就是灰的，此时给凑整建议只会喧宾夺主
     if (parsed == null) return const SizedBox.shrink();
@@ -406,10 +545,10 @@ class WorkLogConfirmDialog {
     );
 
     // 换算成具体几点，「再待 3 分钟」才是照着能做的事
-    final checkOutMinutes = WorkTimeCalculator.parseTimeToMinutes(checkOut);
-    final targetClock = checkOutMinutes == null
+    final baseMinutes = WorkTimeCalculator.parseTimeToMinutes(baseClock);
+    final targetClock = baseMinutes == null
         ? null
-        : WorkTimeCalculator.minutesToTimeStr(checkOutMinutes + needMinutes);
+        : WorkTimeCalculator.minutesToTimeStr(baseMinutes + needMinutes);
 
     return Container(
       margin: const EdgeInsets.only(top: 2, bottom: 8),

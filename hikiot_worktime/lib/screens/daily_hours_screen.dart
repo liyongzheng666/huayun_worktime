@@ -234,17 +234,9 @@ class DailyHoursScreenState extends State<DailyHoursScreen>
 
   /// 根据当前手机时间计算工时(用于目标进度开关关闭时)
   double _calculateCurrentHoursFromNow(String checkIn) {
-    final checkInMinutes = WorkTimeCalculator.parseTimeToMinutes(checkIn);
-    if (checkInMinutes == null) return 0.0;
-
-    final now = DateTime.now();
-    final currentMinutes = now.hour * 60 + now.minute;
-
-    // 使用统一的工时计算工具类
-    return WorkTimeCalculator.calculateWorkHours(
-      checkInMinutes,
-      currentMinutes,
-    );
+    // 提交日报的确认框也要按当前时间算工时，两处必须算得一样，
+    // 因此逻辑收在 WorkTimeCalculator 里，这里只做「取不到当 0」的收尾
+    return WorkTimeCalculator.hoursFromCheckInToNow(checkIn) ?? 0.0;
   }
 
   /// 选择日期
