@@ -16,8 +16,21 @@ import '../utils/work_log_project_list_lookup.dart';
 import '../utils/work_log_request_capture.dart';
 import '../utils/work_log_submit_script.dart';
 import '../utils/work_time_calculator.dart';
+import '../utils/work_log_auditor_lookup.dart';
+import '../widgets/work_log_auditor_picker_dialog.dart';
 import '../widgets/work_log_project_picker_dialog.dart';
 import '../widgets/work_log_confirm_dialog.dart';
+
+/// 提交流程里可供用户改选的两类候选。
+///
+/// 打包成一个对象而不是返回一对列表：这两样都是「扫到就能改选、扫不到就没有」
+/// 的同类东西，分开传下去只会让每个签名都多带一个参数。
+class BossPickables {
+  const BossPickables(this.projects, this.auditors);
+
+  final List<BossProject> projects;
+  final List<BossAuditor> auditors;
+}
 
 /// 日志系统的可选入口。
 ///
@@ -464,7 +477,7 @@ class _WorkReportWebViewScreenState extends State<WorkReportWebViewScreen> {
     // 出差、补录、打卡异常这些场景本来就该由用户自己定工时。
 
     final service = WorkLogSubmitService(controller);
-    final (resolved, projects) = await _resolveBossConstants(
+    final (resolved, pickables) = await _resolveBossConstants(
       service,
       entry.projectName,
     );
@@ -487,7 +500,8 @@ class _WorkReportWebViewScreenState extends State<WorkReportWebViewScreen> {
         hours: draft.hours,
         existingHours: existingHours,
         constants: constants,
-        canChangeProject: projects.isNotEmpty,
+        canChangeProject: pickables.projects.isNotEmpty,
+        canChangeAuditor: pickables.auditors.isNotEmpty,
       );
       if (outcome == null || !mounted) return;
 
@@ -496,11 +510,28 @@ class _WorkReportWebViewScreenState extends State<WorkReportWebViewScreen> {
           context: context,
           csvProjectName: entry.projectName,
           constants: constants,
-          projects: projects,
+          projects: pickables.projects,
           purpose: ProjectPickPurpose.change,
         );
         if (!mounted) return;
         if (picked != null) constants = picked;
+        continue;
+      }
+
+      if (outcome.changeAuditor) {
+        final picked = await WorkLogAuditorPickerDialog.pick(
+          context: context,
+          constants: constants,
+          auditors: pickables.auditors,
+        );
+        if (!mounted) return;
+        if (picked != null) {
+          constants = await WorkLogSubmitService.bindConstants(
+            picked,
+            entry.projectName,
+          );
+          if (!mounted) return;
+        }
         continue;
       }
 
@@ -608,7 +639,7 @@ class _WorkReportWebViewScreenState extends State<WorkReportWebViewScreen> {
   /// 保证后台提交与网页内提交走的是同一套逻辑。
   ///
   /// 一并把爬到的项目清单带回去：提交确认框要靠它决定给不给「改选」入口。
-  Future<(Map<String, String>?, List<BossProject>)> _resolveBossConstants(
+  Future<(Map<String, String>?, BossPickables)> _resolveBossConstants(
     WorkLogSubmitService service,
     String projectName,
   ) async {
@@ -621,51 +652,74 @@ class _WorkReportWebViewScreenState extends State<WorkReportWebViewScreen> {
     // 走服务里的统一解析，绑定判定与后台提交保持一致；
     // 两条路径各判各的，迟早会出现「网页里能提交、后台却要求重新确认」。
     final resolution = await service.resolveConstants(projectName);
-    final projects = resolution.projects;
+    final pickables = BossPickables(resolution.projects, resolution.auditors);
+
+    var constants = resolution.constants;
 
     if (resolution.needsProjectPick) {
       // 项目名在 BOSS 里没有同名的，先让用户从全量清单里挑——
       // 弹的是与后台提交同一个框，同一套落绑定的逻辑
-      if (!mounted) return (null, projects);
+      if (!mounted) return (null, pickables);
       final picked = await WorkLogProjectPickerDialog.pickAndBind(
         context: context,
         csvProjectName: projectName,
-        constants: resolution.constants ?? const {},
-        projects: projects,
+        constants: constants ?? const {},
+        projects: pickables.projects,
       );
-      if (!mounted) return (null, projects);
+      if (!mounted) return (null, pickables);
       if (picked == null) {
         _notify('已取消。若清单里没有正确的项目，可在工作日志页的「提交配置」里手工填 ID');
-        return (null, projects);
+        return (null, pickables);
       }
-      return (picked, projects);
+      constants = picked;
     }
 
-    if (resolution.constants != null) return (resolution.constants, projects);
+    if (constants != null) {
+      // 审核人和项目是两件独立的事，缺了单独补，不封死另一条路
+      if ((constants['auditor'] ?? '').isEmpty) {
+        if (!mounted) return (null, pickables);
+        final picked = await WorkLogAuditorPickerDialog.pick(
+          context: context,
+          constants: constants,
+          auditors: pickables.auditors,
+        );
+        if (!mounted) return (null, pickables);
+        if (picked == null) {
+          _notify(
+            pickables.auditors.isEmpty
+                ? '没扫到审核人。到「我的工作日志」点开一个已填过的日期，再回来提交'
+                : '已取消。审核人必须选一个，否则日志会发给错误的审批人',
+          );
+          return (null, pickables);
+        }
+        constants = await WorkLogSubmitService.bindConstants(picked, projectName);
+      }
+      return (constants, pickables);
+    }
 
     // 项目变了却拿不到新配置时，宁可停下也不能拿旧项目的 ID 提交
     if (changedProject) {
-      if (!mounted) return (null, projects);
+      if (!mounted) return (null, pickables);
       _notify(
         resolution.reason ??
             '项目已变为「$projectName」，但还没拿到它的提交配置。'
                 '请在网页上为该项目填报一次日志',
       );
-      return (null, projects);
+      return (null, pickables);
     }
 
     // Release 构建不开 Dart VM 服务，flutter logs 抓不到 debugPrint，
     // 因此失败时把诊断信息复制到剪贴板，便于直接反馈。
     final (conclusion, report) = await service.collectDiagnostics(projectName);
     await Clipboard.setData(ClipboardData(text: report));
-    if (!mounted) return (null, projects);
+    if (!mounted) return (null, pickables);
     _notify(
       resolution.reason ??
           (conclusion == null || conclusion.isEmpty
               ? '未取到项目信息。请到「我的工作日志」点开任意一个已填过的日期（诊断已复制到剪贴板）'
               : '$conclusion（诊断已复制到剪贴板）'),
     );
-    return (null, projects);
+    return (null, pickables);
   }
 
   /// 当日 CSV 条目里的项目名，用于在多项目时挑对那一个；取不到返回空串。

@@ -27,6 +27,7 @@ Future<Answer> pumpDialog(
   double? existingHours,
   Map<String, String> constants = const {'auditorName': '张三'},
   bool canChangeProject = false,
+  bool canChangeAuditor = false,
 }) async {
   final answer = Answer();
   await tester.pumpWidget(
@@ -42,6 +43,7 @@ Future<Answer> pumpDialog(
               existingHours: existingHours,
               constants: constants,
               canChangeProject: canChangeProject,
+              canChangeAuditor: canChangeAuditor,
             );
             answer.returned = true;
           },
@@ -272,6 +274,44 @@ void main() {
 
       expect(answer.value!.changeProject, isFalse);
       expect(answer.value!.actWork, '8.00');
+    });
+
+    testWidgets('审核人也能改选，并带回对应诉求', (tester) async {
+      // 审核人和项目是这个框里并列的两个「填错就有实际后果」的字段，
+      // 都不是用户输入的，因此都必须能核对、也都必须能改
+      final answer = await pumpDialog(
+        tester,
+        hours: const WorkLogHours(hours: 8),
+        canChangeAuditor: true,
+      );
+
+      await tester.tap(find.text('改选'));
+      await tester.pumpAndSettle();
+
+      expect(answer.value!.changeAuditor, isTrue);
+      expect(answer.value!.changeProject, isFalse);
+    });
+
+    testWidgets('审核人只有 ID 没有姓名时要说破', (tester) async {
+      // 显示成空白会让人以为是渲染问题，而这里的空白恰恰意味着
+      // 没法用肉眼核对是不是对的人
+      await pumpDialog(
+        tester,
+        hours: const WorkLogHours(hours: 8),
+        constants: const {'auditor': ';USERINFO_ccc'},
+      );
+
+      expect(find.textContaining('没法用姓名核对'), findsOneWidget);
+    });
+
+    testWidgets('完全没有审核人时直说无法提交', (tester) async {
+      await pumpDialog(
+        tester,
+        hours: const WorkLogHours(hours: 8),
+        constants: const {},
+      );
+
+      expect(find.textContaining('还没有审核人，无法提交'), findsOneWidget);
     });
 
     testWidgets('取消返回空，两种诉求都不是', (tester) async {

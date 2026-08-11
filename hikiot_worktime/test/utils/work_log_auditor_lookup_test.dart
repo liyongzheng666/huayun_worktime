@@ -39,61 +39,108 @@ void main() {
       );
     });
 
-    test('个人设置优先于业务对象里带出来的', () {
-      // 设置项是「当前默认审核人」的权威出处，历史对象可能是旧的
-      expect(script.contains('fromSetting || fromField'), isTrue);
+    test('认历史日志网格里的 AUDITOR 列', () {
+      // 网格里 ID 在 ColValue、姓名在 ColText，这是最容易抓到的一种形状，
+      // 早先漏掉了它
+      expect(script.contains("obj.ColName === 'AUDITOR'"), isTrue);
+    });
+
+    test('同一个人从多处扫到时归并，来源就高不就低', () {
+      // 否则候选列表里会出现两条看起来一样的
+      expect(script.contains("prev.source = 'setting'"), isTrue);
     });
   });
 
+  /// 造一条脚本返回值。
+  String payload(List<Map<String, dynamic>> auditors) =>
+      jsonEncode({'ok': true, 'auditors': auditors});
+
   group('解析返回值', () {
-    test('取出审核人 ID 与姓名', () {
-      final auditor = WorkLogAuditorLookup.parse(
-        jsonEncode({'ok': true, 'id': ';USERINFO_ccc', 'name': '张三'}),
+    test('取出审核人 ID、姓名与来源', () {
+      final list = WorkLogAuditorLookup.parse(
+        payload([
+          {'id': ';USERINFO_ccc', 'name': '张三', 'source': 'setting'},
+        ]),
       );
 
-      expect(auditor?.id, ';USERINFO_ccc');
-      expect(auditor?.name, '张三');
+      expect(list.single.id, ';USERINFO_ccc');
+      expect(list.single.name, '张三');
+      expect(list.single.source, BossAuditorSource.setting);
     });
 
-    test('姓名缺失时为空串，不影响 ID', () {
-      // 姓名只用于肉眼核对，缺了不该让整条配置作废
-      final auditor = WorkLogAuditorLookup.parse(
-        jsonEncode({'ok': true, 'id': ';USERINFO_ccc'}),
+    test('个人设置的排最前，其次是有姓名的', () {
+      // 设置项是「当前默认审核人」的权威出处；没名字的没法核对，排后面
+      final list = WorkLogAuditorLookup.parse(
+        payload([
+          {'id': ';USERINFO_a', 'name': '', 'source': 'field'},
+          {'id': ';USERINFO_b', 'name': '李四', 'source': 'field'},
+          {'id': ';USERINFO_c', 'name': '张三', 'source': 'setting'},
+        ]),
       );
 
-      expect(auditor?.id, ';USERINFO_ccc');
-      expect(auditor?.name, '');
+      expect(list.map((a) => a.id).toList(), [
+        ';USERINFO_c',
+        ';USERINFO_b',
+        ';USERINFO_a',
+      ]);
     });
 
-    test('ID 形状不对时当作没取到', () {
-      // 拿一个不是审核人的 ID 去提交，日志会发给错误的审批人。
-      // 这里宁可返回 null 让上层停下来。
-      for (final bad in ['USERINFO_ccc', ';PROJECT_aaa', '', ';USERINFO']) {
-        expect(
-          WorkLogAuditorLookup.parse(jsonEncode({'ok': true, 'id': bad})),
-          isNull,
-          reason: '「$bad」不该被当成审核人',
-        );
-      }
+    test('姓名缺失时为空串，仍然保留为候选', () {
+      // 姓名只用于肉眼核对，缺了不该让这条候选整个消失——
+      // 界面会显示「（没扫到姓名）」，由用户判断
+      final list = WorkLogAuditorLookup.parse(
+        payload([
+          {'id': ';USERINFO_ccc'},
+        ]),
+      );
+
+      expect(list.single.id, ';USERINFO_ccc');
+      expect(list.single.name, '');
     });
 
-    test('ok 为 false、空值、脏字符串都返回 null 而不是抛异常', () {
-      expect(WorkLogAuditorLookup.parse(null), isNull);
-      expect(WorkLogAuditorLookup.parse(''), isNull);
-      expect(WorkLogAuditorLookup.parse('不是 JSON'), isNull);
+    test('ID 形状不对的一律丢掉', () {
+      // 拿一个不是审核人的 ID 去提交，日志会发给错误的审批人
+      final list = WorkLogAuditorLookup.parse(
+        payload([
+          {'id': 'USERINFO_ccc'},
+          {'id': ';PROJECT_aaa'},
+          {'id': ''},
+          {'id': ';USERINFO'},
+        ]),
+      );
+
+      expect(list, isEmpty);
+    });
+
+    test('ok 为 false、空值、脏字符串都返回空列表而不是抛异常', () {
+      expect(WorkLogAuditorLookup.parse(null), isEmpty);
+      expect(WorkLogAuditorLookup.parse(''), isEmpty);
+      expect(WorkLogAuditorLookup.parse('不是 JSON'), isEmpty);
       expect(
-        WorkLogAuditorLookup.parse(jsonEncode({'ok': false, 'id': ';USERINFO_c'})),
-        isNull,
+        WorkLogAuditorLookup.parse(
+          jsonEncode({
+            'ok': false,
+            'auditors': [
+              {'id': ';USERINFO_c'},
+            ],
+          }),
+        ),
+        isEmpty,
       );
     });
   });
 
   group('BossAuditor', () {
-    test('同 ID 同名视为相等', () {
+    test('同 ID 同名同来源视为相等', () {
       expect(
         const BossAuditor(id: ';USERINFO_ccc', name: '张三'),
         const BossAuditor(id: ';USERINFO_ccc', name: '张三'),
       );
+    });
+
+    test('来源有给用户看的说明，且不宣称「就是它」', () {
+      expect(BossAuditorSource.setting.label, contains('默认审核人'));
+      expect(BossAuditorSource.field.label, contains('出现在'));
     });
   });
 }

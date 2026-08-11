@@ -8,15 +8,25 @@ import '../utils/work_time_calculator.dart';
 /// 用户在提交确认框里的选择
 class WorkLogConfirmOutcome {
   /// 确认提交，[actWork] 是最终工时
-  const WorkLogConfirmOutcome.submit(this.actWork) : changeProject = false;
+  const WorkLogConfirmOutcome.submit(this.actWork)
+    : changeProject = false,
+      changeAuditor = false;
 
   /// 要求改选项目，回到项目选择框
   const WorkLogConfirmOutcome.changeProject()
     : actWork = null,
-      changeProject = true;
+      changeProject = true,
+      changeAuditor = false;
+
+  /// 要求改选审核人，回到审核人选择框
+  const WorkLogConfirmOutcome.changeAuditor()
+    : actWork = null,
+      changeProject = false,
+      changeAuditor = true;
 
   final String? actWork;
   final bool changeProject;
+  final bool changeAuditor;
 }
 
 /// 提交前的核对对话框
@@ -47,6 +57,7 @@ class WorkLogConfirmDialog {
     required double? existingHours,
     required Map<String, String> constants,
     bool canChangeProject = false,
+    bool canChangeAuditor = false,
   }) async {
     final alreadyFiled = existingHours != null && existingHours > 0;
 
@@ -115,11 +126,14 @@ class WorkLogConfirmDialog {
                           )
                         : null,
                   ),
-                  _confirmRow(
-                    '审核人',
-                    constants['auditorName']?.isNotEmpty == true
-                        ? constants['auditorName']!
-                        : '（未知，仅有 ID）',
+                  _buildAuditorRow(
+                    constants: constants,
+                    onChange: canChangeAuditor
+                        ? () => Navigator.pop(
+                            dialogContext,
+                            const WorkLogConfirmOutcome.changeAuditor(),
+                          )
+                        : null,
                   ),
                   _confirmRow('标题', entry.title),
                   _confirmRow('工作类型', entry.workType),
@@ -289,6 +303,68 @@ class WorkLogConfirmDialog {
               '⚠️ 未能确认 BOSS 那边的项目名，上面是 CSV 的写法。'
               '决定工时记到哪个项目的是项目 ID，请核对：'
               '${projectId.isEmpty ? '（空）' : projectId}',
+              style: TextStyle(fontSize: 10, color: AppColors.warningDark),
+            ),
+        ],
+      ),
+    );
+  }
+
+  /// 审核人行。
+  ///
+  /// 审核人是这个框里和项目并列的两个「填错就有实际后果」的字段：填错项目把
+  /// 工时记到别人名下，填错审核人把日志发给错误的审批人。两者都不是用户输入的，
+  /// 所以都必须能核对、也都必须能改。
+  ///
+  /// **只有 ID 没有姓名时要说破**：显示成空白会让人以为是渲染问题，
+  /// 而这里的空白恰恰意味着「没法用肉眼核对是不是对的人」。
+  static Widget _buildAuditorRow({
+    required Map<String, String> constants,
+    VoidCallback? onChange,
+  }) {
+    final name = constants['auditorName'] ?? '';
+    final id = constants['auditor'] ?? '';
+
+    return Padding(
+      padding: const EdgeInsets.only(bottom: 6),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            children: [
+              const Text(
+                '审核人',
+                style: TextStyle(fontSize: 11, color: Colors.grey),
+              ),
+              const Spacer(),
+              if (onChange != null)
+                TextButton(
+                  onPressed: onChange,
+                  style: TextButton.styleFrom(
+                    minimumSize: Size.zero,
+                    padding: const EdgeInsets.symmetric(
+                      horizontal: 8,
+                      vertical: 2,
+                    ),
+                    tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+                    visualDensity: VisualDensity.compact,
+                  ),
+                  child: const Text('改选', style: TextStyle(fontSize: 12)),
+                ),
+            ],
+          ),
+          Text(
+            name.isNotEmpty ? name : '（未取到姓名）',
+            style: TextStyle(
+              fontSize: 13,
+              color: name.isEmpty ? AppColors.warningDark : null,
+            ),
+          ),
+          if (name.isEmpty)
+            Text(
+              id.isEmpty
+                  ? '⚠️ 还没有审核人，无法提交'
+                  : '⚠️ 只取到 ID：$id，没法用姓名核对是不是对的人',
               style: TextStyle(fontSize: 10, color: AppColors.warningDark),
             ),
         ],

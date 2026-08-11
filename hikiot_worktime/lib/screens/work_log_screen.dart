@@ -11,11 +11,13 @@ import '../services/work_log_repository.dart';
 import '../utils/date_helper.dart';
 import '../utils/haptic_utils.dart';
 import '../utils/work_log_csv_parser.dart';
+import '../utils/work_log_auditor_lookup.dart';
 import '../utils/work_log_project_list_lookup.dart';
 import '../utils/work_time_calculator.dart';
 import '../services/boss_session_runner.dart';
 import '../services/work_log_submit_service.dart';
 import '../widgets/boss_constants_dialog.dart';
+import '../widgets/work_log_auditor_picker_dialog.dart';
 import '../widgets/work_log_project_picker_dialog.dart';
 import '../widgets/work_log_confirm_dialog.dart';
 import '../widgets/week_strip.dart';
@@ -227,6 +229,7 @@ class WorkLogScreenState extends State<WorkLogScreen> {
         existingHours: await service.queryExistingHours(draft.date),
         needsProjectPick: resolution.needsProjectPick,
         projects: resolution.projects,
+        auditors: resolution.auditors,
       );
     });
 
@@ -272,9 +275,33 @@ class WorkLogScreenState extends State<WorkLogScreen> {
       constants = picked;
     }
 
+    // 审核人是和项目并列的另一件事，不是它的附属。缺了就单独补，
+    // 不该因为审核人没扫到就把选项目那条路一起封死（那正是上一版的错）。
+    if ((constants['auditor'] ?? '').isEmpty) {
+      final picked = await WorkLogAuditorPickerDialog.pick(
+        context: context,
+        constants: constants,
+        auditors: prep.auditors,
+      );
+      if (!mounted) return;
+      if (picked == null) {
+        _showMessage(
+          prep.auditors.isEmpty
+              ? '没扫到审核人。去「我的工作日志」点开一个已填过的日期，或在「提交配置」里手工填'
+              : '已取消提交。审核人必须选一个，否则日志会发给错误的审批人',
+        );
+        return;
+      }
+      constants = await WorkLogSubmitService.bindConstants(
+        picked,
+        entry.projectName,
+      );
+      if (!mounted) return;
+    }
+
     // 面向公司真实系统，绝不静默提交；工时也在这里允许调整。
-    // 用户在确认框里点「改选」时回到选择框，改完再回来重新核对一遍——
-    // 改了项目还接着用上一屏的核对结果，等于没核对。
+    // 用户在确认框里点「改选」时回到对应的选择框，改完再回来重新核对一遍——
+    // 改了项目或审核人还接着用上一屏的核对结果，等于没核对。
     String actWork;
     while (true) {
       final outcome = await WorkLogConfirmDialog.show(
@@ -285,6 +312,7 @@ class WorkLogScreenState extends State<WorkLogScreen> {
         existingHours: prep.existingHours,
         constants: constants,
         canChangeProject: prep.projects.isNotEmpty,
+        canChangeAuditor: prep.auditors.isNotEmpty,
       );
       if (outcome == null || !mounted) return;
 
@@ -298,6 +326,23 @@ class WorkLogScreenState extends State<WorkLogScreen> {
         );
         if (!mounted) return;
         if (picked != null) constants = picked;
+        continue;
+      }
+
+      if (outcome.changeAuditor) {
+        final picked = await WorkLogAuditorPickerDialog.pick(
+          context: context,
+          constants: constants,
+          auditors: prep.auditors,
+        );
+        if (!mounted) return;
+        if (picked != null) {
+          constants = await WorkLogSubmitService.bindConstants(
+            picked,
+            entry.projectName,
+          );
+          if (!mounted) return;
+        }
         continue;
       }
 
@@ -844,6 +889,7 @@ class _SubmitPreparation {
     this.existingHours,
     this.needsProjectPick = false,
     this.projects = const [],
+    this.auditors = const [],
   }) : conclusion = null,
        diagnostics = null;
 
@@ -851,7 +897,8 @@ class _SubmitPreparation {
     : constants = null,
       existingHours = null,
       needsProjectPick = false,
-      projects = const [];
+      projects = const [],
+      auditors = const [];
 
   final Map<String, String>? constants;
   final double? existingHours;
@@ -863,4 +910,7 @@ class _SubmitPreparation {
 
   /// 从 BOSS 爬到的全量项目清单；供选择框列出，也决定确认框给不给「改选」。
   final List<BossProject> projects;
+
+  /// 扫到的审核人候选；同样既供选择框，也决定确认框给不给「改选」。
+  final List<BossAuditor> auditors;
 }

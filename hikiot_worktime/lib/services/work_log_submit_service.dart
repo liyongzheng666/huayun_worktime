@@ -20,6 +20,7 @@ class BossConstantsResolution {
     this.constants,
     this.needsProjectPick = false,
     this.projects = const [],
+    this.auditors = const [],
     this.reason,
   });
 
@@ -37,10 +38,20 @@ class BossConstantsResolution {
   /// 从 BOSS 爬到的全量项目清单，供选择框列出；扫不到时为空。
   final List<BossProject> projects;
 
+  /// 扫到的审核人候选，供选择框列出；扫不到时为空。
+  final List<BossAuditor> auditors;
+
   /// 没能给出可提交配置时的原因，一句话，直接显示给用户。
   final String? reason;
 
   bool get hasConstants => constants != null;
+
+  /// 还缺审核人，得让用户从 [auditors] 里挑一个。
+  ///
+  /// **和项目是两件独立的事**。早先审核人是「能不能选项目」的前置条件，
+  /// 于是审核人扫不到时直接返回原因、连清单都不端出来——清单明明已经爬到手，
+  /// 用户却永远走不到选择框。缺哪环补哪环，不该因为一环缺失就把整条路封死。
+  bool get needsAuditorPick => (constants?['auditor'] ?? '').isEmpty;
 }
 
 /// 提交结果
@@ -173,29 +184,27 @@ class WorkLogSubmitService {
     // 历史日志仍然试一次：它同时给出审核人，也给出一个「上次用的项目」当预选
     final learned = await learnConstants(csvProjectName);
 
-    // 审核人不在项目清单里（它是个人设置，不是项目属性），必须单独取
-    final auditor = _auditorFrom(learned) ?? await lookupAuditor();
-    if (auditor == null) {
-      // 拿空审核人提交会把日志发给错误的审批人（或直接被拒），宁可停下
-      return BossConstantsResolution(
-        projects: projects,
-        reason: projects.isEmpty
-            ? '没取到项目清单，也没取到工作日志的审核人'
-            : '已扫到 ${projects.length} 个项目，但没取到工作日志的审核人',
-      );
-    }
+    // 审核人不在项目清单里（它是个人设置，不是项目属性），必须单独扫。
+    //
+    // **拿不到也照样往下走。** 早先这里是一道闸：审核人为空就直接返回原因，
+    // 于是清单明明爬到手了，用户却永远走不到项目选择框。项目和审核人是两件
+    // 独立的事，缺哪环补哪环。审核人最后由调用方让用户从候选里挑。
+    final auditors = await lookupAuditors();
+    final auditor = _auditorFrom(learned) ?? _preferredAuditor(auditors);
 
     // 清单里有与 CSV 一字不差的项目 → 就是它，不必打扰用户。
     // 只认「一字不差」：差一个「(2)」就可能是另一个项目，替用户判等于
     // 把「静默绑错项目」换身衣服重来一遍，而且更难被发现。
     final exact = csvProjectName.isEmpty ? null : _findExact(projects, csvProjectName);
     if (exact != null) {
+      final composed = _composeConstants(auditor: auditor, project: exact);
       return BossConstantsResolution(
-        constants: await _bind(
-          _composeConstants(auditor: auditor, project: exact),
-          csvProjectName,
-        ),
+        // 审核人还没定下来时先别落绑定，免得把一份残缺配置记成「已确认」
+        constants: auditor == null
+            ? composed
+            : await _bind(composed, csvProjectName),
         projects: projects,
+        auditors: auditors,
       );
     }
 
@@ -206,11 +215,15 @@ class WorkLogSubmitService {
       return BossConstantsResolution(
         constants: await _bind(learned, csvProjectName),
         projects: projects,
+        auditors: auditors,
       );
     }
 
     if (projects.isEmpty && learned == null) {
-      return const BossConstantsResolution(reason: '没扫到任何项目');
+      return BossConstantsResolution(
+        auditors: auditors,
+        reason: '没扫到任何项目。请确认 BOSS 已登录，再重试',
+      );
     }
 
     // 对不上：把全量清单端出来让用户自己选。
@@ -219,8 +232,31 @@ class WorkLogSubmitService {
       constants: learned ?? _composeConstants(auditor: auditor),
       needsProjectPick: true,
       projects: projects,
+      auditors: auditors,
     );
   }
+
+  /// 候选里那个可以直接用、不必问用户的审核人。
+  ///
+  /// 只有两种情况敢自动定：来自个人设置（权威出处），或者**统共就扫到一个**
+  /// （没得选，问了也是白问）。其余一律交给用户挑——抓包里的 `USERINFO_`
+  /// 大多是用户自己，替他猜就是在赌日志发给谁。
+  static BossAuditor? _preferredAuditor(List<BossAuditor> auditors) {
+    for (final a in auditors) {
+      if (a.source == BossAuditorSource.setting) return a;
+    }
+    return auditors.length == 1 ? auditors.first : null;
+  }
+
+  /// 用户选定审核人之后，据此重建配置。
+  static Map<String, String> constantsForAuditor(
+    Map<String, String> constants,
+    BossAuditor auditor,
+  ) => {
+    ...constants,
+    'auditor': auditor.id,
+    'auditorName': auditor.name,
+  };
 
   /// 之前为这个 CSV 项目名记住过的配置。
   ///
@@ -245,14 +281,14 @@ class WorkLogSubmitService {
   /// [project] 为空时项目三项留空，表示「等用户挑」——留空是刻意的，
   /// 随手填个占位值会在忘记覆盖时变成一次静默的错误提交。
   static Map<String, String> _composeConstants({
-    required BossAuditor auditor,
+    BossAuditor? auditor,
     BossProject? project,
   }) => {
     'projectId': project?.id ?? '',
     'projectCode': project?.code ?? '',
     'projectName': project?.name ?? '',
-    'auditor': auditor.id,
-    'auditorName': auditor.name,
+    'auditor': auditor?.id ?? '',
+    'auditorName': auditor?.name ?? '',
   };
 
   /// 从历史日志学到的配置里取审核人，取不到返回 null。
@@ -431,22 +467,26 @@ class WorkLogSubmitService {
     }
   }
 
-  /// 扫出当前用户的工作日志审核人，取不到返回 null。
+  /// 扫出所有能认出的审核人候选，扫不到时返回空列表。
   ///
   /// 审核人**不在项目清单里**——它是个人设置（`WorkReport_AudtiorFocusor_defaultSetting`，
   /// 踩坑记录 3.21），不是项目属性。所以选好项目还得单独取它，否则凑不齐报文。
   ///
+  /// **返回候选而不是「那一个」**：自动识别已经在真实使用中失败两次，设置项
+  /// 在响应里以哪种形状出现始终没有实测证据。抓包里的 `USERINFO_` 大多带姓名，
+  /// APP 分不清哪个是审核人、哪个是用户自己，但用户一眼能认出来。
+  ///
   /// 和 [listProjects] 一样要重试：会话就绪只要求抓到任意一条带 `para` 的请求，
   /// 承载设置项的那个响应可能稍晚才回来，第一次扫空不代表没有。
-  Future<BossAuditor?> lookupAuditor({
+  Future<List<BossAuditor>> lookupAuditors({
     int retries = 4,
     Duration interval = const Duration(milliseconds: 500),
   }) async {
     for (var attempt = 0; ; attempt++) {
-      final auditor = WorkLogAuditorLookup.parse(
+      final auditors = WorkLogAuditorLookup.parse(
         await runScript(WorkLogAuditorLookup.build(captureStoreName: _store)),
       );
-      if (auditor != null || attempt >= retries) return auditor;
+      if (auditors.isNotEmpty || attempt >= retries) return auditors;
       await Future.delayed(interval);
     }
   }
