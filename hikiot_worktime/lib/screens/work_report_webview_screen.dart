@@ -750,7 +750,11 @@ class _WorkReportWebViewScreenState extends State<WorkReportWebViewScreen> {
     await _controller?.evaluateJavascript(
       source: WorkLogRequestCapture.buildClearScript(),
     );
-    _notify('已清空抓包记录，现在去点「保存」，然后选「② 导出抓包」');
+    // 项目下拉是打开表单时一次性加载、之后本地过滤的，打字不再发请求。
+    // 清空会把那份列表连同一切响应一起删掉，而它删完之后不会自己回来——
+    // 必须重新打开表单。不说清楚的话，「清空→操作→导出」看起来天经地义，
+    // 实际拿到的永远是空报告（本项目已因此浪费过一轮排查）。
+    _notify('已清空抓包。项目列表等已加载的数据也一并清掉了，需重新打开表单才会回来');
   }
 
   /// 导出抓到的写请求（POST/PUT 等），保存动作必在其中。
