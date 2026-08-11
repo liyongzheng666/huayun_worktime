@@ -95,6 +95,25 @@ class WorkLogSubmitService {
   /// 确认框里也因为没有 BOSS 名而不做任何提示——项目对不上却一路畅通。
   static const String manualKey = 'manual';
 
+  /// 这份配置是否可信到能不经确认就直接拿去提交。
+  ///
+  /// 要求项目 ID **和** BOSS 项目名都在。名字不是装饰——它是用户在确认框里
+  /// **唯一**能核对「这个 PROJECTID 到底是哪个项目」的依据。没有名字的配置，
+  /// 界面只能显示 CSV 的写法，看起来一切正常，实际可能指向任何项目。
+  ///
+  /// **绑定表也要过这一关**。曾经这里只查 `projectId` 是否非空，而上一版的
+  /// BUG 恰恰会把一份无名配置正式写成绑定（`_rememberedConstants` 里那句
+  /// 「旧配置就地补上绑定」）。于是错误配置被盖上「已确认」的章，绑定表又是
+  /// 先查的，整个爬清单 + 用户选的流程被彻底短路——用户看到的是一个没有任何
+  /// 出路的确认框。**存疑的东西不该因为被存过一次就变得可信。**
+  ///
+  /// 手工填的除外：用户自己填的没有项目名可比，那是他的决定。
+  static bool trustworthy(Map<String, String> constants) {
+    if (constants['projectId']?.isNotEmpty != true) return false;
+    if (constants[manualKey] == 'true') return true;
+    return constants['projectName']?.isNotEmpty == true;
+  }
+
   /// 已保存的配置是否可用于 CSV 里的 [csvProjectName] 这个项目。
   ///
   /// 用户的项目和审核人会换，一次学会就永久沿用是错的：换项目后继续用
@@ -264,12 +283,16 @@ class WorkLogSubmitService {
   /// 一个项目，是老版本留下的形状，只在用户还没为当前项目确认过时才轮得到它。
   Future<Map<String, String>?> _rememberedConstants(String csvProjectName) async {
     final bound = await _storage.loadBossBinding(csvProjectName);
-    if (bound?['projectId']?.isNotEmpty == true) return bound;
+    if (bound != null && trustworthy(bound)) return bound;
 
     final saved = await _storage.loadBossConstants();
     if (!constantsUsableFor(saved, csvProjectName)) return null;
+    // 不可信的一律回到爬清单 + 用户选，绝不因为「存过一次」就放行
+    if (!trustworthy(saved)) return null;
 
-    // 旧配置就地补上绑定，免得每次都走兼容分支
+    // 旧配置就地补上绑定，免得每次都走兼容分支。
+    // **只给可信的配置补**——上一版就是在这里把一份无名配置写成了正式绑定，
+    // 从此盖着「已确认」的章短路掉整个选择流程。
     if (saved[bindingKey] == null && csvProjectName.isNotEmpty) {
       return _bind(saved, csvProjectName);
     }

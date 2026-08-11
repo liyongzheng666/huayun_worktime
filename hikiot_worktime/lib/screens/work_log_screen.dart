@@ -311,17 +311,22 @@ class WorkLogScreenState extends State<WorkLogScreen> {
         hours: draft.hours,
         existingHours: prep.existingHours,
         constants: constants,
-        canChangeProject: prep.projects.isNotEmpty,
-        canChangeAuditor: prep.auditors.isNotEmpty,
+        // **永远给「改选」**。以前是「扫到候选才给」，结果清单一空，用户就被
+        // 卡在一个没有任何出路的确认框上（他的原话：不知道该怎么处理了）。
+        // 候选空不是「不能改」，只是「这一趟没扫到」——点了现场重扫即可。
+        canChangeProject: true,
+        canChangeAuditor: true,
       );
       if (outcome == null || !mounted) return;
 
       if (outcome.changeProject) {
+        final projects = await _ensureProjects(prep);
+        if (!mounted) return;
         final picked = await WorkLogProjectPickerDialog.pickAndBind(
           context: context,
           csvProjectName: entry.projectName,
           constants: constants,
-          projects: prep.projects,
+          projects: projects,
           purpose: ProjectPickPurpose.change,
         );
         if (!mounted) return;
@@ -330,10 +335,12 @@ class WorkLogScreenState extends State<WorkLogScreen> {
       }
 
       if (outcome.changeAuditor) {
+        final auditors = await _ensureAuditors(prep);
+        if (!mounted) return;
         final picked = await WorkLogAuditorPickerDialog.pick(
           context: context,
           constants: constants,
-          auditors: prep.auditors,
+          auditors: auditors,
         );
         if (!mounted) return;
         if (picked != null) {
@@ -369,6 +376,32 @@ class WorkLogScreenState extends State<WorkLogScreen> {
       return;
     }
     _showMessage('提交失败：${outcome?.message ?? '未能连接 BOSS'}');
+  }
+
+  /// 拿项目清单：准备阶段已经扫到就直接用，扫空了就现场再扫一次（带重试）。
+  ///
+  /// 准备阶段为了不拖慢正常提交，已绑定时只扫一次不等待（`retries: 0`），
+  /// 扫空是常事。但用户主动点「改选」时的诉求是明确的——**他就是要一份清单**，
+  /// 这时候多等两秒远比给他一个空列表强。
+  Future<List<BossProject>> _ensureProjects(_SubmitPreparation prep) async {
+    if (prep.projects.isNotEmpty) return prep.projects;
+
+    _showMessage('正在扫描 BOSS 项目清单…');
+    final result = await BossSessionRunner.run<List<BossProject>>(
+      (controller) => WorkLogSubmitService(controller).listProjects(),
+    );
+    return result.value ?? const [];
+  }
+
+  /// 拿审核人候选，理由同 [_ensureProjects]。
+  Future<List<BossAuditor>> _ensureAuditors(_SubmitPreparation prep) async {
+    if (prep.auditors.isNotEmpty) return prep.auditors;
+
+    _showMessage('正在扫描审核人…');
+    final result = await BossSessionRunner.run<List<BossAuditor>>(
+      (controller) => WorkLogSubmitService(controller).lookupAuditors(),
+    );
+    return result.value ?? const [];
   }
 
   /// 后台会话拿不到登录态时，问用户要不要去登录。

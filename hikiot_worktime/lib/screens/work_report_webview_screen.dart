@@ -500,17 +500,25 @@ class _WorkReportWebViewScreenState extends State<WorkReportWebViewScreen> {
         hours: draft.hours,
         existingHours: existingHours,
         constants: constants,
-        canChangeProject: pickables.projects.isNotEmpty,
-        canChangeAuditor: pickables.auditors.isNotEmpty,
+        // 永远给「改选」：候选空只是「这一趟没扫到」，不是「不能改」。
+        // 藏起来的后果是用户被卡在一个没有出路的确认框上。
+        canChangeProject: true,
+        canChangeAuditor: true,
       );
       if (outcome == null || !mounted) return;
 
       if (outcome.changeProject) {
+        var projects = pickables.projects;
+        if (projects.isEmpty) {
+          _notify('正在扫描 BOSS 项目清单…');
+          projects = await service.listProjects();
+          if (!mounted) return;
+        }
         final picked = await WorkLogProjectPickerDialog.pickAndBind(
           context: context,
           csvProjectName: entry.projectName,
           constants: constants,
-          projects: pickables.projects,
+          projects: projects,
           purpose: ProjectPickPurpose.change,
         );
         if (!mounted) return;
@@ -519,10 +527,16 @@ class _WorkReportWebViewScreenState extends State<WorkReportWebViewScreen> {
       }
 
       if (outcome.changeAuditor) {
+        var auditors = pickables.auditors;
+        if (auditors.isEmpty) {
+          _notify('正在扫描审核人…');
+          auditors = await service.lookupAuditors();
+          if (!mounted) return;
+        }
         final picked = await WorkLogAuditorPickerDialog.pick(
           context: context,
           constants: constants,
-          auditors: pickables.auditors,
+          auditors: auditors,
         );
         if (!mounted) return;
         if (picked != null) {

@@ -231,6 +231,72 @@ void main() {
     });
   });
 
+  group('可信度：能不能不经确认直接拿去提交', () {
+    // 这一组里有落盘的用例，不能靠别的 group 的 setUp 顺手初始化
+    setUp(() {
+      SharedPreferences.setMockInitialValues({});
+    });
+
+    test('有项目 ID 也有 BOSS 项目名才算可信', () {
+      expect(
+        WorkLogSubmitService.trustworthy({
+          'projectId': 'PROJECT_aaa',
+          'projectName': _bossName,
+        }),
+        isTrue,
+      );
+    });
+
+    test('只有 ID 没有 BOSS 项目名一律不可信', () {
+      // 名字不是装饰——它是用户在确认框里唯一能核对
+      // 「这个 PROJECTID 到底是哪个项目」的依据
+      expect(
+        WorkLogSubmitService.trustworthy({'projectId': 'PROJECT_aaa'}),
+        isFalse,
+      );
+      expect(
+        WorkLogSubmitService.trustworthy({
+          'projectId': 'PROJECT_aaa',
+          'projectName': '',
+        }),
+        isFalse,
+      );
+    });
+
+    test('手工填的除外', () {
+      expect(
+        WorkLogSubmitService.trustworthy({
+          'projectId': 'PROJECT_aaa',
+          WorkLogSubmitService.manualKey: 'true',
+        }),
+        isTrue,
+      );
+    });
+
+    test('没有项目 ID 一律不可信', () {
+      expect(
+        WorkLogSubmitService.trustworthy({'projectName': _bossName}),
+        isFalse,
+      );
+    });
+
+    test('存过一次的无名配置不会因此变得可信', () async {
+      // 上一版的 BUG 会把无名配置正式写成绑定，盖上「已确认」的章；
+      // 绑定表又是先查的，于是整个爬清单 + 用户选的流程被短路，
+      // 用户看到的是一个没有任何出路的确认框。
+      final storage = StorageService();
+      await storage.saveBossBinding(_csvName, {
+        'projectId': 'PROJECT_aaa',
+        'auditor': ';USERINFO_ccc',
+        'projectName': '',
+        WorkLogSubmitService.bindingKey: _csvName,
+      });
+
+      final bound = await storage.loadBossBinding(_csvName);
+      expect(WorkLogSubmitService.trustworthy(bound!), isFalse);
+    });
+  });
+
   group('从清单反查补上缺失的项目名', () {
     // 「有 ID 没名字」的配置来自 learnConstants 的保存报文 / 正则扫描两条来源。
     // 名字缺失的直接后果是用户在确认框里无从核对——界面只能显示 CSV 的写法，
