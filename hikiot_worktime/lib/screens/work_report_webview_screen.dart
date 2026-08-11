@@ -15,6 +15,7 @@ import '../utils/work_log_fill_script.dart';
 import '../utils/work_log_request_capture.dart';
 import '../utils/work_log_submit_script.dart';
 import '../utils/work_time_calculator.dart';
+import '../widgets/work_log_binding_confirm_dialog.dart';
 import '../widgets/work_log_confirm_dialog.dart';
 
 /// 日志系统的可选入口。
@@ -484,6 +485,10 @@ class _WorkReportWebViewScreenState extends State<WorkReportWebViewScreen> {
         actWork: actWork,
         projectId: constants['projectId']!,
         projectCode: constants['projectCode'] ?? '',
+        projectName: WorkLogSubmitService.payloadProjectName(
+          constants,
+          entry.projectName,
+        ),
         auditor: constants['auditor'] ?? '',
       );
 
@@ -578,16 +583,32 @@ class _WorkReportWebViewScreenState extends State<WorkReportWebViewScreen> {
     String projectName,
   ) async {
     final saved = await StorageService().loadBossConstants();
-    if (WorkLogSubmitService.constantsUsableFor(saved, projectName)) {
-      return saved;
-    }
 
     final changedProject =
         saved['projectId']?.isNotEmpty == true &&
         (saved['projectName'] ?? '').isNotEmpty;
 
-    final learned = await service.learnConstants(projectName);
-    if (learned != null) return learned;
+    // 走服务里的统一解析，绑定判定与后台提交保持一致；
+    // 两条路径各判各的，迟早会出现「网页里能提交、后台却要求重新确认」。
+    final resolution = await service.resolveConstants(projectName);
+    final learned = resolution.constants;
+    if (learned != null) {
+      if (!resolution.needsBindingConfirm) return learned;
+
+      // 项目名对不上，必须先确认是同一个项目——弹的是与后台提交同一个框
+      if (!mounted) return null;
+      final sameProject = await WorkLogBindingConfirmDialog.show(
+        context: context,
+        csvProjectName: projectName,
+        constants: learned,
+      );
+      if (!mounted) return null;
+      if (!sameProject) {
+        _notify('已取消。请在工作日志页的「提交配置」里手工填写正确的项目 ID');
+        return null;
+      }
+      return WorkLogSubmitService.bindConstants(learned, projectName);
+    }
 
     // 项目变了却学不到新配置时，宁可停下也不能拿旧项目的 ID 提交
     if (changedProject) {

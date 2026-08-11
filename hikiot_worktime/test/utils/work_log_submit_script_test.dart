@@ -16,12 +16,19 @@ void main() {
     content: '完成接口相关开发工作。1) 实现核心逻辑，覆盖场景。',
   );
 
-  Map<String, dynamic> build(WorkLogEntry e, {String actWork = '8.55'}) {
+  /// [projectName] 默认给 BOSS 那边的写法（比 CSV 多一个「(2)」），
+  /// 好让「报文用的是哪一个」在断言里一眼可辨。
+  Map<String, dynamic> build(
+    WorkLogEntry e, {
+    String actWork = '8.55',
+    String projectName = '面向比亚迪公司的项目-自筹(2)',
+  }) {
     return WorkLogSubmitScript.buildWorkLogData(
       entry: e,
       actWork: actWork,
       projectId: 'PROJECT_aaa',
       projectCode: 'PROJECT_bbb',
+      projectName: projectName,
       auditor: ';USERINFO_ccc',
     );
   }
@@ -126,7 +133,7 @@ void main() {
       expect(data['LOGCONTENT'], contains('覆盖场景'));
       expect(data['PROJECTPHASE'], '软件编码阶段');
       expect(data['PHASEACTIVITIES'], '软件编码');
-      expect(data['PROJECTNAME'], '面向比亚迪公司的项目-自筹');
+      // PROJECTNAME 不在这里断言：它来自 BOSS 而非 CSV，见下方「PROJECTNAME 取值」
       expect(data['ACTWORK'], '8.55');
       expect(data['LOGTYPE'], '5');
     });
@@ -223,6 +230,23 @@ void main() {
       // BOSS 经典首页加载自身就会发约 40 个请求，缓冲太小会把
       // 后续真正需要的业务响应挤出去
       expect(WorkLogRequestCapture.maxRecords, greaterThanOrEqualTo(60));
+    });
+  });
+
+  group('PROJECTNAME 取值', () {
+    test('报文用 BOSS 的项目名，不用 CSV 的写法', () {
+      // 决定归属的是 PROJECTID，名字必须跟它同源；
+      // 两者取自不同来源时，报文里这两个字段会指向不同的项目
+      final data = build(entry);
+
+      expect(data['PROJECTNAME'], '面向比亚迪公司的项目-自筹(2)');
+      expect(data['PROJECTNAME'], isNot(entry.projectName));
+      expect(data['PROJECTID'], 'PROJECT_aaa');
+    });
+
+    test('传入什么就填什么，不擅自改写', () {
+      final data = build(entry, projectName: '另一个项目');
+      expect(data['PROJECTNAME'], '另一个项目');
     });
   });
 }

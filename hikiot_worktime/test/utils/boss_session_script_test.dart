@@ -33,6 +33,7 @@ void main() {
           actWork: '8.55',
           projectId: 'PROJECT_aaa',
           projectCode: 'PROJECT_bbb',
+          projectName: '项目',
           auditor: ';USERINFO_ccc',
         ),
         captureStoreName: store,

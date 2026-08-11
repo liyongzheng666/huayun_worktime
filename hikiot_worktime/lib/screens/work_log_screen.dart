@@ -15,6 +15,7 @@ import '../utils/work_time_calculator.dart';
 import '../services/boss_session_runner.dart';
 import '../services/work_log_submit_service.dart';
 import '../widgets/boss_constants_dialog.dart';
+import '../widgets/work_log_binding_confirm_dialog.dart';
 import '../widgets/work_log_confirm_dialog.dart';
 import '../widgets/week_strip.dart';
 import 'work_report_webview_screen.dart';
@@ -208,16 +209,17 @@ class WorkLogScreenState extends State<WorkLogScreen> {
       controller,
     ) async {
       final service = WorkLogSubmitService(controller);
-      final constants = await service.resolveConstants(entry.projectName);
-      if (constants == null) {
+      final resolution = await service.resolveConstants(entry.projectName);
+      if (!resolution.hasConstants) {
         final (conclusion, report) = await service.collectDiagnostics(
           entry.projectName,
         );
         return _SubmitPreparation.failed(conclusion, report);
       }
       return _SubmitPreparation(
-        constants: constants,
+        constants: resolution.constants,
         existingHours: await service.queryExistingHours(draft.date),
+        needsBindingConfirm: resolution.needsBindingConfirm,
       );
     });
 
@@ -241,6 +243,28 @@ class WorkLogScreenState extends State<WorkLogScreen> {
       return;
     }
 
+    // 学到的项目名与 CSV 对不上：先确认是同一个项目再谈提交。
+    // 名字对不上意味着自动匹配没命中，学到的可能根本是别的项目的 ID。
+    var constants = prep.constants!;
+    if (prep.needsBindingConfirm) {
+      final sameProject = await WorkLogBindingConfirmDialog.show(
+        context: context,
+        csvProjectName: entry.projectName,
+        constants: constants,
+      );
+      if (!mounted) return;
+      if (!sameProject) {
+        _showMessage('已取消提交。请在「提交配置」里手工填写正确的项目 ID');
+        return;
+      }
+      // 确认后才落绑定：用户否认时不留下错误的对应关系
+      constants = await WorkLogSubmitService.bindConstants(
+        constants,
+        entry.projectName,
+      );
+      if (!mounted) return;
+    }
+
     // 面向公司真实系统，绝不静默提交；工时也在这里允许调整
     final actWork = await WorkLogConfirmDialog.show(
       context: context,
@@ -248,7 +272,7 @@ class WorkLogScreenState extends State<WorkLogScreen> {
       entry: entry,
       hours: draft.hours,
       existingHours: prep.existingHours,
-      constants: prep.constants!,
+      constants: constants,
     );
     if (actWork == null || !mounted) return;
 
@@ -259,7 +283,7 @@ class WorkLogScreenState extends State<WorkLogScreen> {
       return WorkLogSubmitService(controller).submit(
         entry: entry,
         actWork: actWork,
-        constants: prep.constants!,
+        constants: constants,
       );
     });
 
@@ -786,16 +810,23 @@ class WorkLogScreenState extends State<WorkLogScreen> {
 
 /// 提交前的准备结果：要么拿到了配置和已填工时，要么带回诊断信息。
 class _SubmitPreparation {
-  const _SubmitPreparation({this.constants, this.existingHours})
-    : conclusion = null,
-      diagnostics = null;
+  const _SubmitPreparation({
+    this.constants,
+    this.existingHours,
+    this.needsBindingConfirm = false,
+  }) : conclusion = null,
+       diagnostics = null;
 
   const _SubmitPreparation.failed(this.conclusion, this.diagnostics)
     : constants = null,
-      existingHours = null;
+      existingHours = null,
+      needsBindingConfirm = false;
 
   final Map<String, String>? constants;
   final double? existingHours;
   final String? conclusion;
   final String? diagnostics;
+
+  /// 学到的项目名与 CSV 对不上，提交前要先让用户确认是同一个项目。
+  final bool needsBindingConfirm;
 }

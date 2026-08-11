@@ -124,13 +124,18 @@ class WorkLogSubmitScript {
 
   /// 构造 `workLogData` 业务对象（新建日志）。
   ///
-  /// [projectId] / [projectCode] / [auditor] 是随账号和项目固定的值，
-  /// 由调用方从一次成功提交中获取后传入，不在此硬编码。
+  /// [projectId] / [projectCode] / [projectName] / [auditor] 是随账号和项目
+  /// 固定的值，由调用方从一次成功提交中获取后传入，不在此硬编码。
+  ///
+  /// [projectName] 必须是 **BOSS 那边的项目名**，不能用 CSV 里的写法。
+  /// 决定工时归属的是 `PROJECTID`，名字得跟着它走；两者取自不同来源的话，
+  /// 报文里这两个字段会指向不同的项目（实测 CSV 少写一个「(2)」就会这样）。
   static Map<String, dynamic> buildWorkLogData({
     required WorkLogEntry entry,
     required String actWork,
     required String projectId,
     required String projectCode,
+    required String projectName,
     required String auditor,
   }) {
     final logType = resolveLogType(entry.workType);
@@ -181,7 +186,7 @@ class WorkLogSubmitScript {
       'TASKEUID': '',
       'TASKID': '',
       'PROJECTID': projectId,
-      'PROJECTNAME': entry.projectName,
+      'PROJECTNAME': projectName,
       'PROJECTCODE': projectCode,
     };
   }

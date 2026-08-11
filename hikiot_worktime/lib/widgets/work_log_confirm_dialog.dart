@@ -84,7 +84,10 @@ class WorkLogConfirmDialog {
                   // 项目与审核人是这里最有后果的两项：填错项目会把工时记到
                   // 别的项目名下，填错审核人会把日志提交给错误的审批人。
                   // 两者都不是用户输入的，而是 APP 自动查来的，因此必须让他能核对。
-                  _confirmRow('项目', entry.projectName),
+                  _buildProjectRow(
+                    csvName: entry.projectName,
+                    bossName: constants['projectName'] ?? '',
+                  ),
                   _confirmRow(
                     '审核人',
                     constants['auditorName']?.isNotEmpty == true
@@ -192,6 +195,39 @@ class WorkLogConfirmDialog {
     );
   }
 
+
+  /// 项目行。
+  ///
+  /// 显示的是 **BOSS 那边的项目名**，因为提交上去的就是它——报文里的
+  /// `PROJECTNAME` 必须跟 `PROJECTID` 同源。CSV 的写法与之不同时（比如少一个
+  /// 「(2)」）额外标出来：两个名字都摆着，用户才能发现绑错了项目。
+  static Widget _buildProjectRow({
+    required String csvName,
+    required String bossName,
+  }) {
+    // 手工配置的没有 BOSS 名，此时提交的就是 CSV 的写法
+    if (bossName.isEmpty || bossName == csvName) {
+      return _confirmRow('项目', csvName);
+    }
+
+    return Padding(
+      padding: const EdgeInsets.only(bottom: 6),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          const Text(
+            '项目',
+            style: TextStyle(fontSize: 11, color: Colors.grey),
+          ),
+          Text(bossName, style: const TextStyle(fontSize: 13)),
+          Text(
+            'CSV 里写的是「$csvName」，已按 BOSS 的名称提交',
+            style: TextStyle(fontSize: 10, color: Colors.grey[600]),
+          ),
+        ],
+      ),
+    );
+  }
 
   /// 凑整建议：距离下一个 0.1 小时刻度还差几分钟。
   ///

@@ -19,6 +19,7 @@ Future<void> pumpDialog(
   WidgetTester tester, {
   required WorkLogHours hours,
   double? existingHours,
+  Map<String, String> constants = const {'auditorName': '张三'},
 }) async {
   await tester.pumpWidget(
     MaterialApp(
@@ -30,7 +31,7 @@ Future<void> pumpDialog(
             entry: _entry,
             hours: hours,
             existingHours: existingHours,
-            constants: const {'auditorName': '张三'},
+            constants: constants,
           ),
           child: const Text('打开'),
         ),
@@ -150,6 +151,49 @@ void main() {
 
       final field = tester.widget<TextField>(find.byType(TextField));
       expect(field.controller!.text, '11.55');
+    });
+  });
+
+  group('项目行', () {
+    testWidgets('显示 BOSS 的项目名，并标出 CSV 的写法', (tester) async {
+      // 提交上去的是 BOSS 的名字，界面就得显示它；
+      // 同时把 CSV 的写法标出来，用户才可能发现绑错了项目
+      await pumpDialog(
+        tester,
+        hours: const WorkLogHours(hours: 8),
+        constants: const {
+          'auditorName': '张三',
+          'projectName': '某项目(2)',
+        },
+      );
+
+      expect(find.text('某项目(2)'), findsOneWidget);
+      expect(
+        find.text('CSV 里写的是「某项目」，已按 BOSS 的名称提交'),
+        findsOneWidget,
+      );
+    });
+
+    testWidgets('两边名字一致时不啰嗦', (tester) async {
+      await pumpDialog(
+        tester,
+        hours: const WorkLogHours(hours: 8),
+        constants: const {'auditorName': '张三', 'projectName': '某项目'},
+      );
+
+      expect(find.text('某项目'), findsOneWidget);
+      expect(find.textContaining('CSV 里写的是'), findsNothing);
+    });
+
+    testWidgets('手工配置没有 BOSS 名时退回 CSV 的写法', (tester) async {
+      await pumpDialog(
+        tester,
+        hours: const WorkLogHours(hours: 8),
+        constants: const {'auditorName': '张三'},
+      );
+
+      expect(find.text('某项目'), findsOneWidget);
+      expect(find.textContaining('CSV 里写的是'), findsNothing);
     });
   });
 }

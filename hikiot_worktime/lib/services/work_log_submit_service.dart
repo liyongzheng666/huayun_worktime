@@ -12,6 +12,22 @@ import '../utils/work_log_request_capture.dart';
 import '../utils/work_log_submit_script.dart';
 import 'storage_service.dart';
 
+/// 提交配置的解析结果
+class BossConstantsResolution {
+  const BossConstantsResolution({this.constants, this.needsBindingConfirm = false});
+
+  /// 取到的提交配置，null 表示没拿到
+  final Map<String, String>? constants;
+
+  /// 是否需要用户确认「CSV 的项目名 ↔ BOSS 的项目名 是同一个项目」。
+  ///
+  /// 只在刚学到配置且两边名字不一致时为 true。**确认前不写绑定键**，
+  /// 用户拒绝时不会留下一个错误的绑定，下次仍会重新学。
+  final bool needsBindingConfirm;
+
+  bool get hasConstants => constants != null;
+}
+
 /// 提交结果
 class WorkLogSubmitResult {
   const WorkLogSubmitResult({required this.ok, this.objectId, this.message});
@@ -37,27 +53,101 @@ class WorkLogSubmitService {
 
   static const String _store = WorkLogRequestCapture.storeName;
 
-  /// 已保存的配置是否可用于 [projectName] 这个项目。
+  /// 记录「这份配置是为 CSV 里的哪个项目名学的」，作为缓存匹配键。
+  static const String bindingKey = 'csvProjectName';
+
+  /// 已保存的配置是否可用于 CSV 里的 [csvProjectName] 这个项目。
   ///
   /// 用户的项目和审核人会换，一次学会就永久沿用是错的：换项目后继续用
   /// 旧的 PROJECTID，会把新项目的日志记到旧项目名下，而且不会报错。
+  ///
+  /// **比的是绑定键，不是 BOSS 那边的项目名。** 两边写法本就可能不同
+  /// （BOSS 多个「(2)」之类），拿 BOSS 名去比 CSV 名会永远不等，于是
+  /// 每次提交都重学；更要命的是 `learnConstants` 的项目偏好匹配用的是
+  /// 同一个比较，失效后会静默取历史日志的第一行——用户做过多个项目时
+  /// 直接学到别的项目的 ID，且全程无提示。
   static bool constantsUsableFor(
     Map<String, String> saved,
-    String projectName,
+    String csvProjectName,
   ) {
     if (saved['projectId']?.isNotEmpty != true) return false;
-    final savedName = saved['projectName'] ?? '';
-    if (savedName.isEmpty || projectName.isEmpty) return true;
-    return savedName == projectName;
+
+    final boundTo = saved[bindingKey];
+    if (boundTo == null) {
+      // 旧版本存的配置没有绑定键。名字一致的可以就地认作已绑定；
+      // 不一致的恰恰可能是当初静默 fallback 学来的，不能无声沿用，
+      // 交给调用方重学一次并让用户确认。
+      final bossName = saved['projectName'] ?? '';
+      if (bossName.isEmpty || csvProjectName.isEmpty) return true;
+      return bossName == csvProjectName;
+    }
+
+    if (boundTo.isEmpty || csvProjectName.isEmpty) return true;
+    return boundTo == csvProjectName;
   }
 
-  /// 取提交所需的业务标识：本地已保存且项目对得上 → 直接用，否则现学。
-  Future<Map<String, String>?> resolveConstants(String projectName) async {
+  /// 取提交所需的业务标识：已绑定当前 CSV 项目 → 直接用，否则现学。
+  ///
+  /// 学到的配置若与 CSV 项目名不一致，**不会自动绑定**，而是把
+  /// [BossConstantsResolution.needsBindingConfirm] 置位交给调用方去问用户。
+  Future<BossConstantsResolution> resolveConstants(String csvProjectName) async {
     final saved = await _storage.loadBossConstants();
-    if (constantsUsableFor(saved, projectName)) return saved;
+    if (constantsUsableFor(saved, csvProjectName)) {
+      // 旧配置就地补上绑定键，免得每次都走上面那条兼容分支
+      if (saved[bindingKey] == null && csvProjectName.isNotEmpty) {
+        return BossConstantsResolution(
+          constants: await _bind(saved, csvProjectName),
+        );
+      }
+      return BossConstantsResolution(constants: saved);
+    }
 
-    return learnConstants(projectName);
+    final learned = await learnConstants(csvProjectName);
+    if (learned == null) return const BossConstantsResolution();
+
+    // 名字对得上就没什么可确认的，直接绑定
+    final bossName = learned['projectName'] ?? '';
+    if (bossName.isEmpty || bossName == csvProjectName) {
+      return BossConstantsResolution(
+        constants: await _bind(learned, csvProjectName),
+      );
+    }
+
+    return BossConstantsResolution(
+      constants: learned,
+      needsBindingConfirm: true,
+    );
   }
+
+  /// 报文里该填的项目名。
+  ///
+  /// 一律优先用 BOSS 的写法，让 `PROJECTNAME` 与 `PROJECTID` 同源；
+  /// 只有手工配置（没有 BOSS 名）时才退回 CSV 的写法。
+  static String payloadProjectName(
+    Map<String, String> constants,
+    String csvProjectName,
+  ) => constants['projectName']?.isNotEmpty == true
+      ? constants['projectName']!
+      : csvProjectName;
+
+  /// 记住「这份配置对应 CSV 里的哪个项目」，之后同名项目不再询问也不再重学。
+  ///
+  /// 做成静态方法是因为它只写存储、不碰网页：用户在确认框上点「是同一个」时，
+  /// 后台无头会话早已销毁，此时拿不到也不需要 `InAppWebViewController`。
+  static Future<Map<String, String>> bindConstants(
+    Map<String, String> constants,
+    String csvProjectName, {
+    StorageService? storage,
+  }) async {
+    final bound = {...constants, bindingKey: csvProjectName};
+    await (storage ?? StorageService()).saveBossConstants(bound);
+    return bound;
+  }
+
+  Future<Map<String, String>> _bind(
+    Map<String, String> constants,
+    String csvProjectName,
+  ) => bindConstants(constants, csvProjectName, storage: _storage);
 
   /// 扫一次网页会话，尝试学到提交配置；成功则落盘并返回。
   ///
@@ -128,6 +218,7 @@ class WorkLogSubmitService {
         actWork: actWork,
         projectId: constants['projectId']!,
         projectCode: constants['projectCode'] ?? '',
+        projectName: payloadProjectName(constants, entry.projectName),
         auditor: constants['auditor'] ?? '',
       );
 
