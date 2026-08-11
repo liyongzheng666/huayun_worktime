@@ -298,4 +298,57 @@ void main() {
       expect(byDate['2026-09-01']!.hours, 9.0);
     });
   });
+
+  group('考勤两份 map 映射成填报工时', () {
+    // 这一组防的是「照着字段名想当然」：工时在 dayData，打卡时刻却在
+    // attendanceData，而且键名是 checkInTime/checkOutTime。写错的后果不是
+    // 报错而是恒为 null——凑整提示的「打卡到几点」和「按当前时间算工时」
+    // 两个功能都会静默失效，单元测试还全绿（因为测试直接塞了值进去）。
+    test('打卡时刻取自 attendanceData 的 checkInTime/checkOutTime', () {
+      final hours = WorkLogRepository.workHoursFrom(
+        dayData: const {'hours': 8.55, 'type': '工作日'},
+        attendanceData: const {
+          'checkInTime': '08:30',
+          'checkOutTime': '18:03',
+        },
+      );
+
+      expect(hours.hours, 8.55);
+      expect(hours.checkIn, '08:30');
+      expect(hours.checkOut, '18:03');
+    });
+
+    test('不认 dayData 里的 checkIn/checkOut——那两个键根本不存在', () {
+      // 就算有人把值写进 dayData，也不该被当成打卡时刻：
+      // 真实链路里 _applyAttendance 只往 dayData 写 type/hours/跨天打卡
+      final hours = WorkLogRepository.workHoursFrom(
+        dayData: const {
+          'hours': 8.0,
+          'checkIn': '不该被读到',
+          'checkOut': '不该被读到',
+        },
+      );
+
+      expect(hours.checkIn, isNull);
+      expect(hours.checkOut, isNull);
+    });
+
+    test('没有 attendanceData 时打卡时刻为空，但工时仍然给出', () {
+      // 未来日期、没登录等情况下考勤是空的，工时不该跟着一起丢
+      final hours = WorkLogRepository.workHoursFrom(
+        dayData: const {'hours': 8.0},
+      );
+
+      expect(hours.hours, 8.0);
+      expect(hours.hasData, isTrue);
+      expect(hours.checkIn, isNull);
+    });
+
+    test('工时缺失时 hasData 为 false，不当成 0 小时', () {
+      final hours = WorkLogRepository.workHoursFrom(dayData: const {});
+
+      expect(hours.hasData, isFalse);
+      expect(hours.hours, isNull);
+    });
+  });
 }

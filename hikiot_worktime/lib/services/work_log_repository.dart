@@ -228,15 +228,35 @@ class WorkLogRepository {
         return const WorkLogHours();
       }
 
-      final dayData = result.dayData;
-      return WorkLogHours(
-        hours: (dayData['hours'] as num?)?.toDouble(),
-        checkIn: dayData['checkIn'] as String?,
-        checkOut: dayData['checkOut'] as String?,
+      return workHoursFrom(
+        dayData: result.dayData,
+        attendanceData: result.attendanceData,
       );
     } catch (e) {
       // 取不到工时不应阻断日志填报，页面会显示为「未获取到」。
       return const WorkLogHours();
     }
+  }
+
+  /// 把考勤仓储返回的两份 map 映射成填报要用的工时。
+  ///
+  /// **工时和打卡时刻不在同一个 map 里，这是必须记住的一点**：
+  /// `dayData` 里是日期类型与工时（`hours`），打卡时刻在 `attendanceData`，
+  /// 而且键名是 **`checkInTime` / `checkOutTime`**，不是 `checkIn` / `checkOut`。
+  ///
+  /// 早先这里照着字段名想当然写了 `dayData['checkIn']`，结果两个打卡时刻
+  /// **在真机上恒为 null**：凑整提示里「打卡到 20:36 后下拉刷新」那一行从来
+  /// 没出现过，后来加的「按当前时间算工时」开关也永远不显示。单元测试全绿，
+  /// 因为测试直接把 checkIn/checkOut 塞进了 `WorkLogHours`——**喂了真实链路
+  /// 根本不产出的数据**。抽成这个纯函数就是为了让映射本身能被测到。
+  static WorkLogHours workHoursFrom({
+    required Map<String, dynamic> dayData,
+    Map<String, dynamic>? attendanceData,
+  }) {
+    return WorkLogHours(
+      hours: (dayData['hours'] as num?)?.toDouble(),
+      checkIn: attendanceData?['checkInTime'] as String?,
+      checkOut: attendanceData?['checkOutTime'] as String?,
+    );
   }
 }
