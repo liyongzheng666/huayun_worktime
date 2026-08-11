@@ -134,6 +134,8 @@ class _WorkReportWebViewScreenState extends State<WorkReportWebViewScreen> {
                   _exportCapture();
                 case 'exportProjects':
                   _exportProjects();
+                case 'exportServices':
+                  _exportServices();
               }
             },
             itemBuilder: (_) => const [
@@ -141,6 +143,7 @@ class _WorkReportWebViewScreenState extends State<WorkReportWebViewScreen> {
               PopupMenuItem(value: 'clearCapture', child: Text('① 清空抓包')),
               PopupMenuItem(value: 'exportCapture', child: Text('② 导出抓包')),
               PopupMenuItem(value: 'exportProjects', child: Text('导出项目候选')),
+              PopupMenuItem(value: 'exportServices', child: Text('导出服务清单')),
             ],
           ),
         ],
@@ -788,12 +791,37 @@ class _WorkReportWebViewScreenState extends State<WorkReportWebViewScreen> {
         return;
       }
 
-      final text = projects.map((p) => '\${p.name}\t\${p.id}').join('\n');
+      final text = projects.map((p) => '${p.name}\t${p.id}').join('\n');
       await Clipboard.setData(ClipboardData(text: text));
       if (!mounted) return;
-      _notify('已复制 \${projects.length} 个项目候选（不含凭据）');
+      _notify('已复制 ${projects.length} 个项目候选（不含凭据）');
     } catch (e) {
       _notify('导出项目候选失败: \$e');
+    }
+  }
+
+  /// 导出页面调过哪些服务，用于定位「按关键字查项目」这类接口。
+  ///
+  /// 踩坑记录 3.15：**找服务名比扫响应内容可靠得多**。BOSS 所有业务共用
+  /// 同一个 DataService 入口，靠 `para.ServiceUri` 区分；知道服务名和它吃
+  /// 哪些参数，就能照着重放，不必再靠猜响应形状碰运气。
+  ///
+  /// 输出已由诊断脚本就地打码（`Password` / `LoginID` 一律替换为 `***`，
+  /// 服务参数只取键名不取值），**可以安全外发**。
+  Future<void> _exportServices() async {
+    final controller = _controller;
+    if (controller == null) return;
+
+    try {
+      final service = WorkLogSubmitService(controller);
+      final (_, report) = await service.collectDiagnostics(
+        await _preferredProjectName(),
+      );
+      await Clipboard.setData(ClipboardData(text: report));
+      if (!mounted) return;
+      _notify('已复制服务清单（凭据已打码，${report.length} 字符）');
+    } catch (e) {
+      _notify('导出服务清单失败: $e');
     }
   }
 
