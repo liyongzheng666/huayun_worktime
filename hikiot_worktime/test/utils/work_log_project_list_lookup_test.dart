@@ -19,7 +19,8 @@ void main() {
     test('只放行 PROJECT_ 开头的标识，凭据无从被当成项目输出', () {
       // 这是输出安全的最终保障：一段文本必须配上一个 PROJECT_ 标识才会被收下，
       // 且它自己不能也是个标识。凭据不满足这个形状，落不进输出。
-      expect(script.contains("id.indexOf('PROJECT_') !== 0"), isTrue);
+      expect(script.contains('if (!isProjectId(id)) return;'), isTrue);
+      expect(script.contains("v.indexOf('PROJECT_') === 0"), isTrue);
       expect(script.contains("n.indexOf('USERINFO_') === 0"), isTrue);
     });
 
@@ -34,9 +35,26 @@ void main() {
       expect(script.contains('${WorkLogProjectListLookup.maxDepth}'), isTrue);
     });
 
-    test('两种数据形状都认', () {
-      expect(script.contains('ColName'), isTrue);
-      expect(script.contains('PROJECTNAME'), isTrue);
+    test('四种数据形状都认', () {
+      // 都是实际抓包里出现过的形状，少认一种就会整批漏掉
+      expect(script.contains('harvestRow'), isTrue, reason: '行内分列（我的项目网格）');
+      expect(script.contains('obj.ColName'), isTrue, reason: '同列 ColText/ColValue 配对');
+      expect(script.contains('obj.Key'), isTrue, reason: '键值对（项目下拉数据源）');
+      expect(script.contains('obj.PROJECTID'), isTrue, reason: '详情对象');
+    });
+
+    test('行内分列时按 EID/ENAME/EUID 取值', () {
+      // 我的项目网格里 ID 和名字在同一行的不同列对象上，
+      // 只认「同一列对象内配对」会让整个网格一条都扫不到
+      expect(script.contains("'EID', 'PROJECTID'"), isTrue);
+      expect(script.contains("'ENAME', 'PROJECTNAME'"), isTrue);
+      expect(script.contains("'EUID', 'PROJECTCODE'"), isTrue);
+    });
+
+    test('同一项目从多处扫到时按 id 归并并补齐编码', () {
+      // 否则「有名字没编码」和「有编码没名字」会各占一条，
+      // 候选列表里出现两个看起来一样的项目
+      expect(script.contains('if (!prev.code && c) prev.code = c;'), isTrue);
     });
   });
 
@@ -112,6 +130,47 @@ void main() {
       expect(
         const BossProject(id: 'PROJECT_a', name: '甲'),
         isNot(const BossProject(id: 'PROJECT_b', name: '甲')),
+      );
+    });
+  });
+
+  group('项目编码（EUID）', () {
+    test('解析时带出 code', () {
+      // 日志的 PROJECTCODE 就是项目的 EUID，由实际抓包比对确认
+      final projects = WorkLogProjectListLookup.parse(
+        jsonEncode({
+          'ok': true,
+          'projects': [
+            {
+              'id': 'PROJECT_899dce8a',
+              'name': '面向比亚迪公司汽车造型设计场景的工业造型设计软件攻关项目-自筹',
+              'code': 'PROJECT_75e02aca',
+            },
+          ],
+        }),
+      );
+
+      expect(projects.single.code, 'PROJECT_75e02aca');
+    });
+
+    test('缺 code 时为空串而不是 null，不影响其余字段', () {
+      final projects = WorkLogProjectListLookup.parse(
+        jsonEncode({
+          'ok': true,
+          'projects': [
+            {'id': 'PROJECT_a', 'name': '甲项目'},
+          ],
+        }),
+      );
+
+      expect(projects.single.code, isEmpty);
+      expect(projects.single.name, '甲项目');
+    });
+
+    test('code 参与相等判定，避免归并后被当成同一条', () {
+      expect(
+        const BossProject(id: 'PROJECT_a', name: '甲', code: 'PROJECT_x'),
+        isNot(const BossProject(id: 'PROJECT_a', name: '甲')),
       );
     });
   });

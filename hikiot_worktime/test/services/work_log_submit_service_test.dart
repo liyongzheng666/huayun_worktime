@@ -154,9 +154,23 @@ void main() {
       expect(rebuilt['projectName'], '运维平台三期');
     });
 
-    test('项目编码必须清空', () {
-      // 它属于原来那个项目，带过去就是一个确定错误的值；
-      // 留空则由服务端兜底（手工配置一直是这么用的）
+    test('项目编码换成新项目的 EUID', () {
+      // 日志的 PROJECTCODE 就是项目的 EUID，实际抓包比对确认；
+      // 沿用旧项目的编码是个确定错误的值
+      final rebuilt = WorkLogSubmitService.constantsForProject(
+        learned,
+        const BossProject(
+          id: 'PROJECT_zzz',
+          name: '运维平台三期',
+          code: 'PROJECT_zzz_euid',
+        ),
+      );
+
+      expect(rebuilt['projectCode'], 'PROJECT_zzz_euid');
+    });
+
+    test('扫不到 EUID 时清空编码，不留旧项目的值', () {
+      // 留空还能由服务端兜底，带着旧编码则必错
       final rebuilt = WorkLogSubmitService.constantsForProject(learned, picked);
 
       expect(rebuilt['projectCode'], isEmpty);

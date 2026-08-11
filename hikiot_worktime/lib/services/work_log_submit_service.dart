@@ -133,13 +133,17 @@ class WorkLogSubmitService {
 
   /// 用户在确认框里改选了别的项目时，据此重建配置。
   ///
-  /// **`projectCode` 必须清空**：它属于原来那个项目，带过去就是一个
-  /// 确定错误的值；留空则由服务端兜底（手工配置一直是这么用的）。
+  /// **`projectCode` 用新项目的 `EUID`**：实际抓包比对确认，日志的
+  /// `PROJECTID` 就是项目的 `EID`、`PROJECTCODE` 就是项目的 `EUID`
+  /// （比亚迪那条日志的两个值与项目对象的 EID/EUID 逐字相同）。
+  /// 项目网格里两者同行可取，所以改选后能给出正确的编码。
+  /// 只有扫不到 `EUID` 时才清空——旧项目的编码带过去是个确定错误的值，
+  /// 留空还能由服务端兜底（手工配置一直是这么用的）。
   ///
-  /// **`auditor` 保留**：我们只从项目清单拿到了名字和 ID，没有新项目的
-  /// 审核人。清空会直接提交失败，沿用则大概率正确——工作日志的审核人
-  /// 通常跟着人走而不是跟着项目走。但这终究是个假设，因此界面上必须
-  /// 提示用户去核对，不能默默替换。
+  /// **`auditor` 保留**：审核人是个人设置而非项目属性——系统设置里的
+  /// `WorkReport_AudtiorFocusor_defaultSetting` 存的就是当前用户的默认
+  /// 审核人。因此换项目时沿用是对的。但这仍是从一次抓包得出的结论，
+  /// 界面上照旧提示用户核对，不默默替换。
   static Map<String, String> constantsForProject(
     Map<String, String> constants,
     BossProject project,
@@ -147,7 +151,7 @@ class WorkLogSubmitService {
     ...constants,
     'projectId': project.id,
     'projectName': project.name,
-    'projectCode': '',
+    'projectCode': project.code,
   };
 
   /// 记住「这份配置对应 CSV 里的哪个项目」，之后同名项目不再询问也不再重学。
