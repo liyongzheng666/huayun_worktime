@@ -102,6 +102,12 @@ class WorkLogConfirmDialog {
                     edited: edited,
                     onChanged: () => setDialogState(() {}),
                   ),
+                  _buildStepHint(
+                    parsed: parsed,
+                    // 手改过工时之后，打卡时刻和输入框里的数已经对不上，
+                    // 再给「打卡到几点」只会指向一个错的时间
+                    checkOut: edited ? null : hours.checkOut,
+                  ),
                   const Divider(),
                   _confirmRow('工作内容', entry.content),
                 ],
@@ -186,6 +192,78 @@ class WorkLogConfirmDialog {
     );
   }
 
+
+  /// 凑整建议：距离下一个 0.1 小时刻度还差几分钟。
+  ///
+  /// BOSS 的工时只到一位小数，打卡 11.55 报上去零头就没了；差的往往只有
+  /// 两三分钟，知道了就能选择多待一会儿再补打下班卡。
+  ///
+  /// **只提示，不代改工时**：工时框里必须始终是实际打卡值，
+  /// 要不要为了凑整多待几分钟是用户自己的决定，APP 替他改就成了虚报。
+  ///
+  /// 基准取输入框当前值而非打卡工时——提交出去的是前者，
+  /// 用户手改之后提示还盯着打卡值会自相矛盾。
+  static Widget _buildStepHint({
+    required double? parsed,
+    required String? checkOut,
+  }) {
+    // 工时非法时提交按钮本就是灰的，此时给凑整建议只会喧宾夺主
+    if (parsed == null) return const SizedBox.shrink();
+
+    final needMinutes = WorkTimeCalculator.minutesToNextBossStep(parsed);
+    if (needMinutes == 0) {
+      // 不需要等也要说一声，否则用户无从判断这条提示是没算还是不用等
+      return Padding(
+        padding: const EdgeInsets.only(top: 2, bottom: 8),
+        child: Text(
+          '工时已是 0.1 小时的整数倍，不用再等',
+          style: TextStyle(fontSize: 11, color: Colors.grey[600]),
+        ),
+      );
+    }
+
+    final target = WorkTimeCalculator.formatHours(
+      WorkTimeCalculator.nextBossStepHours(parsed),
+    );
+
+    // 换算成具体几点，「再待 3 分钟」才是照着能做的事
+    final checkOutMinutes = WorkTimeCalculator.parseTimeToMinutes(checkOut);
+    final targetClock = checkOutMinutes == null
+        ? null
+        : WorkTimeCalculator.minutesToTimeStr(checkOutMinutes + needMinutes);
+
+    return Container(
+      margin: const EdgeInsets.only(top: 2, bottom: 8),
+      padding: const EdgeInsets.all(10),
+      decoration: BoxDecoration(
+        color: AppColors.infoLight,
+        borderRadius: BorderRadius.circular(8),
+        border: Border.all(color: AppColors.info),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Text(
+            '💡 再待 $needMinutes 分钟可凑满 $target 小时',
+            style: TextStyle(
+              fontSize: 12,
+              color: AppColors.infoDark,
+              fontWeight: FontWeight.w600,
+            ),
+          ),
+          // 工时是打开页面时的快照，等完不刷新就白等了：提交的还是旧值
+          if (targetClock != null)
+            Padding(
+              padding: const EdgeInsets.only(top: 4),
+              child: Text(
+                '打卡到 $targetClock 后下拉刷新本页，再提交',
+                style: TextStyle(fontSize: 11, color: AppColors.infoDark),
+              ),
+            ),
+        ],
+      ),
+    );
+  }
 
   static Widget _confirmRow(String label, String value) {
     return Padding(

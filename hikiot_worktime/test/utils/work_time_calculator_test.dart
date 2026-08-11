@@ -101,4 +101,63 @@ void main() {
       expect(WorkTimeCalculator.isBossHoursConsistent(8, 4), isFalse);
     });
   });
+
+  group('BOSS 工时凑整刻度', () {
+    test('工时还原成分钟不能被截断误差带偏一分钟', () {
+      // 工时是「分钟/60 截断两位」的结果，截断永远让数值偏小：
+      // 69 分钟存成 1.14 小时，四舍五入会掉回 68 分钟，
+      // 「还差几分钟」就会整条算错。
+      expect(WorkTimeCalculator.hoursToMinutes(1.14), 69);
+      expect(WorkTimeCalculator.hoursToMinutes(11.55), 693);
+      expect(WorkTimeCalculator.hoursToMinutes(11.6), 696);
+      expect(WorkTimeCalculator.hoursToMinutes(8), 480);
+    });
+
+    test('全天每一分钟都能从截断后的工时精确还原', () {
+      // 这条覆盖 24 小时内所有分钟，防止再冒出第二个 69 分钟那样的个例
+      for (var m = 0; m <= 24 * 60; m++) {
+        final truncated = (m / 60.0 * 100).truncateToDouble() / 100;
+        expect(
+          WorkTimeCalculator.hoursToMinutes(truncated),
+          m,
+          reason: '$m 分钟被还原错了',
+        );
+      }
+    });
+
+    test('11.55 距离 11.6 还差 3 分钟', () {
+      expect(WorkTimeCalculator.minutesToNextBossStep(11.55), 3);
+      expect(
+        WorkTimeCalculator.formatHours(
+          WorkTimeCalculator.nextBossStepHours(11.55),
+        ),
+        '11.60',
+      );
+    });
+
+    test('已经落在 0.1 刻度上时不需要再等', () {
+      expect(WorkTimeCalculator.minutesToNextBossStep(11.6), 0);
+      expect(WorkTimeCalculator.minutesToNextBossStep(8), 0);
+      expect(WorkTimeCalculator.minutesToNextBossStep(8.5), 0);
+    });
+
+    test('落在刻度上时下一档就是自身，不会白跳一档', () {
+      // 跳到 11.7 会让用户凭空多等 6 分钟
+      expect(
+        WorkTimeCalculator.formatHours(
+          WorkTimeCalculator.nextBossStepHours(11.6),
+        ),
+        '11.60',
+      );
+    });
+
+    test('差值恒在 1 到 5 分钟之间，且加上去必定落在刻度上', () {
+      for (var m = 0; m <= 24 * 60; m++) {
+        final truncated = (m / 60.0 * 100).truncateToDouble() / 100;
+        final need = WorkTimeCalculator.minutesToNextBossStep(truncated);
+        expect(need, inInclusiveRange(0, 5));
+        expect((m + need) % WorkTimeCalculator.bossHoursStepMinutes, 0);
+      }
+    });
+  });
 }

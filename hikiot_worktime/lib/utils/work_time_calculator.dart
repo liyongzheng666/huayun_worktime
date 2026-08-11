@@ -286,6 +286,36 @@ class WorkTimeCalculator {
     return (punchHours - bossHours).abs() <= bossHoursTolerance + 1e-9;
   }
 
+  // ========== BOSS 工时凑整刻度 ==========
+
+  /// BOSS 填报工时的刻度：0.1 小时，正好等于 6 分钟。
+  ///
+  /// BOSS 只保留一位小数，零头会被吃掉——打卡 11.55 报上去零头就没了。
+  /// 刻度用整数分钟表示，顺带避开 0.1 在二进制下不可精确表示的误差。
+  static const int bossHoursStepMinutes = 6;
+
+  /// 把工时还原成整数分钟。
+  ///
+  /// **必须向上取整而不是四舍五入**：工时是「分钟 ÷ 60 再截断两位」的结果，
+  /// 截断永远让数值偏小（69 分钟存成 1.14 小时），直接 round 会掉回 68 分钟，
+  /// 「还差几分钟」就整条错一分钟。减去极小量是防止 693.0 这类
+  /// 刚好落在整数上的值被浮点误差抬成 694。
+  static int hoursToMinutes(double hours) => (hours * 60 - 1e-6).ceil();
+
+  /// 距离下一个 [bossHoursStepMinutes] 刻度还差几分钟。
+  ///
+  /// 已经落在刻度上时返回 0，不返回 6——那会让用户凭空多等一档。
+  static int minutesToNextBossStep(double hours) {
+    final remainder = hoursToMinutes(hours) % bossHoursStepMinutes;
+    return remainder == 0 ? 0 : bossHoursStepMinutes - remainder;
+  }
+
+  /// 下一个刻度对应的工时；已落在刻度上则返回自身。
+  static double nextBossStepHours(double hours) {
+    final minutes = hoursToMinutes(hours) + minutesToNextBossStep(hours);
+    return minutes / 60.0;
+  }
+
   // ========== 目标管理逻辑 (KISS: 复用此类) ==========
 
   /// 生成目标进度列表：从 [minTarget] 起，按 10% 递增，到 [baseTarget] 为止。
