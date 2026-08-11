@@ -11,9 +11,9 @@ void main() {
       // BOSS 把明文 Password 放在每个请求体里；扫请求体等于给凭据泄漏开口子。
       // 注意不能简单断言脚本里不出现 entry.body——公共的 sessionPreamble
       // 带了个读请求体的 bossFindPara（本脚本并不调用它）。
-      // 真正要守的是：喂进 walk() 的只能是响应。
-      expect(script.contains('walk(entry.response'), isTrue);
-      expect(script.contains('walk(entry.body'), isFalse);
+      // 真正要守的是：喂进 bossWalk() 的只能是响应。
+      expect(script.contains('bossWalk(entry.response'), isTrue);
+      expect(script.contains('bossWalk(entry.body'), isFalse);
     });
 
     test('只放行 PROJECT_ 开头的标识，凭据无从被当成项目输出', () {

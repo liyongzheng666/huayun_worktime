@@ -71,8 +71,8 @@ class WorkLogProjectListLookup {
     return '''
       (function() {
         ${BossSessionScript.sessionPreamble(captureStoreName: captureStoreName)}
+        ${BossSessionScript.walkPreamble(maxDepth: maxDepth)}
 
-        var MAX_DEPTH = $maxDepth;
         var found = {};
 
         function clean(v) {
@@ -166,38 +166,17 @@ class WorkLogProjectListLookup {
           }
         }
 
-        function walk(node, depth) {
-          if (node === null || node === undefined || depth > MAX_DEPTH) return;
-
-          if (typeof node === 'string') {
-            // 可能是又一层转义的 JSON，试着再解一层
-            var head = node.charAt(0);
-            if ((head === '{' || head === '[') && node.length > 2) {
-              try { walk(JSON.parse(node), depth + 1); } catch (e) {}
-            }
-            return;
-          }
-
-          if (typeof node !== 'object') return;
-
-          if (Object.prototype.toString.call(node) === '[object Array]') {
-            harvestRow(node);
-            for (var i = 0; i < node.length; i++) walk(node[i], depth + 1);
-            return;
-          }
-
-          harvest(node);
-          for (var k in node) {
-            if (node.hasOwnProperty(k)) walk(node[k], depth + 1);
-          }
-        }
-
         var store = bossCaptured();
         for (var i = 0; i < store.length; i++) {
           var entry = store[i];
           // 只看响应：请求体里有明文凭据
           if (!entry || !entry.response) continue;
-          walk(entry.response, 0);
+          // 数组要单独走 harvestRow：网格的一行就是个数组，
+          // EID / ENAME / EUID 分散在各元素里，必须整行一起看
+          bossWalk(entry.response, function(node) {
+            if (bossIsArray(node)) harvestRow(node);
+            else harvest(node);
+          });
         }
 
         var projects = [];

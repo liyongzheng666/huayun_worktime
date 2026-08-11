@@ -12,10 +12,11 @@ import '../services/work_log_repository.dart';
 import '../utils/date_helper.dart';
 import '../utils/work_log_boss_hours.dart';
 import '../utils/work_log_fill_script.dart';
+import '../utils/work_log_project_list_lookup.dart';
 import '../utils/work_log_request_capture.dart';
 import '../utils/work_log_submit_script.dart';
 import '../utils/work_time_calculator.dart';
-import '../widgets/work_log_binding_confirm_dialog.dart';
+import '../widgets/work_log_project_picker_dialog.dart';
 import '../widgets/work_log_confirm_dialog.dart';
 
 /// 日志系统的可选入口。
@@ -463,27 +464,49 @@ class _WorkReportWebViewScreenState extends State<WorkReportWebViewScreen> {
     // 出差、补录、打卡异常这些场景本来就该由用户自己定工时。
 
     final service = WorkLogSubmitService(controller);
-    final constants = await _resolveBossConstants(
+    final (resolved, projects) = await _resolveBossConstants(
       service,
       entry.projectName,
     );
-    if (constants == null) return;
+    if (resolved == null) return;
+    var constants = resolved;
 
     // BOSS 允许同一天填多条，重复提交不报错而是静默产生重复记录，
     // 因此提交前先查当天是否已有填报。
     final existingHours = await service.queryExistingHours(draft.date);
 
     if (!mounted) return;
-    // 用户可在确认框里调整工时，因此提交的是它返回的值而非打卡原值
-    final actWork = await WorkLogConfirmDialog.show(
-      context: context,
-      date: draft.date,
-      entry: entry,
-      hours: draft.hours,
-      existingHours: existingHours,
-      constants: constants,
-    );
-    if (actWork == null) return;
+    // 用户可在确认框里调整工时，因此提交的是它返回的值而非打卡原值；
+    // 点「改选」时回到选择框，改完再回来重新核对一遍
+    String actWork;
+    while (true) {
+      final outcome = await WorkLogConfirmDialog.show(
+        context: context,
+        date: draft.date,
+        entry: entry,
+        hours: draft.hours,
+        existingHours: existingHours,
+        constants: constants,
+        canChangeProject: projects.isNotEmpty,
+      );
+      if (outcome == null || !mounted) return;
+
+      if (outcome.changeProject) {
+        final picked = await WorkLogProjectPickerDialog.pickAndBind(
+          context: context,
+          csvProjectName: entry.projectName,
+          constants: constants,
+          projects: projects,
+          purpose: ProjectPickPurpose.change,
+        );
+        if (!mounted) return;
+        if (picked != null) constants = picked;
+        continue;
+      }
+
+      actWork = outcome.actWork!;
+      break;
+    }
 
     try {
       final workLogData = WorkLogSubmitScript.buildWorkLogData(
@@ -543,9 +566,9 @@ class _WorkReportWebViewScreenState extends State<WorkReportWebViewScreen> {
 
     final projectName = await _preferredProjectName();
 
-    final saved = await StorageService().loadBossConstants();
-    // 项目对得上才算已配置：项目换了就得重新学，否则会用旧项目的 ID 提交
-    if (WorkLogSubmitService.constantsUsableFor(saved, projectName)) return;
+    // 项目对得上才算已配置：项目换了就得重新学，否则会用旧项目的 ID 提交。
+    // 按项目名记住的绑定也算数，否则已经绑好的项目会被反复学、反复提示
+    if (await WorkLogSubmitService.hasUsableConstantsFor(projectName)) return;
 
     // 轮询而非一次性扫描：用户何时登录、何时点开列表都不确定。
     // 2.5 秒一次、最多约 2 分钟，足够覆盖登录加浏览，也不会一直空转。
@@ -572,19 +595,20 @@ class _WorkReportWebViewScreenState extends State<WorkReportWebViewScreen> {
     // 轮询到头仍没学到。这不是异常，只是用户这段时间没做过带完整信息的操作，
     // 明确告诉他该做什么，比默默失败强。
     if (!mounted) return;
-    final still = await StorageService().loadBossConstants();
-    if (!mounted ||
-        WorkLogSubmitService.constantsUsableFor(still, projectName)) {
-      return;
-    }
-    _notify('尚未获取到配置。到「我的工作日志」点开任意一个已填过的日期即可');
+    final done = await WorkLogSubmitService.hasUsableConstantsFor(projectName);
+    if (!mounted || done) return;
+    // 现在提交时会先爬全量项目清单让用户自己选，历史日志只是其中一条来源，
+    // 所以这里不能再说得像「不去点一下就没救了」
+    _notify('尚未自动获取到配置。直接提交也行，届时可从 BOSS 的项目清单里选');
   }
 
-  /// 取提交所需的业务标识；学不到时给出诊断并复制到剪贴板。
+  /// 取提交所需的业务标识；拿不到时给出诊断并复制到剪贴板。
   ///
   /// 业务编排在 [WorkLogSubmitService]，这里只负责提示与剪贴板这类界面动作，
   /// 保证后台提交与网页内提交走的是同一套逻辑。
-  Future<Map<String, String>?> _resolveBossConstants(
+  ///
+  /// 一并把爬到的项目清单带回去：提交确认框要靠它决定给不给「改选」入口。
+  Future<(Map<String, String>?, List<BossProject>)> _resolveBossConstants(
     WorkLogSubmitService service,
     String projectName,
   ) async {
@@ -597,51 +621,51 @@ class _WorkReportWebViewScreenState extends State<WorkReportWebViewScreen> {
     // 走服务里的统一解析，绑定判定与后台提交保持一致；
     // 两条路径各判各的，迟早会出现「网页里能提交、后台却要求重新确认」。
     final resolution = await service.resolveConstants(projectName);
-    final learned = resolution.constants;
-    if (learned != null) {
-      if (!resolution.needsBindingConfirm) return learned;
+    final projects = resolution.projects;
 
-      // 项目名对不上，必须先确认是同一个项目——弹的是与后台提交同一个框
-      final projects = await service.listProjects();
-      if (!mounted) return null;
-      final choice = await WorkLogBindingConfirmDialog.show(
+    if (resolution.needsProjectPick) {
+      // 项目名在 BOSS 里没有同名的，先让用户从全量清单里挑——
+      // 弹的是与后台提交同一个框，同一套落绑定的逻辑
+      if (!mounted) return (null, projects);
+      final picked = await WorkLogProjectPickerDialog.pickAndBind(
         context: context,
         csvProjectName: projectName,
-        constants: learned,
+        constants: resolution.constants ?? const {},
         projects: projects,
       );
-      if (!mounted) return null;
-      if (!choice.confirmed) {
-        _notify('已取消。请在工作日志页的「提交配置」里手工填写正确的项目 ID');
-        return null;
+      if (!mounted) return (null, projects);
+      if (picked == null) {
+        _notify('已取消。若清单里没有正确的项目，可在工作日志页的「提交配置」里手工填 ID');
+        return (null, projects);
       }
-      final chosen = choice.project == null
-          ? learned
-          : WorkLogSubmitService.constantsForProject(learned, choice.project!);
-      return WorkLogSubmitService.bindConstants(chosen, projectName);
+      return (picked, projects);
     }
 
-    // 项目变了却学不到新配置时，宁可停下也不能拿旧项目的 ID 提交
+    if (resolution.constants != null) return (resolution.constants, projects);
+
+    // 项目变了却拿不到新配置时，宁可停下也不能拿旧项目的 ID 提交
     if (changedProject) {
-      if (!mounted) return null;
+      if (!mounted) return (null, projects);
       _notify(
-        '项目已变为「$projectName」，但还没拿到它的提交配置。'
-        '请在网页上为该项目填报一次日志',
+        resolution.reason ??
+            '项目已变为「$projectName」，但还没拿到它的提交配置。'
+                '请在网页上为该项目填报一次日志',
       );
-      return null;
+      return (null, projects);
     }
 
     // Release 构建不开 Dart VM 服务，flutter logs 抓不到 debugPrint，
     // 因此失败时把诊断信息复制到剪贴板，便于直接反馈。
     final (conclusion, report) = await service.collectDiagnostics(projectName);
     await Clipboard.setData(ClipboardData(text: report));
-    if (!mounted) return null;
+    if (!mounted) return (null, projects);
     _notify(
-      conclusion == null || conclusion.isEmpty
-          ? '未取到项目信息。请到「我的工作日志」点开任意一个已填过的日期（诊断已复制到剪贴板）'
-          : '$conclusion（诊断已复制到剪贴板）',
+      resolution.reason ??
+          (conclusion == null || conclusion.isEmpty
+              ? '未取到项目信息。请到「我的工作日志」点开任意一个已填过的日期（诊断已复制到剪贴板）'
+              : '$conclusion（诊断已复制到剪贴板）'),
     );
-    return null;
+    return (null, projects);
   }
 
   /// 当日 CSV 条目里的项目名，用于在多项目时挑对那一个；取不到返回空串。

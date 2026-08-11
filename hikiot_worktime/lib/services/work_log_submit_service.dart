@@ -3,6 +3,7 @@ import 'dart:convert';
 import 'package:flutter/foundation.dart';
 import 'package:flutter_inappwebview/flutter_inappwebview.dart';
 
+import '../utils/work_log_auditor_lookup.dart';
 import '../utils/work_log_boss_hours.dart';
 import '../utils/work_log_constants_scanner.dart';
 import '../utils/work_log_csv_parser.dart';
@@ -15,16 +16,29 @@ import 'storage_service.dart';
 
 /// 提交配置的解析结果
 class BossConstantsResolution {
-  const BossConstantsResolution({this.constants, this.needsBindingConfirm = false});
+  const BossConstantsResolution({
+    this.constants,
+    this.needsProjectPick = false,
+    this.projects = const [],
+    this.reason,
+  });
 
-  /// 取到的提交配置，null 表示没拿到
+  /// 取到的提交配置，null 表示没拿到。
+  ///
+  /// [needsProjectPick] 为 true 时这只是**预选值**，项目部分甚至可能是空的
+  /// （清单扫到了但历史日志学不到时就是这样），必须等用户挑完才算数。
   final Map<String, String>? constants;
 
-  /// 是否需要用户确认「CSV 的项目名 ↔ BOSS 的项目名 是同一个项目」。
+  /// 是否需要用户从 [projects] 里挑出正确的项目。
   ///
-  /// 只在刚学到配置且两边名字不一致时为 true。**确认前不写绑定键**，
-  /// 用户拒绝时不会留下一个错误的绑定，下次仍会重新学。
-  final bool needsBindingConfirm;
+  /// **确认前不写绑定**，用户放弃时不会留下一个错误的对应关系，下次仍会重问。
+  final bool needsProjectPick;
+
+  /// 从 BOSS 爬到的全量项目清单，供选择框列出；扫不到时为空。
+  final List<BossProject> projects;
+
+  /// 没能给出可提交配置时的原因，一句话，直接显示给用户。
+  final String? reason;
 
   bool get hasConstants => constants != null;
 }
@@ -87,37 +101,152 @@ class WorkLogSubmitService {
     return boundTo == csvProjectName;
   }
 
-  /// 取提交所需的业务标识：已绑定当前 CSV 项目 → 直接用，否则现学。
+  /// CSV 里的 [csvProjectName] 是否已经有可用配置。
   ///
-  /// 学到的配置若与 CSV 项目名不一致，**不会自动绑定**，而是把
-  /// [BossConstantsResolution.needsBindingConfirm] 置位交给调用方去问用户。
+  /// 按项目名记住的绑定和那份「最近一次使用的配置」都要看。只看后者的话，
+  /// 已经绑好的项目会被后台学习当成「还没配置」，一边反复去学，一边弹
+  /// 「已自动获取配置」——用户明明什么都没做。
+  static Future<bool> hasUsableConstantsFor(
+    String csvProjectName, {
+    StorageService? storage,
+  }) async {
+    final store = storage ?? StorageService();
+    final bound = await store.loadBossBinding(csvProjectName);
+    if (bound?['projectId']?.isNotEmpty == true) return true;
+    return constantsUsableFor(await store.loadBossConstants(), csvProjectName);
+  }
+
+  /// 取提交所需的业务标识。
+  ///
+  /// 顺序刻意是「**先爬全量项目清单，再谈其他**」：
+  ///
+  /// 项目清单登录后就能扫到（首页自动发 `GetMyJoinProjectGrid`，踩坑记录 3.21），
+  /// 不要求用户在 BOSS 里做过任何事，是整条链上最稳的一环。而
+  /// [learnConstants] 靠的是历史日志，用户没在 BOSS 填过这个项目就学不到。
+  /// 早先把清单挂在「学到之后」才用，等于让最稳的一环去等最脆的一环：
+  /// 项目名对不上又恰好没有历史日志时，明明扫得到、用户也认得出的那个项目
+  /// 根本没机会拿出来给他选，直接就报「未取到项目信息」了。
+  ///
+  /// 现在清单是主路径，[learnConstants] 降为「提供审核人 + 提供一个预选项」。
+  ///
+  /// 名字**完全相同**时自动选中，不打扰用户；对不上才把
+  /// [BossConstantsResolution.needsProjectPick] 置位，交给调用方弹选择框。
+  /// 排序上「像」不算数——是不是同一个项目只有用户知道。
   Future<BossConstantsResolution> resolveConstants(String csvProjectName) async {
-    final saved = await _storage.loadBossConstants();
-    if (constantsUsableFor(saved, csvProjectName)) {
-      // 旧配置就地补上绑定键，免得每次都走上面那条兼容分支
-      if (saved[bindingKey] == null && csvProjectName.isNotEmpty) {
-        return BossConstantsResolution(
-          constants: await _bind(saved, csvProjectName),
-        );
-      }
-      return BossConstantsResolution(constants: saved);
-    }
-
-    final learned = await learnConstants(csvProjectName);
-    if (learned == null) return const BossConstantsResolution();
-
-    // 名字对得上就没什么可确认的，直接绑定
-    final bossName = learned['projectName'] ?? '';
-    if (bossName.isEmpty || bossName == csvProjectName) {
+    final remembered = await _rememberedConstants(csvProjectName);
+    if (remembered != null) {
       return BossConstantsResolution(
-        constants: await _bind(learned, csvProjectName),
+        constants: remembered,
+        // 已经绑好了，不该为了「万一用户要改选」去等清单——扫一次就走，
+        // 扫到就在确认框里给「改选」入口，扫不到这次就没有，不影响提交
+        projects: await listProjects(retries: 0),
       );
     }
 
+    // —— 主路径：爬全量项目清单 ——
+    final projects = await listProjects();
+
+    // 历史日志仍然试一次：它同时给出审核人，也给出一个「上次用的项目」当预选
+    final learned = await learnConstants(csvProjectName);
+
+    // 审核人不在项目清单里（它是个人设置，不是项目属性），必须单独取
+    final auditor = _auditorFrom(learned) ?? await lookupAuditor();
+    if (auditor == null) {
+      // 拿空审核人提交会把日志发给错误的审批人（或直接被拒），宁可停下
+      return BossConstantsResolution(
+        projects: projects,
+        reason: projects.isEmpty
+            ? '没取到项目清单，也没取到工作日志的审核人'
+            : '已扫到 ${projects.length} 个项目，但没取到工作日志的审核人',
+      );
+    }
+
+    // 清单里有与 CSV 一字不差的项目 → 就是它，不必打扰用户。
+    // 只认「一字不差」：差一个「(2)」就可能是另一个项目，替用户判等于
+    // 把「静默绑错项目」换身衣服重来一遍，而且更难被发现。
+    final exact = csvProjectName.isEmpty ? null : _findExact(projects, csvProjectName);
+    if (exact != null) {
+      return BossConstantsResolution(
+        constants: await _bind(
+          _composeConstants(auditor: auditor, project: exact),
+          csvProjectName,
+        ),
+        projects: projects,
+      );
+    }
+
+    // 清单没扫到，但历史日志学到的就是同名项目 → 同样不必打扰
+    if (learned != null &&
+        csvProjectName.isNotEmpty &&
+        (learned['projectName'] ?? '') == csvProjectName) {
+      return BossConstantsResolution(
+        constants: await _bind(learned, csvProjectName),
+        projects: projects,
+      );
+    }
+
+    if (projects.isEmpty && learned == null) {
+      return const BossConstantsResolution(reason: '没扫到任何项目');
+    }
+
+    // 对不上：把全量清单端出来让用户自己选。
+    // learned 为 null 时预选配置里没有项目，选择框必须强制选一个才放行。
     return BossConstantsResolution(
-      constants: learned,
-      needsBindingConfirm: true,
+      constants: learned ?? _composeConstants(auditor: auditor),
+      needsProjectPick: true,
+      projects: projects,
     );
+  }
+
+  /// 之前为这个 CSV 项目名记住过的配置。
+  ///
+  /// 先查按项目名分开存的绑定，再退回那份「最近一次使用的配置」——后者只存得下
+  /// 一个项目，是老版本留下的形状，只在用户还没为当前项目确认过时才轮得到它。
+  Future<Map<String, String>?> _rememberedConstants(String csvProjectName) async {
+    final bound = await _storage.loadBossBinding(csvProjectName);
+    if (bound?['projectId']?.isNotEmpty == true) return bound;
+
+    final saved = await _storage.loadBossConstants();
+    if (!constantsUsableFor(saved, csvProjectName)) return null;
+
+    // 旧配置就地补上绑定，免得每次都走兼容分支
+    if (saved[bindingKey] == null && csvProjectName.isNotEmpty) {
+      return _bind(saved, csvProjectName);
+    }
+    return saved;
+  }
+
+  /// 把审核人与项目拼成一份提交配置。
+  ///
+  /// [project] 为空时项目三项留空，表示「等用户挑」——留空是刻意的，
+  /// 随手填个占位值会在忘记覆盖时变成一次静默的错误提交。
+  static Map<String, String> _composeConstants({
+    required BossAuditor auditor,
+    BossProject? project,
+  }) => {
+    'projectId': project?.id ?? '',
+    'projectCode': project?.code ?? '',
+    'projectName': project?.name ?? '',
+    'auditor': auditor.id,
+    'auditorName': auditor.name,
+  };
+
+  /// 从历史日志学到的配置里取审核人，取不到返回 null。
+  static BossAuditor? _auditorFrom(Map<String, String>? learned) {
+    final id = learned?['auditor'] ?? '';
+    if (!id.startsWith(';USERINFO_')) return null;
+    return BossAuditor(id: id, name: learned?['auditorName'] ?? '');
+  }
+
+  /// 清单里名字与 [csvProjectName] 一字不差的项目，没有则返回 null。
+  static BossProject? _findExact(
+    List<BossProject> projects,
+    String csvProjectName,
+  ) {
+    for (final project in projects) {
+      if (project.name == csvProjectName) return project;
+    }
+    return null;
   }
 
   /// 报文里该填的项目名。
@@ -158,13 +287,19 @@ class WorkLogSubmitService {
   ///
   /// 做成静态方法是因为它只写存储、不碰网页：用户在确认框上点「是同一个」时，
   /// 后台无头会话早已销毁，此时拿不到也不需要 `InAppWebViewController`。
+  /// **两处都写**：`saveBossConstants` 只存得下一份，是「最近一次使用的配置」，
+  /// 供设置页显示和后台学习判断；`saveBossBinding` 按 CSV 项目名分开存，
+  /// 才是真正的记忆。只写前者的话，用户在两个项目之间来回切会互相覆盖，
+  /// 界面上承诺的「之后不再询问」就成了空话——而多项目正是这套机制的受众。
   static Future<Map<String, String>> bindConstants(
     Map<String, String> constants,
     String csvProjectName, {
     StorageService? storage,
   }) async {
     final bound = {...constants, bindingKey: csvProjectName};
-    await (storage ?? StorageService()).saveBossConstants(bound);
+    final store = storage ?? StorageService();
+    await store.saveBossConstants(bound);
+    await store.saveBossBinding(csvProjectName, bound);
     return bound;
   }
 
@@ -237,6 +372,26 @@ class WorkLogSubmitService {
         ),
       );
       if (projects.isNotEmpty || attempt >= retries) return projects;
+      await Future.delayed(interval);
+    }
+  }
+
+  /// 扫出当前用户的工作日志审核人，取不到返回 null。
+  ///
+  /// 审核人**不在项目清单里**——它是个人设置（`WorkReport_AudtiorFocusor_defaultSetting`，
+  /// 踩坑记录 3.21），不是项目属性。所以选好项目还得单独取它，否则凑不齐报文。
+  ///
+  /// 和 [listProjects] 一样要重试：会话就绪只要求抓到任意一条带 `para` 的请求，
+  /// 承载设置项的那个响应可能稍晚才回来，第一次扫空不代表没有。
+  Future<BossAuditor?> lookupAuditor({
+    int retries = 4,
+    Duration interval = const Duration(milliseconds: 500),
+  }) async {
+    for (var attempt = 0; ; attempt++) {
+      final auditor = WorkLogAuditorLookup.parse(
+        await runScript(WorkLogAuditorLookup.build(captureStoreName: _store)),
+      );
+      if (auditor != null || attempt >= retries) return auditor;
       await Future.delayed(interval);
     }
   }

@@ -443,9 +443,60 @@ class StorageService {
   ///
   /// 需要独立方法而不是保存一份空值：清除后应回到「从未配置」状态，
   /// 好让后台自动学习重新介入；留一份空 Map 在那里语义上是含糊的。
+  ///
+  /// **按项目名记住的绑定一并清掉**：用户点「清除配置」的意思是「全部重来」，
+  /// 留着一份看不见的绑定，会让他清完之后发现项目还是老样子，且无从下手。
   Future<void> clearBossConstants() async {
     final prefs = await SharedPreferences.getInstance();
     await prefs.remove(StorageKeys.workLogBossConstants);
+    await prefs.remove(StorageKeys.workLogProjectBindings);
+  }
+
+  /// 记住「CSV 里的 [csvProjectName] 用这份配置提交」。
+  ///
+  /// 与 [saveBossConstants] 一起写：后者是「最近一次用的配置」，供设置页显示和
+  /// 后台学习判断；这里才是真正的记忆。只写后者的话，用户在两个项目间来回切
+  /// 会互相覆盖，界面上承诺的「之后不再询问」就成了空话。
+  Future<void> saveBossBinding(
+    String csvProjectName,
+    Map<String, String> constants,
+  ) async {
+    if (csvProjectName.isEmpty) return;
+
+    final prefs = await SharedPreferences.getInstance();
+    final all = await loadBossBindings();
+    all[csvProjectName] = constants;
+    await prefs.setString(
+      StorageKeys.workLogProjectBindings,
+      jsonEncode(all),
+    );
+  }
+
+  /// 取 [csvProjectName] 记住的配置，没有则返回 null。
+  Future<Map<String, String>?> loadBossBinding(String csvProjectName) async {
+    if (csvProjectName.isEmpty) return null;
+    return (await loadBossBindings())[csvProjectName];
+  }
+
+  /// 全部按项目名记住的配置。解析不了时当作没有，不抛错。
+  Future<Map<String, Map<String, String>>> loadBossBindings() async {
+    final prefs = await SharedPreferences.getInstance();
+    final jsonStr = prefs.getString(StorageKeys.workLogProjectBindings);
+    if (jsonStr == null) return {};
+
+    try {
+      final decoded = jsonDecode(jsonStr);
+      if (decoded is! Map) return {};
+
+      final out = <String, Map<String, String>>{};
+      decoded.forEach((key, value) {
+        if (value is! Map) return;
+        out['$key'] = value.map((k, v) => MapEntry('$k', '$v'));
+      });
+      return out;
+    } catch (e) {
+      return {};
+    }
   }
 
   Future<Map<String, String>> loadBossConstants() async {

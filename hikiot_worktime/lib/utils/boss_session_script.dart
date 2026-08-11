@@ -198,6 +198,53 @@ class BossSessionScript {
     ''';
   }
 
+  /// 响应的深度遍历工具 `bossWalk(node, visit)`。
+  ///
+  /// BOSS 的响应是**多层转义**的 JSON：外层解开之后，里面的字符串往往又是一段
+  /// JSON。想从响应里捞任何东西，都得一边下探一边试着再解一层。项目清单扫描和
+  /// 审核人扫描都要这么走，按「再一再而不再三」收口到这里。
+  ///
+  /// `visit(node)` 对遍历到的每个**对象和数组**各调用一次；数组要不要单独处理
+  /// 由调用方判断（网格的一行就是数组，列分散在各元素里，必须整行一起看）。
+  ///
+  /// **必须封顶**：不封深度的话，遇到自引用结构会直接栈溢出。
+  static String walkPreamble({int maxDepth = 12}) {
+    return '''
+      function bossWalk(node, visit) {
+        var MAX_DEPTH = $maxDepth;
+        function step(n, depth) {
+          if (n === null || n === undefined || depth > MAX_DEPTH) return;
+
+          if (typeof n === 'string') {
+            // 可能是又一层转义的 JSON，试着再解一层
+            var head = n.charAt(0);
+            if ((head === '{' || head === '[') && n.length > 2) {
+              try { step(JSON.parse(n), depth + 1); } catch (e) {}
+            }
+            return;
+          }
+
+          if (typeof n !== 'object') return;
+
+          visit(n);
+
+          if (Object.prototype.toString.call(n) === '[object Array]') {
+            for (var i = 0; i < n.length; i++) step(n[i], depth + 1);
+            return;
+          }
+          for (var k in n) {
+            if (n.hasOwnProperty(k)) step(n[k], depth + 1);
+          }
+        }
+        step(node, 0);
+      }
+
+      function bossIsArray(n) {
+        return Object.prototype.toString.call(n) === '[object Array]';
+      }
+    ''';
+  }
+
   /// 生成「未捕获到会话」的统一返回值，各脚本提示文案保持一致。
   static const String noSessionResult =
       '''JSON.stringify({

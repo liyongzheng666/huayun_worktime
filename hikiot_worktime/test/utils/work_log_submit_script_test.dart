@@ -69,6 +69,54 @@ void main() {
     });
   });
 
+  group('项目与审核人不许为空', () {
+    // 两者现在来自各自独立的来源（项目清单 / 个人设置），
+    // 「其中一个没取到」是真会发生的状态。空着提交不报错，
+    // 只会把日志记到错的地方或发给错的审批人，事后翻 BOSS 才发现。
+    test('没有项目 ID 时拒绝构造报文', () {
+      expect(
+        () => WorkLogSubmitScript.buildWorkLogData(
+          entry: entry,
+          actWork: '8.00',
+          projectId: '',
+          projectCode: 'PROJECT_bbb',
+          projectName: '某项目',
+          auditor: ';USERINFO_ccc',
+        ),
+        throwsArgumentError,
+      );
+    });
+
+    test('没有审核人时拒绝构造报文', () {
+      expect(
+        () => WorkLogSubmitScript.buildWorkLogData(
+          entry: entry,
+          actWork: '8.00',
+          projectId: 'PROJECT_aaa',
+          projectCode: 'PROJECT_bbb',
+          projectName: '某项目',
+          auditor: '',
+        ),
+        throwsArgumentError,
+      );
+    });
+
+    test('项目编码可以为空，由服务端兜底', () {
+      // 改选项目后扫不到 EUID 时就是这样；留空好过带一个确定错误的旧编码
+      expect(
+        WorkLogSubmitScript.buildWorkLogData(
+          entry: entry,
+          actWork: '8.00',
+          projectId: 'PROJECT_aaa',
+          projectCode: '',
+          projectName: '某项目',
+          auditor: ';USERINFO_ccc',
+        )['PROJECTID'],
+        'PROJECT_aaa',
+      );
+    });
+  });
+
   group('「无」到空串的归一化', () {
     test('CSV 的「无」提交为空串', () {
       // 实测切到设计类型后，PROJECTPHASE/PHASEACTIVITIES 提交的就是 ""

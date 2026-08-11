@@ -5,6 +5,20 @@ import '../services/work_log_repository.dart';
 import '../utils/work_log_csv_parser.dart';
 import '../utils/work_time_calculator.dart';
 
+/// 用户在提交确认框里的选择
+class WorkLogConfirmOutcome {
+  /// 确认提交，[actWork] 是最终工时
+  const WorkLogConfirmOutcome.submit(this.actWork) : changeProject = false;
+
+  /// 要求改选项目，回到项目选择框
+  const WorkLogConfirmOutcome.changeProject()
+    : actWork = null,
+      changeProject = true;
+
+  final String? actWork;
+  final bool changeProject;
+}
+
 /// 提交前的核对对话框
 ///
 /// 从网页页面里抽出来共用：后台提交与网页内提交必须弹同一个框，
@@ -16,17 +30,23 @@ class WorkLogConfirmDialog {
   /// 提交前让用户核对内容，并允许调整工时。
   ///
   /// 面向公司真实系统，绝不静默提交。
-  /// 返回最终要提交的工时字符串；取消或输入非法时返回 null。
+  /// 返回用户的选择；取消或输入非法时返回 null。
   ///
   /// 工时默认取打卡统计值，但必须可改：打卡异常、出差、补录等场景下
   /// 打卡值并不等于该报的工时，而这是唯一能在提交前修正它的地方。
-  static Future<String?> show({
+  ///
+  /// [canChangeProject] 为 true 时项目那一行给出「改选」入口。项目名一旦绑定
+  /// 就不再询问，如果当初绑错了，这里是用户唯一能自己纠正的地方——否则他只能
+  /// 去「提交配置」里手填一串 `PROJECT_xxxxxxxx`。调用方在扫到项目清单时才该
+  /// 给 true：清单都没有，点开也没得选。
+  static Future<WorkLogConfirmOutcome?> show({
     required BuildContext context,
     required String date,
     required WorkLogEntry entry,
     required WorkLogHours hours,
     required double? existingHours,
     required Map<String, String> constants,
+    bool canChangeProject = false,
   }) async {
     final alreadyFiled = existingHours != null && existingHours > 0;
 
@@ -36,7 +56,7 @@ class WorkLogConfirmDialog {
         : '';
     final hoursController = TextEditingController(text: punchText);
 
-    final result = await showDialog<String>(
+    final result = await showDialog<WorkLogConfirmOutcome>(
       context: context,
       builder: (dialogContext) => StatefulBuilder(
         builder: (context, setDialogState) {
@@ -87,6 +107,12 @@ class WorkLogConfirmDialog {
                   _buildProjectRow(
                     csvName: entry.projectName,
                     bossName: constants['projectName'] ?? '',
+                    onChange: canChangeProject
+                        ? () => Navigator.pop(
+                            dialogContext,
+                            const WorkLogConfirmOutcome.changeProject(),
+                          )
+                        : null,
                   ),
                   _confirmRow(
                     '审核人',
@@ -127,7 +153,9 @@ class WorkLogConfirmDialog {
                     ? null
                     : () => Navigator.pop(
                         dialogContext,
-                        WorkTimeCalculator.formatHours(parsed),
+                        WorkLogConfirmOutcome.submit(
+                          WorkTimeCalculator.formatHours(parsed),
+                        ),
                       ),
                 // 已填报时改用「仍要提交」，让重复提交成为一个需要刻意确认的动作
                 child: Text(alreadyFiled ? '仍要提交' : '确认提交'),
@@ -201,29 +229,55 @@ class WorkLogConfirmDialog {
   /// 显示的是 **BOSS 那边的项目名**，因为提交上去的就是它——报文里的
   /// `PROJECTNAME` 必须跟 `PROJECTID` 同源。CSV 的写法与之不同时（比如少一个
   /// 「(2)」）额外标出来：两个名字都摆着，用户才能发现绑错了项目。
+  ///
+  /// [onChange] 非空时右侧给出「改选」。发现绑错了却只能眼看着提交，
+  /// 或者跑去手填一串 `PROJECT_xxxxxxxx`，都不该是这里的唯一出路。
   static Widget _buildProjectRow({
     required String csvName,
     required String bossName,
+    VoidCallback? onChange,
   }) {
     // 手工配置的没有 BOSS 名，此时提交的就是 CSV 的写法
-    if (bossName.isEmpty || bossName == csvName) {
-      return _confirmRow('项目', csvName);
-    }
+    final display = bossName.isEmpty ? csvName : bossName;
+    final differs = bossName.isNotEmpty && bossName != csvName;
 
     return Padding(
       padding: const EdgeInsets.only(bottom: 6),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          const Text(
-            '项目',
-            style: TextStyle(fontSize: 11, color: Colors.grey),
+          Row(
+            children: [
+              const Text(
+                '项目',
+                style: TextStyle(fontSize: 11, color: Colors.grey),
+              ),
+              const Spacer(),
+              if (onChange != null)
+                TextButton(
+                  onPressed: onChange,
+                  style: TextButton.styleFrom(
+                    minimumSize: Size.zero,
+                    padding: const EdgeInsets.symmetric(
+                      horizontal: 8,
+                      vertical: 2,
+                    ),
+                    tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+                    visualDensity: VisualDensity.compact,
+                  ),
+                  child: const Text('改选', style: TextStyle(fontSize: 12)),
+                ),
+            ],
           ),
-          Text(bossName, style: const TextStyle(fontSize: 13)),
           Text(
-            'CSV 里写的是「$csvName」，已按 BOSS 的名称提交',
-            style: TextStyle(fontSize: 10, color: Colors.grey[600]),
+            display.isEmpty ? '（空）' : display,
+            style: const TextStyle(fontSize: 13),
           ),
+          if (differs)
+            Text(
+              'CSV 里写的是「$csvName」，已按 BOSS 的名称提交',
+              style: TextStyle(fontSize: 10, color: Colors.grey[600]),
+            ),
         ],
       ),
     );

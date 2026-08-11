@@ -16,7 +16,7 @@ import '../utils/work_time_calculator.dart';
 import '../services/boss_session_runner.dart';
 import '../services/work_log_submit_service.dart';
 import '../widgets/boss_constants_dialog.dart';
-import '../widgets/work_log_binding_confirm_dialog.dart';
+import '../widgets/work_log_project_picker_dialog.dart';
 import '../widgets/work_log_confirm_dialog.dart';
 import '../widgets/week_strip.dart';
 import 'work_report_webview_screen.dart';
@@ -211,21 +211,22 @@ class WorkLogScreenState extends State<WorkLogScreen> {
     ) async {
       final service = WorkLogSubmitService(controller);
       final resolution = await service.resolveConstants(entry.projectName);
-      if (!resolution.hasConstants) {
+      // 项目清单扫到了就还有救——让用户自己挑一个即可，不该在这里就判死刑。
+      // 只有连清单带配置都拿不到，才轮到诊断。
+      if (!resolution.hasConstants && !resolution.needsProjectPick) {
         final (conclusion, report) = await service.collectDiagnostics(
           entry.projectName,
         );
-        return _SubmitPreparation.failed(conclusion, report);
+        return _SubmitPreparation.failed(
+          resolution.reason ?? conclusion,
+          report,
+        );
       }
       return _SubmitPreparation(
         constants: resolution.constants,
         existingHours: await service.queryExistingHours(draft.date),
-        needsBindingConfirm: resolution.needsBindingConfirm,
-        // 只在真要弹确认框时才扫：listProjects 带重试，
-        // 无谓地挂在每次提交上会白白拖慢正常路径
-        projects: resolution.needsBindingConfirm
-            ? await service.listProjects()
-            : const [],
+        needsProjectPick: resolution.needsProjectPick,
+        projects: resolution.projects,
       );
     });
 
@@ -240,7 +241,7 @@ class WorkLogScreenState extends State<WorkLogScreen> {
       _showMessage('连接 BOSS 失败，请稍后重试');
       return;
     }
-    if (prep.constants == null) {
+    if (prep.constants == null && !prep.needsProjectPick) {
       await Clipboard.setData(ClipboardData(text: prep.diagnostics ?? ''));
       if (!mounted) return;
       _showMessage(
@@ -249,18 +250,18 @@ class WorkLogScreenState extends State<WorkLogScreen> {
       return;
     }
 
-    // 学到的项目名与 CSV 对不上：先确认是同一个项目再谈提交。
-    // 名字对不上意味着自动匹配没命中，学到的可能根本是别的项目的 ID。
-    var constants = prep.constants!;
-    if (prep.needsBindingConfirm) {
-      final choice = await WorkLogBindingConfirmDialog.show(
+    // CSV 的项目名在 BOSS 里没有同名项目：先让用户从全量清单里挑出正确的那个。
+    // 替他猜等于把「静默绑错项目」换身衣服重来一遍，且更难被发现。
+    var constants = prep.constants ?? const <String, String>{};
+    if (prep.needsProjectPick) {
+      final picked = await WorkLogProjectPickerDialog.pickAndBind(
         context: context,
         csvProjectName: entry.projectName,
         constants: constants,
         projects: prep.projects,
       );
       if (!mounted) return;
-      if (!choice.confirmed) {
+      if (picked == null) {
         _showMessage(
           prep.projects.isEmpty
               ? '已取消提交。请在「提交配置」里手工填写正确的项目 ID'
@@ -268,31 +269,41 @@ class WorkLogScreenState extends State<WorkLogScreen> {
         );
         return;
       }
-      // 用户改选了别的项目时按新项目重建配置
-      if (choice.project != null) {
-        constants = WorkLogSubmitService.constantsForProject(
-          constants,
-          choice.project!,
-        );
-      }
-      // 确认后才落绑定：用户否认时不留下错误的对应关系
-      constants = await WorkLogSubmitService.bindConstants(
-        constants,
-        entry.projectName,
-      );
-      if (!mounted) return;
+      constants = picked;
     }
 
-    // 面向公司真实系统，绝不静默提交；工时也在这里允许调整
-    final actWork = await WorkLogConfirmDialog.show(
-      context: context,
-      date: draft.date,
-      entry: entry,
-      hours: draft.hours,
-      existingHours: prep.existingHours,
-      constants: constants,
-    );
-    if (actWork == null || !mounted) return;
+    // 面向公司真实系统，绝不静默提交；工时也在这里允许调整。
+    // 用户在确认框里点「改选」时回到选择框，改完再回来重新核对一遍——
+    // 改了项目还接着用上一屏的核对结果，等于没核对。
+    String actWork;
+    while (true) {
+      final outcome = await WorkLogConfirmDialog.show(
+        context: context,
+        date: draft.date,
+        entry: entry,
+        hours: draft.hours,
+        existingHours: prep.existingHours,
+        constants: constants,
+        canChangeProject: prep.projects.isNotEmpty,
+      );
+      if (outcome == null || !mounted) return;
+
+      if (outcome.changeProject) {
+        final picked = await WorkLogProjectPickerDialog.pickAndBind(
+          context: context,
+          csvProjectName: entry.projectName,
+          constants: constants,
+          projects: prep.projects,
+          purpose: ProjectPickPurpose.change,
+        );
+        if (!mounted) return;
+        if (picked != null) constants = picked;
+        continue;
+      }
+
+      actWork = outcome.actWork!;
+      break;
+    }
 
     _showMessage('正在提交…');
     final result = await BossSessionRunner.run<WorkLogSubmitResult>((
@@ -831,7 +842,7 @@ class _SubmitPreparation {
   const _SubmitPreparation({
     this.constants,
     this.existingHours,
-    this.needsBindingConfirm = false,
+    this.needsProjectPick = false,
     this.projects = const [],
   }) : conclusion = null,
        diagnostics = null;
@@ -839,7 +850,7 @@ class _SubmitPreparation {
   const _SubmitPreparation.failed(this.conclusion, this.diagnostics)
     : constants = null,
       existingHours = null,
-      needsBindingConfirm = false,
+      needsProjectPick = false,
       projects = const [];
 
   final Map<String, String>? constants;
@@ -847,9 +858,9 @@ class _SubmitPreparation {
   final String? conclusion;
   final String? diagnostics;
 
-  /// 学到的项目名与 CSV 对不上，提交前要先让用户确认是同一个项目。
-  final bool needsBindingConfirm;
+  /// CSV 的项目名在 BOSS 里没有同名项目，提交前要先让用户从清单里挑一个。
+  final bool needsProjectPick;
 
-  /// 抓包里扫到的 BOSS 项目清单，供确认框列候选；扫不到时为空。
+  /// 从 BOSS 爬到的全量项目清单；供选择框列出，也决定确认框给不给「改选」。
   final List<BossProject> projects;
 }

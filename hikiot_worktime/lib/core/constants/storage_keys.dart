@@ -91,6 +91,13 @@ class StorageKeys {
   /// 只存业务标识，不存 Password、LoginID 等会话凭据。
   static const String workLogBossConstants = 'work_log_boss_constants';
 
+  /// CSV 项目名 → 该项目的 BOSS 提交配置。
+  ///
+  /// 与上面那份「最近一次使用的配置」并存，是有意的：上面只存得下一个项目，
+  /// 用户在两个项目之间来回切时，每次都会把对方的配置覆盖掉，于是
+  /// 「确认后就记住」永远兑现不了。这份按 CSV 项目名分开存，切回来就还在。
+  static const String workLogProjectBindings = 'work_log_project_bindings';
+
   /// BOSS 月度已填工时前缀 (实际key: boss_hours_{yyyy-MM})
   static const String bossHoursPrefix = 'boss_hours';
 

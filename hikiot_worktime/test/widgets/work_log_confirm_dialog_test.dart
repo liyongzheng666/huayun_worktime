@@ -14,25 +14,37 @@ const _entry = WorkLogEntry(
   content: '工作内容',
 );
 
+/// 承接 show() 的返回值，供点完按钮后断言。
+class Answer {
+  WorkLogConfirmOutcome? value;
+  bool returned = false;
+}
+
 /// 把确认框推起来，返回后可直接对文案做断言。
-Future<void> pumpDialog(
+Future<Answer> pumpDialog(
   WidgetTester tester, {
   required WorkLogHours hours,
   double? existingHours,
   Map<String, String> constants = const {'auditorName': '张三'},
+  bool canChangeProject = false,
 }) async {
+  final answer = Answer();
   await tester.pumpWidget(
     MaterialApp(
       home: Builder(
         builder: (context) => ElevatedButton(
-          onPressed: () => WorkLogConfirmDialog.show(
-            context: context,
-            date: '2026-08-11',
-            entry: _entry,
-            hours: hours,
-            existingHours: existingHours,
-            constants: constants,
-          ),
+          onPressed: () async {
+            answer.value = await WorkLogConfirmDialog.show(
+              context: context,
+              date: '2026-08-11',
+              entry: _entry,
+              hours: hours,
+              existingHours: existingHours,
+              constants: constants,
+              canChangeProject: canChangeProject,
+            );
+            answer.returned = true;
+          },
           child: const Text('打开'),
         ),
       ),
@@ -40,6 +52,7 @@ Future<void> pumpDialog(
   );
   await tester.tap(find.text('打开'));
   await tester.pumpAndSettle();
+  return answer;
 }
 
 void main() {
@@ -194,6 +207,57 @@ void main() {
 
       expect(find.text('某项目'), findsOneWidget);
       expect(find.textContaining('CSV 里写的是'), findsNothing);
+    });
+  });
+
+  group('改选项目入口', () {
+    testWidgets('没有项目清单时不给「改选」，点开也没得选', (tester) async {
+      await pumpDialog(tester, hours: const WorkLogHours(hours: 8));
+
+      expect(find.text('改选'), findsNothing);
+    });
+
+    testWidgets('有清单时给「改选」，点了就把这个诉求带回去', (tester) async {
+      // 项目一旦绑定就不再询问，当初绑错了的话这里是用户唯一能自己纠正的地方
+      final answer = await pumpDialog(
+        tester,
+        hours: const WorkLogHours(hours: 8),
+        canChangeProject: true,
+      );
+
+      await tester.tap(find.text('改选'));
+      await tester.pumpAndSettle();
+
+      expect(answer.value!.changeProject, isTrue);
+      expect(answer.value!.actWork, isNull);
+    });
+
+    testWidgets('正常确认提交时不带改选诉求，且回传工时', (tester) async {
+      final answer = await pumpDialog(
+        tester,
+        hours: const WorkLogHours(hours: 8),
+        canChangeProject: true,
+      );
+
+      await tester.tap(find.text('确认提交'));
+      await tester.pumpAndSettle();
+
+      expect(answer.value!.changeProject, isFalse);
+      expect(answer.value!.actWork, '8.00');
+    });
+
+    testWidgets('取消返回空，两种诉求都不是', (tester) async {
+      final answer = await pumpDialog(
+        tester,
+        hours: const WorkLogHours(hours: 8),
+        canChangeProject: true,
+      );
+
+      await tester.tap(find.text('取消'));
+      await tester.pumpAndSettle();
+
+      expect(answer.returned, isTrue);
+      expect(answer.value, isNull);
     });
   });
 }

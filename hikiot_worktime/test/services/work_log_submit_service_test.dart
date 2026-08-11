@@ -109,6 +109,89 @@ void main() {
         isTrue,
       );
     });
+
+    test('两个项目来回切，各自的绑定都还在', () async {
+      // 只存一份「最近使用的配置」时，切到 B 会把 A 的冲掉，
+      // 切回 A 又要重新问一次——界面上承诺的「之后不再询问」就成了空话。
+      // 而多项目正是这套机制的受众。
+      final storage = StorageService();
+
+      await WorkLogSubmitService.bindConstants(
+        {'projectId': 'PROJECT_aaa', 'projectName': _bossName},
+        _csvName,
+        storage: storage,
+      );
+      await WorkLogSubmitService.bindConstants(
+        {'projectId': 'PROJECT_zzz', 'projectName': '运维平台三期'},
+        '运维平台',
+        storage: storage,
+      );
+
+      // 后写的那个不该抹掉先写的
+      expect((await storage.loadBossBinding(_csvName))?['projectId'],
+          'PROJECT_aaa');
+      expect((await storage.loadBossBinding('运维平台'))?['projectId'],
+          'PROJECT_zzz');
+    });
+
+    test('清除配置会把按项目名记住的绑定一并清掉', () async {
+      // 用户点「清除配置」的意思是全部重来；留一份看不见的绑定，
+      // 会让他清完之后发现项目还是老样子，且无从下手
+      final storage = StorageService();
+      await WorkLogSubmitService.bindConstants(
+        {'projectId': 'PROJECT_aaa'},
+        _csvName,
+        storage: storage,
+      );
+
+      await storage.clearBossConstants();
+
+      expect(await storage.loadBossBinding(_csvName), isNull);
+      expect(await storage.loadBossBindings(), isEmpty);
+    });
+
+    test('已绑定的项目不该再被当成「还没配置」', () async {
+      // 后台学习只看那份单独的配置时，已绑好的项目会被反复去学、
+      // 反复弹「已自动获取配置」——用户明明什么都没做
+      final storage = StorageService();
+      await WorkLogSubmitService.bindConstants(
+        {'projectId': 'PROJECT_aaa', 'projectName': _bossName},
+        _csvName,
+        storage: storage,
+      );
+      // 单独那份被别的项目覆盖掉，模拟来回切项目之后的状态
+      await storage.saveBossConstants({
+        'projectId': 'PROJECT_zzz',
+        'projectName': '运维平台三期',
+        WorkLogSubmitService.bindingKey: '运维平台',
+      });
+
+      expect(
+        await WorkLogSubmitService.hasUsableConstantsFor(
+          _csvName,
+          storage: storage,
+        ),
+        isTrue,
+      );
+      expect(
+        await WorkLogSubmitService.hasUsableConstantsFor(
+          '从没见过的项目',
+          storage: storage,
+        ),
+        isFalse,
+      );
+    });
+
+    test('CSV 没有项目名时不写绑定，免得所有项目挤在同一个空键上', () async {
+      final storage = StorageService();
+      await WorkLogSubmitService.bindConstants(
+        {'projectId': 'PROJECT_aaa'},
+        '',
+        storage: storage,
+      );
+
+      expect(await storage.loadBossBindings(), isEmpty);
+    });
   });
 
   group('报文里的项目名', () {

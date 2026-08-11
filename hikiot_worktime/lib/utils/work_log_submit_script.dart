@@ -143,6 +143,17 @@ class WorkLogSubmitScript {
       throw ArgumentError('未知的工作类型：${entry.workType}');
     }
 
+    // 项目与审核人现在来自两个独立来源（项目清单 / 个人设置），
+    // 「其中一个没取到」是真会发生的状态。空着提交不会报错，只会把日志
+    // 记到错的地方或发给错的审批人——那是事后翻 BOSS 才发现的一类错误，
+    // 在这里挡下来，代价只是一句提示。
+    if (projectId.isEmpty) {
+      throw ArgumentError('没有项目 ID，不能提交');
+    }
+    if (auditor.isEmpty) {
+      throw ArgumentError('没有审核人，不能提交');
+    }
+
     final date = DateTime.parse(entry.date);
     final logDate =
         '${date.year.toString().padLeft(4, '0')}'
