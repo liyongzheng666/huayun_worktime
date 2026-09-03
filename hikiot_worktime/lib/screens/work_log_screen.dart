@@ -16,6 +16,7 @@ import '../utils/work_log_auditor_lookup.dart';
 import '../utils/work_log_project_list_lookup.dart';
 import '../utils/work_time_calculator.dart';
 import '../services/boss_session_runner.dart';
+import '../services/boss_login_coordinator.dart';
 import '../services/work_log_submit_service.dart';
 import '../widgets/boss_constants_dialog.dart';
 import '../widgets/work_log_auditor_picker_dialog.dart';
@@ -226,15 +227,18 @@ class WorkLogScreenState extends State<WorkLogScreen> {
     if (mounted) setState(() {});
     try {
       _showMessage('正在读取 BOSS 已提交日志…');
-      final loaded = await BossSessionRunner.run<BossWorkLogRecord>((
-        controller,
-      ) {
-        return WorkLogSubmitService(controller).loadSubmittedLog(objectId);
-      });
+      Future<BossSessionResult<BossWorkLogRecord>> loadRecord() {
+        return BossSessionRunner.run<BossWorkLogRecord>((controller) {
+          return WorkLogSubmitService(controller).loadSubmittedLog(objectId);
+        });
+      }
+
+      var loaded = await loadRecord();
       if (!mounted) return;
       if (loaded.status == BossSessionStatus.noSession) {
-        await _promptBossLogin();
-        return;
+        if (!await _promptBossLogin() || !mounted) return;
+        loaded = await loadRecord();
+        if (!mounted) return;
       }
       final record = loaded.value;
       if (!loaded.isOk || record == null) {
@@ -250,20 +254,23 @@ class WorkLogScreenState extends State<WorkLogScreen> {
       if (edited == null || !mounted) return;
 
       _showMessage('正在保存修改…');
-      final updated = await BossSessionRunner.run<WorkLogUpdateResult>((
-        controller,
-      ) {
-        return WorkLogSubmitService(controller).updateSubmittedLog(
-          record: record,
-          title: edited.title,
-          content: edited.content,
-          actWork: edited.actWork,
-        );
-      });
+      Future<BossSessionResult<WorkLogUpdateResult>> updateRecord() {
+        return BossSessionRunner.run<WorkLogUpdateResult>((controller) {
+          return WorkLogSubmitService(controller).updateSubmittedLog(
+            record: record,
+            title: edited.title,
+            content: edited.content,
+            actWork: edited.actWork,
+          );
+        });
+      }
+
+      var updated = await updateRecord();
       if (!mounted) return;
       if (updated.status == BossSessionStatus.noSession) {
-        await _promptBossLogin();
-        return;
+        if (!await _promptBossLogin() || !mounted) return;
+        updated = await updateRecord();
+        if (!mounted) return;
       }
       final result = updated.value;
       if (!updated.isOk || result == null) {
@@ -303,8 +310,9 @@ class WorkLogScreenState extends State<WorkLogScreen> {
 
   Future<void> _runHeadlessSubmit(
     WorkLogEntry entry,
-    WorkLogDraft draft,
-  ) async {
+    WorkLogDraft draft, {
+    bool allowLogin = true,
+  }) async {
     _showMessage('正在后台连接 BOSS…');
 
     final prepared = await BossSessionRunner.run<_SubmitPreparation>((
@@ -340,7 +348,11 @@ class WorkLogScreenState extends State<WorkLogScreen> {
     if (!mounted) return;
 
     if (prepared.status == BossSessionStatus.noSession) {
-      await _promptBossLogin();
+      if (allowLogin && await _promptBossLogin() && mounted) {
+        await _runHeadlessSubmit(entry, draft, allowLogin: false);
+      } else if (!allowLogin) {
+        _showMessage('已登录，但后台会话尚未就绪，请稍后再试');
+      }
       return;
     }
     final prep = prepared.value;
@@ -535,27 +547,16 @@ class WorkLogScreenState extends State<WorkLogScreen> {
     return result.value ?? const [];
   }
 
-  /// 后台会话拿不到登录态时，问用户要不要去登录。
-  Future<void> _promptBossLogin() async {
-    final go = await showDialog<bool>(
+  /// 后台会话拿不到登录态时，用原生面板完成一次隐藏登录。
+  Future<bool> _promptBossLogin() =>
+      BossLoginCoordinator.prompt(context: context, openWeb: _openReportSystem);
+
+  Future<void> _loginBossFromConfig() async {
+    await BossLoginCoordinator.prompt(
       context: context,
-      builder: (dialogContext) => AlertDialog(
-        title: const Text('BOSS 未登录'),
-        content: const Text('提交日志需要先登录一次日志系统，之后就能在后台直接提交。'),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.pop(dialogContext, false),
-            child: const Text('以后再说'),
-          ),
-          FilledButton(
-            onPressed: () => Navigator.pop(dialogContext, true),
-            child: const Text('去登录'),
-          ),
-        ],
-      ),
+      openWeb: _openReportSystem,
+      successMessage: 'BOSS 登录成功，之后可直接提交日志',
     );
-    if (go != true || !mounted) return;
-    await _openReportSystem();
   }
 
   void _showMessage(String message) {
@@ -750,12 +751,9 @@ class WorkLogScreenState extends State<WorkLogScreen> {
                         ),
                       ),
                       const SizedBox(height: 2),
-                      // 「我的工作日志」是日历式、按天隔离加载的，点开某一天
-                      // 才会加载那天的完整详情（含项目与审核人）。
-                      // 只停在日历上不点进去，是拿不到的。
                       Text(
-                        '打开日志系统 →「我的工作日志」→ '
-                        '点开任意一个已填过的日期，APP 会自动记住配置',
+                        '可直接在后台登录；首次提交时 App 会自动获取项目和审核人，'
+                        '不需要先打开 BOSS 网页。',
                         style: TextStyle(
                           fontSize: 12,
                           color: AppColors.warningDark,
@@ -776,9 +774,9 @@ class WorkLogScreenState extends State<WorkLogScreen> {
                 ),
                 const SizedBox(width: 4),
                 FilledButton.icon(
-                  onPressed: _openReportSystem,
-                  icon: const Icon(Icons.open_in_browser, size: 16),
-                  label: const Text('打开日志系统', style: TextStyle(fontSize: 12)),
+                  onPressed: _loginBossFromConfig,
+                  icon: const Icon(Icons.login, size: 16),
+                  label: const Text('登录 BOSS', style: TextStyle(fontSize: 12)),
                   style: FilledButton.styleFrom(
                     visualDensity: VisualDensity.compact,
                   ),

@@ -519,6 +519,21 @@ class StorageService {
     await prefs.setString(StorageKeys.workLogObjectIds, jsonEncode(all));
   }
 
+  Future<void> saveBossLoginUserName(String userName) async {
+    final prefs = await SharedPreferences.getInstance();
+    final value = userName.trim();
+    if (value.isEmpty) {
+      await prefs.remove(StorageKeys.bossLoginUserName);
+    } else {
+      await prefs.setString(StorageKeys.bossLoginUserName, value);
+    }
+  }
+
+  Future<String> loadBossLoginUserName() async {
+    final prefs = await SharedPreferences.getInstance();
+    return prefs.getString(StorageKeys.bossLoginUserName)?.trim() ?? '';
+  }
+
   Future<String?> loadWorkLogObjectId(String date) async {
     if (date.isEmpty) return null;
     return (await loadWorkLogObjectIds())[date];

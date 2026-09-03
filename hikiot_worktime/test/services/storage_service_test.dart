@@ -44,6 +44,32 @@ void main() {
     });
   });
 
+  group('StorageService BOSS 登录用户名', () {
+    setUp(() {
+      SharedPreferences.setMockInitialValues({});
+    });
+
+    test('只保存规整后的用户名，不产生任何密码字段', () async {
+      final storage = StorageService();
+      await storage.saveBossLoginUserName('  user-1  ');
+
+      expect(await storage.loadBossLoginUserName(), 'user-1');
+      final prefs = await SharedPreferences.getInstance();
+      expect(
+        prefs.getKeys().where((key) => key.toLowerCase().contains('password')),
+        isEmpty,
+      );
+    });
+
+    test('空用户名清除已记住的值', () async {
+      final storage = StorageService();
+      await storage.saveBossLoginUserName('user-1');
+      await storage.saveBossLoginUserName('   ');
+
+      expect(await storage.loadBossLoginUserName(), isEmpty);
+    });
+  });
+
   group('StorageService BOSS 提交配置', () {
     setUp(() {
       SharedPreferences.setMockInitialValues({});

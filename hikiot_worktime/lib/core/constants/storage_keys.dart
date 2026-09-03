@@ -103,6 +103,9 @@ class StorageKeys {
   /// 只保存业务记录 ID，不保存从网页会话取得的对象详情或登录凭据。
   static const String workLogObjectIds = 'work_log_object_ids';
 
+  /// 最近一次成功登录 BOSS 的用户名。密码永不落盘。
+  static const String bossLoginUserName = 'boss_login_user_name';
+
   /// BOSS 月度已填工时前缀 (实际key: boss_hours_{yyyy-MM})
   static const String bossHoursPrefix = 'boss_hours';
 

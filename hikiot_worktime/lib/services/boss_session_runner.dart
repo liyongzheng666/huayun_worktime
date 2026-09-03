@@ -5,6 +5,7 @@ import 'package:flutter/foundation.dart';
 import 'package:flutter_inappwebview/flutter_inappwebview.dart';
 
 import '../screens/work_report_webview_screen.dart';
+import '../utils/boss_login_script.dart';
 import '../utils/work_log_request_capture.dart';
 import '../utils/work_log_submit_script.dart';
 
@@ -27,6 +28,13 @@ class BossSessionResult<T> {
   final T? value;
 
   bool get isOk => status == BossSessionStatus.ok;
+}
+
+class BossLoginResult {
+  const BossLoginResult({required this.ok, this.message});
+
+  final bool ok;
+  final String? message;
 }
 
 /// 在**不显示网页**的前提下执行 BOSS 网页会话内的操作
@@ -62,25 +70,7 @@ class BossSessionRunner {
     HeadlessInAppWebView? headless;
 
     try {
-      headless = HeadlessInAppWebView(
-        initialUrlRequest: URLRequest(url: WebUri(WorkReportEntry.host)),
-        initialSettings: InAppWebViewSettings(
-          javaScriptEnabled: true,
-          cacheEnabled: true,
-          thirdPartyCookiesEnabled: true,
-          // 与可见页面用同一份 Cookie，才能复用已登录状态
-          sharedCookiesEnabled: true,
-        ),
-        initialUserScripts: UnmodifiableListView<UserScript>([
-          // 抓包钩子必须早于页面脚本，且要注入所有 frame——
-          // 与可见页面完全一致的注入方式，否则拿不到 para
-          UserScript(
-            injectionTime: UserScriptInjectionTime.AT_DOCUMENT_START,
-            forMainFrameOnly: false,
-            source: WorkLogRequestCapture.buildHookScript(),
-          ),
-        ]),
-      );
+      headless = _createHeadless();
 
       await headless.run();
 
@@ -97,6 +87,79 @@ class BossSessionRunner {
     } finally {
       await headless?.dispose();
     }
+  }
+
+  /// 在隐藏 WebView 中调用 BOSS 网页自身的登录逻辑。
+  ///
+  /// 密码只作为本次方法参数进入 WebView 内存；不写 Cookie 以外的 App 存储，
+  /// 不写日志，也不返回给调用方。成功后普通后台会话即可复用共享 Cookie。
+  static Future<BossLoginResult> login({
+    required String userName,
+    required String password,
+    Duration timeout = const Duration(seconds: 30),
+  }) async {
+    HeadlessInAppWebView? headless;
+    try {
+      headless = _createHeadless();
+      await headless.run();
+
+      final deadline = DateTime.now().add(timeout);
+      while (DateTime.now().isBefore(deadline)) {
+        final controller = headless.webViewController;
+        if (controller != null) {
+          try {
+            final raw = await controller.evaluateJavascript(
+              source: BossLoginScript.build(
+                userName: userName,
+                password: password,
+              ),
+            );
+            final start = BossLoginScript.parse(raw?.toString());
+            if (start.status == BossLoginStartStatus.failed) {
+              return BossLoginResult(ok: false, message: start.message);
+            }
+            if (start.status == BossLoginStartStatus.started) break;
+          } catch (_) {
+            // 登录页脚本仍在加载，继续等待。
+          }
+        }
+        await Future.delayed(const Duration(milliseconds: 500));
+      }
+
+      final remaining = deadline.difference(DateTime.now());
+      if (remaining.isNegative) {
+        return const BossLoginResult(ok: false, message: '等待 BOSS 登录页超时');
+      }
+      final controller = await _awaitSession(headless, remaining);
+      if (controller != null) return const BossLoginResult(ok: true);
+
+      return const BossLoginResult(ok: false, message: '登录未成功，请核对账号、密码或网络状态');
+    } catch (_) {
+      // 登录异常里可能夹带 evaluateJavascript 源码；源码含本次密码，绝不打印。
+      debugPrint('[BOSS 后台登录] 执行失败（详细异常已省略）');
+      return const BossLoginResult(ok: false, message: '后台登录失败，请稍后重试');
+    } finally {
+      await headless?.dispose();
+    }
+  }
+
+  static HeadlessInAppWebView _createHeadless() {
+    return HeadlessInAppWebView(
+      initialUrlRequest: URLRequest(url: WebUri(WorkReportEntry.host)),
+      initialSettings: InAppWebViewSettings(
+        javaScriptEnabled: true,
+        cacheEnabled: true,
+        thirdPartyCookiesEnabled: true,
+        sharedCookiesEnabled: true,
+      ),
+      initialUserScripts: UnmodifiableListView<UserScript>([
+        UserScript(
+          injectionTime: UserScriptInjectionTime.AT_DOCUMENT_START,
+          forMainFrameOnly: false,
+          source: WorkLogRequestCapture.buildHookScript(),
+        ),
+      ]),
+    );
   }
 
   /// 轮询等待页面发出带 `UserID` 的请求，返回可用的控制器。

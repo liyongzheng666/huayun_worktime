@@ -16,6 +16,7 @@ import '../utils/target_progress_helper.dart';
 
 import '../widgets/home_button.dart';
 import '../services/boss_session_runner.dart';
+import '../services/boss_login_coordinator.dart';
 import '../utils/work_log_boss_hours.dart';
 import '../utils/work_log_request_capture.dart';
 import 'work_report_webview_screen.dart';
@@ -73,9 +74,9 @@ class MonthlyCalendarScreenState extends State<MonthlyCalendarScreen> {
   // 置顶的目标
   int? _pinnedTarget;
 
-
   // 基础目标百分比
   int _baseTarget = 120;
+
   /// 目标进度列表的起点，可在设置里调整
   int _minTarget = AppConstants.defaultMinTarget;
 
@@ -204,7 +205,6 @@ class MonthlyCalendarScreenState extends State<MonthlyCalendarScreen> {
 
   /// 刷新指定日期数据（用于每日页切换到月度页时同步当前日期）
   Future<void> refreshDateData(DateTime targetDate) async {
-
     if (_personNo == null || _teamNo == null) return;
 
     try {
@@ -393,7 +393,7 @@ class MonthlyCalendarScreenState extends State<MonthlyCalendarScreen> {
   /// 但那是实现约束，没理由让用户看着页面跳进跳出。
   ///
   /// 只有在完全取不到会话（没登录 / 登录态过期）时，才引导去网页登录。
-  Future<void> _syncBossHours() async {
+  Future<void> _syncBossHours({bool allowLogin = true}) async {
     final monthKey = DateFormat('yyyy-MM').format(_selectedMonth);
 
     if (mounted) {
@@ -421,15 +421,21 @@ class MonthlyCalendarScreenState extends State<MonthlyCalendarScreen> {
     if (!mounted) return;
 
     if (result.status == BossSessionStatus.noSession) {
-      await _promptBossLogin();
+      if (allowLogin && await _promptBossLogin() && mounted) {
+        await _syncBossHours(allowLogin: false);
+      } else if (!allowLogin && mounted) {
+        ScaffoldMessenger.of(
+          context,
+        ).showSnackBar(const SnackBar(content: Text('已登录，但后台会话尚未就绪，请稍后再试')));
+      }
       return;
     }
 
     final hours = result.value;
     if (!result.isOk || hours == null) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('BOSS 工时同步失败，海康打卡工时已更新')),
-      );
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(const SnackBar(content: Text('BOSS 工时同步失败，海康打卡工时已更新')));
       return;
     }
 
@@ -450,46 +456,26 @@ class MonthlyCalendarScreenState extends State<MonthlyCalendarScreen> {
     );
   }
 
-  /// 后台会话拿不到登录态时，问用户要不要去登录。
-  ///
-  /// 不直接把网页推到脸上：用户点的是「更新工时」，不是「打开网页」。
-  Future<void> _promptBossLogin() async {
-    final go = await showDialog<bool>(
-      context: context,
-      builder: (dialogContext) => AlertDialog(
-        title: const Text('BOSS 未登录'),
-        content: const Text('海康打卡工时已更新。\n要同步 BOSS 已填工时，需要先登录一次日志系统。'),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.pop(dialogContext, false),
-            child: const Text('以后再说'),
+  Future<bool> _promptBossLogin() => BossLoginCoordinator.prompt(
+    context: context,
+    openWeb: () async {
+      await Navigator.push(
+        context,
+        MaterialPageRoute(
+          builder: (_) => WorkReportWebViewScreen(
+            fillDate: _selectedMonth,
+            autoSyncBossMonth: _selectedMonth,
           ),
-          FilledButton(
-            onPressed: () => Navigator.pop(dialogContext, true),
-            child: const Text('去登录'),
-          ),
-        ],
-      ),
-    );
-    if (go != true || !mounted) return;
-
-    await Navigator.push(
-      context,
-      MaterialPageRoute(
-        builder: (_) => WorkReportWebViewScreen(
-          fillDate: _selectedMonth,
-          autoSyncBossMonth: _selectedMonth,
         ),
-      ),
-    );
-    if (!mounted) return;
-
-    final bossHours = await _storage.loadBossHours(
-      DateFormat('yyyy-MM').format(_selectedMonth),
-    );
-    if (!mounted) return;
-    setState(() => _bossHours = bossHours);
-  }
+      );
+      if (!mounted) return;
+      final bossHours = await _storage.loadBossHours(
+        DateFormat('yyyy-MM').format(_selectedMonth),
+      );
+      if (!mounted) return;
+      setState(() => _bossHours = bossHours);
+    },
+  );
 
   /// 公开方法: 静默触发智能更新（用于应用启动时）
   Future<void> smartUpdate() async {
@@ -1375,12 +1361,8 @@ class MonthlyCalendarScreenState extends State<MonthlyCalendarScreen> {
                           '${WorkTimeCalculator.formatHours((punchHours - bossHours).abs())}h',
                 style: TextStyle(
                   fontSize: 12,
-                  color: consistent
-                      ? Colors.grey[700]
-                      : AppColors.warningDark,
-                  fontWeight: consistent
-                      ? FontWeight.normal
-                      : FontWeight.w600,
+                  color: consistent ? Colors.grey[700] : AppColors.warningDark,
+                  fontWeight: consistent ? FontWeight.normal : FontWeight.w600,
                 ),
               ),
             ),
@@ -2893,26 +2875,26 @@ class MonthlyCalendarScreenState extends State<MonthlyCalendarScreen> {
         FittedBox(
           fit: BoxFit.scaleDown,
           child: Row(
-          crossAxisAlignment: CrossAxisAlignment.end,
-          mainAxisAlignment: MainAxisAlignment.center,
-          children: [
-            Text(
-              value,
-              style: TextStyle(
-                fontSize: 24,
-                fontWeight: FontWeight.bold,
-                color: color,
+            crossAxisAlignment: CrossAxisAlignment.end,
+            mainAxisAlignment: MainAxisAlignment.center,
+            children: [
+              Text(
+                value,
+                style: TextStyle(
+                  fontSize: 24,
+                  fontWeight: FontWeight.bold,
+                  color: color,
+                ),
               ),
-            ),
-            const SizedBox(width: 4),
-            Padding(
-              padding: const EdgeInsets.only(bottom: 2),
-              child: Text(
-                unit,
-                style: TextStyle(fontSize: 12, color: Colors.grey[600]),
+              const SizedBox(width: 4),
+              Padding(
+                padding: const EdgeInsets.only(bottom: 2),
+                child: Text(
+                  unit,
+                  style: TextStyle(fontSize: 12, color: Colors.grey[600]),
+                ),
               ),
-            ),
-          ],
+            ],
           ),
         ),
       ],
