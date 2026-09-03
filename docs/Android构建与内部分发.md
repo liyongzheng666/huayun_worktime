@@ -6,7 +6,7 @@
 - Java：Temurin JDK `17.0.20`
 - Android SDK：API 36，最低支持 API 24
 - 应用 ID：`com.hikiot.worktime`
-- 当前版本：`2.7.0+7`
+- 当前版本：`2.8.0+8`
 - 分发方式：公司内部直接安装 APK，不上架应用商店
 - 正式版本来源：GitHub Releases；国内网络不可达时可转发同一个 APK
 
