@@ -204,6 +204,7 @@ void main() {
     test('业务数据被编码为 JSON 字符串嵌入，不破坏脚本', () {
       final script = WorkLogSubmitScript.build(
         workLogData: build(entry),
+        dateStr: entry.date,
         captureStoreName: '__store',
       );
 
@@ -221,6 +222,7 @@ void main() {
     test('复用抓包中的会话上下文，不内嵌任何凭据', () {
       final script = WorkLogSubmitScript.build(
         workLogData: build(entry),
+        dateStr: entry.date,
         captureStoreName: '__store',
       );
 
@@ -236,13 +238,56 @@ void main() {
     test('提交成功时取出新建记录的 WORKLOG ID', () {
       final script = WorkLogSubmitScript.build(
         workLogData: build(entry),
+        dateStr: entry.date,
         captureStoreName: '__store',
       );
 
       // 只有拿到 WORKLOG_ 开头的 ID 才算成功，
       // 否则可能是服务端返回了错误页而 HTTP 仍是 200。
       expect(script.contains("indexOf('WORKLOG_') === 0"), isTrue);
-      expect(script.contains("reason: 'unexpected'"), isTrue);
+      expect(script.contains("res.reason || 'unexpected'"), isTrue);
+      expect(script.contains('failed: true'), isTrue);
+    });
+
+    test('保存前先查当天已填工时，只有明确为零才写入', () {
+      final script = WorkLogSubmitScript.build(
+        workLogData: build(entry),
+        dateStr: entry.date,
+        captureStoreName: '__store',
+      );
+
+      final preflight = script.indexOf('var before = queryUsedHours()');
+      final save = script.indexOf('bossCall(para, SAVE_SERVICE_URI');
+      expect(preflight, greaterThanOrEqualTo(0));
+      expect(save, greaterThan(preflight));
+      expect(script.contains('before.used > 0'), isTrue);
+      expect(script.contains('alreadySubmitted: true'), isTrue);
+    });
+
+    test('前置查询失败时暂缓，不把未知状态当成未提交', () {
+      final script = WorkLogSubmitScript.build(
+        workLogData: build(entry),
+        dateStr: entry.date,
+        captureStoreName: '__store',
+      );
+
+      expect(script.contains('deferred: true'), isTrue);
+      expect(script.contains("reason: 'preflightUnavailable'"), isTrue);
+      expect(script.contains('未能确认当天是否已提交，本次已暂缓'), isTrue);
+    });
+
+    test('保存响应异常后复查当天记录，避免网络抖动导致用户重复提交', () {
+      final script = WorkLogSubmitScript.build(
+        workLogData: build(entry),
+        dateStr: entry.date,
+        captureStoreName: '__store',
+      );
+
+      final save = script.indexOf('bossCall(para, SAVE_SERVICE_URI');
+      final postCheck = script.indexOf('var after = queryUsedHours()');
+      expect(postCheck, greaterThan(save));
+      expect(script.contains('submitResultUnknown'), isTrue);
+      expect(script.contains('请勿立即重试'), isTrue);
     });
 
     test('会话探测报告已抓到的请求数，便于区分「没登录」和「没抓到」', () {

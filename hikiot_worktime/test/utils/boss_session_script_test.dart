@@ -36,6 +36,7 @@ void main() {
           projectName: '项目',
           auditor: ';USERINFO_ccc',
         ),
+        dateStr: entry.date,
         captureStoreName: store,
       ),
       '会话探测': WorkLogSubmitScript.buildSessionProbeScript(

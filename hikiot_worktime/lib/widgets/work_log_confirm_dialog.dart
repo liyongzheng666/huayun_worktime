@@ -83,7 +83,10 @@ class WorkLogConfirmDialog {
           // 「当前时间」是随时在走的，每次重建都重算一次，
           // 而不是打开对话框那一刻算完就钉死
           final nowHours = canUseNow
-              ? WorkTimeCalculator.hoursFromCheckInToNow(hours.checkIn, now: now)
+              ? WorkTimeCalculator.hoursFromCheckInToNow(
+                  hours.checkIn,
+                  now: now,
+                )
               : null;
           final nowText = nowHours == null
               ? ''
@@ -96,7 +99,9 @@ class WorkLogConfirmDialog {
           final parsed = WorkTimeCalculator.parseHoursInput(
             hoursController.text,
           );
-          final edited = parsed != null && sourceText.isNotEmpty &&
+          final edited =
+              parsed != null &&
+              sourceText.isNotEmpty &&
               WorkTimeCalculator.formatHours(parsed) != sourceText;
 
           void switchSource(bool toCheckIn) {
@@ -139,7 +144,7 @@ class WorkLogConfirmDialog {
                     Padding(
                       padding: const EdgeInsets.only(bottom: 10),
                       child: Text(
-                        '未能确认当天是否已填报，请提交后自行核对。',
+                        '未能确认当天是否已填报，本次将暂缓提交，请稍后重试。',
                         style: TextStyle(fontSize: 11, color: Colors.grey[600]),
                       ),
                     ),
@@ -209,8 +214,10 @@ class WorkLogConfirmDialog {
                 child: const Text('取消'),
               ),
               FilledButton(
-                // 工时非法时不给提交，避免把脏值发到公司系统
-                onPressed: parsed == null
+                // 已填或查询状态未知时都不允许提交。BOSS 不做幂等，
+                // “仍要提交”会把一次网络抖动变成同日两条重复日志。
+                onPressed:
+                    parsed == null || existingHours == null || alreadyFiled
                     ? null
                     : () => Navigator.pop(
                         dialogContext,
@@ -218,8 +225,13 @@ class WorkLogConfirmDialog {
                           WorkTimeCalculator.formatHours(parsed),
                         ),
                       ),
-                // 已填报时改用「仍要提交」，让重复提交成为一个需要刻意确认的动作
-                child: Text(alreadyFiled ? '仍要提交' : '确认提交'),
+                child: Text(
+                  alreadyFiled
+                      ? '该日已提交'
+                      : existingHours == null
+                      ? '暂缓提交'
+                      : '确认提交',
+                ),
               ),
             ],
           );
@@ -300,7 +312,9 @@ class WorkLogConfirmDialog {
           mainAxisSize: MainAxisSize.min,
           children: [
             Icon(
-              selected ? Icons.radio_button_checked : Icons.radio_button_unchecked,
+              selected
+                  ? Icons.radio_button_checked
+                  : Icons.radio_button_unchecked,
               size: 14,
               color: selected ? AppColors.info : Colors.grey,
             ),
@@ -345,10 +359,7 @@ class WorkLogConfirmDialog {
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          const Text(
-            '工时',
-            style: TextStyle(fontSize: 11, color: Colors.grey),
-          ),
+          const Text('工时', style: TextStyle(fontSize: 11, color: Colors.grey)),
           TextField(
             controller: controller,
             autofocus: false,
@@ -372,7 +383,6 @@ class WorkLogConfirmDialog {
       ),
     );
   }
-
 
   /// 项目行。
   ///
@@ -497,9 +507,7 @@ class WorkLogConfirmDialog {
           ),
           if (name.isEmpty)
             Text(
-              id.isEmpty
-                  ? '⚠️ 还没有审核人，无法提交'
-                  : '⚠️ 只取到 ID：$id，没法用姓名核对是不是对的人',
+              id.isEmpty ? '⚠️ 还没有审核人，无法提交' : '⚠️ 只取到 ID：$id，没法用姓名核对是不是对的人',
               style: TextStyle(fontSize: 10, color: AppColors.warningDark),
             ),
         ],
@@ -590,7 +598,10 @@ class WorkLogConfirmDialog {
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
           Text(label, style: const TextStyle(fontSize: 11, color: Colors.grey)),
-          Text(value.isEmpty ? '（空）' : value, style: const TextStyle(fontSize: 13)),
+          Text(
+            value.isEmpty ? '（空）' : value,
+            style: const TextStyle(fontSize: 13),
+          ),
         ],
       ),
     );

@@ -205,13 +205,21 @@ class WorkLogScreenState extends State<WorkLogScreen> {
     }
   }
 
-  Future<void> _runHeadlessSubmit(WorkLogEntry entry, WorkLogDraft draft) async {
+  Future<void> _runHeadlessSubmit(
+    WorkLogEntry entry,
+    WorkLogDraft draft,
+  ) async {
     _showMessage('正在后台连接 BOSS…');
 
     final prepared = await BossSessionRunner.run<_SubmitPreparation>((
       controller,
     ) async {
       final service = WorkLogSubmitService(controller);
+      final existingHours = await service.queryExistingHours(draft.date);
+      if (existingHours == null || existingHours > 0) {
+        return _SubmitPreparation.preflightBlocked(existingHours);
+      }
+
       final resolution = await service.resolveConstants(entry.projectName);
       // 项目清单扫到了就还有救——让用户自己挑一个即可，不该在这里就判死刑。
       // 只有连清单带配置都拿不到，才轮到诊断。
@@ -226,7 +234,7 @@ class WorkLogScreenState extends State<WorkLogScreen> {
       }
       return _SubmitPreparation(
         constants: resolution.constants,
-        existingHours: await service.queryExistingHours(draft.date),
+        existingHours: existingHours,
         needsProjectPick: resolution.needsProjectPick,
         projects: resolution.projects,
         auditors: resolution.auditors,
@@ -244,12 +252,22 @@ class WorkLogScreenState extends State<WorkLogScreen> {
       _showMessage('连接 BOSS 失败，请稍后重试');
       return;
     }
+    if (prep.preflightBlocked) {
+      final existingHours = prep.existingHours;
+      if (existingHours != null && existingHours > 0) {
+        _showMessage(
+          '${draft.date} 已在 BOSS 填报 '
+          '${WorkTimeCalculator.formatHours(existingHours)} 小时，本次未重复提交',
+        );
+      } else {
+        _showMessage('网络通信不稳定，未能确认 ${draft.date} 是否已提交，本次已暂缓');
+      }
+      return;
+    }
     if (prep.constants == null && !prep.needsProjectPick) {
       await Clipboard.setData(ClipboardData(text: prep.diagnostics ?? ''));
       if (!mounted) return;
-      _showMessage(
-        '${prep.conclusion ?? '未取到项目信息'}（诊断已复制到剪贴板）',
-      );
+      _showMessage('${prep.conclusion ?? '未取到项目信息'}（诊断已复制到剪贴板）');
       return;
     }
 
@@ -361,21 +379,38 @@ class WorkLogScreenState extends State<WorkLogScreen> {
     final result = await BossSessionRunner.run<WorkLogSubmitResult>((
       controller,
     ) async {
-      return WorkLogSubmitService(controller).submit(
-        entry: entry,
-        actWork: actWork,
-        constants: constants,
-      );
+      return WorkLogSubmitService(
+        controller,
+      ).submit(entry: entry, actWork: actWork, constants: constants);
     });
 
     if (!mounted) return;
     final outcome = result.value;
-    if (result.isOk && outcome != null && outcome.ok) {
-      _showMessage('提交成功');
-      await _reload();
-      return;
+    if (result.isOk && outcome != null) {
+      switch (outcome.status) {
+        case WorkLogSubmitStatus.submitted:
+          _showMessage(outcome.message ?? '提交成功');
+          await _reload();
+          return;
+        case WorkLogSubmitStatus.alreadySubmitted:
+          final hours = outcome.existingHours;
+          _showMessage(
+            hours == null
+                ? '${draft.date} 已有日志，本次未重复提交'
+                : '${draft.date} 已在 BOSS 填报 '
+                      '${WorkTimeCalculator.formatHours(hours)} 小时，本次未重复提交',
+          );
+          await _reload();
+          return;
+        case WorkLogSubmitStatus.deferred:
+          _showMessage(outcome.message ?? '网络通信不稳定，本次已暂缓提交');
+          return;
+        case WorkLogSubmitStatus.failed:
+          _showMessage('提交失败：${outcome.message ?? '未知错误'}');
+          return;
+      }
     }
-    _showMessage('提交失败：${outcome?.message ?? '未能连接 BOSS'}');
+    _showMessage('网络通信不稳定，本次已暂缓提交');
   }
 
   /// 拿项目清单：准备阶段已经扫到就直接用，扫空了就现场再扫一次（带重试）。
@@ -550,9 +585,7 @@ class WorkLogScreenState extends State<WorkLogScreen> {
                           )
                         : const Icon(Icons.rocket_launch),
                     label: Text(
-                      _submitting
-                          ? '提交中…'
-                          : '提交 ${date.month}月${date.day}日 日志',
+                      _submitting ? '提交中…' : '提交 ${date.month}月${date.day}日 日志',
                       maxLines: 1,
                       overflow: TextOverflow.ellipsis,
                     ),
@@ -891,9 +924,7 @@ class WorkLogScreenState extends State<WorkLogScreen> {
                   style: TextStyle(
                     fontSize: emphasize ? 15 : 14,
                     height: 1.5,
-                    fontWeight: emphasize
-                        ? FontWeight.bold
-                        : FontWeight.normal,
+                    fontWeight: emphasize ? FontWeight.bold : FontWeight.normal,
                     color: Colors.grey[850],
                   ),
                   maxLines: multiline ? null : 2,
@@ -923,18 +954,30 @@ class _SubmitPreparation {
     this.needsProjectPick = false,
     this.projects = const [],
     this.auditors = const [],
-  }) : conclusion = null,
+  }) : preflightBlocked = false,
+       conclusion = null,
        diagnostics = null;
+
+  const _SubmitPreparation.preflightBlocked(this.existingHours)
+    : constants = null,
+      preflightBlocked = true,
+      needsProjectPick = false,
+      projects = const [],
+      auditors = const [],
+      conclusion = null,
+      diagnostics = null;
 
   const _SubmitPreparation.failed(this.conclusion, this.diagnostics)
     : constants = null,
       existingHours = null,
+      preflightBlocked = false,
       needsProjectPick = false,
       projects = const [],
       auditors = const [];
 
   final Map<String, String>? constants;
   final double? existingHours;
+  final bool preflightBlocked;
   final String? conclusion;
   final String? diagnostics;
 

@@ -54,13 +54,35 @@ class BossConstantsResolution {
   bool get needsAuditorPick => (constants?['auditor'] ?? '').isEmpty;
 }
 
+enum WorkLogSubmitStatus {
+  /// 已确认新日志写入成功。
+  submitted,
+
+  /// 该日已有日志，主动跳过本次写入。
+  alreadySubmitted,
+
+  /// 网络或响应不可靠，为避免重复而暂缓提交。
+  deferred,
+
+  /// 已确认没有写入的业务错误。
+  failed,
+}
+
 /// 提交结果
 class WorkLogSubmitResult {
-  const WorkLogSubmitResult({required this.ok, this.objectId, this.message});
+  const WorkLogSubmitResult({
+    required this.status,
+    this.objectId,
+    this.message,
+    this.existingHours,
+  });
 
-  final bool ok;
+  final WorkLogSubmitStatus status;
   final String? objectId;
   final String? message;
+  final double? existingHours;
+
+  bool get ok => status == WorkLogSubmitStatus.submitted;
 }
 
 /// BOSS 工作日志提交的业务编排
@@ -185,7 +207,9 @@ class WorkLogSubmitService {
   /// 名字**完全相同**时自动选中，不打扰用户；对不上才把
   /// [BossConstantsResolution.needsProjectPick] 置位，交给调用方弹选择框。
   /// 排序上「像」不算数——是不是同一个项目只有用户知道。
-  Future<BossConstantsResolution> resolveConstants(String csvProjectName) async {
+  Future<BossConstantsResolution> resolveConstants(
+    String csvProjectName,
+  ) async {
     final remembered = await _rememberedConstants(csvProjectName);
     if (remembered != null) {
       // 已经绑好了，不该为了「万一用户要改选」去等清单——扫一次就走，
@@ -214,7 +238,9 @@ class WorkLogSubmitService {
     // 清单里有与 CSV 一字不差的项目 → 就是它，不必打扰用户。
     // 只认「一字不差」：差一个「(2)」就可能是另一个项目，替用户判等于
     // 把「静默绑错项目」换身衣服重来一遍，而且更难被发现。
-    final exact = csvProjectName.isEmpty ? null : _findExact(projects, csvProjectName);
+    final exact = csvProjectName.isEmpty
+        ? null
+        : _findExact(projects, csvProjectName);
     if (exact != null) {
       final composed = _composeConstants(auditor: auditor, project: exact);
       return BossConstantsResolution(
@@ -271,17 +297,15 @@ class WorkLogSubmitService {
   static Map<String, String> constantsForAuditor(
     Map<String, String> constants,
     BossAuditor auditor,
-  ) => {
-    ...constants,
-    'auditor': auditor.id,
-    'auditorName': auditor.name,
-  };
+  ) => {...constants, 'auditor': auditor.id, 'auditorName': auditor.name};
 
   /// 之前为这个 CSV 项目名记住过的配置。
   ///
   /// 先查按项目名分开存的绑定，再退回那份「最近一次使用的配置」——后者只存得下
   /// 一个项目，是老版本留下的形状，只在用户还没为当前项目确认过时才轮得到它。
-  Future<Map<String, String>?> _rememberedConstants(String csvProjectName) async {
+  Future<Map<String, String>?> _rememberedConstants(
+    String csvProjectName,
+  ) async {
     final bound = await _storage.loadBossBinding(csvProjectName);
     if (bound != null && trustworthy(bound)) return bound;
 
@@ -345,7 +369,8 @@ class WorkLogSubmitService {
         ...constants,
         'projectName': project.name,
         // 编码同样可能是空的，顺手补齐；但绝不覆盖已有的值
-        if (constants['projectCode']?.isNotEmpty != true && project.code.isNotEmpty)
+        if (constants['projectCode']?.isNotEmpty != true &&
+            project.code.isNotEmpty)
           'projectCode': project.code,
       };
     }
@@ -444,7 +469,9 @@ class WorkLogSubmitService {
 
     final fromSave = _parseConstants(
       await runScript(
-        WorkLogSubmitScript.buildExtractConstantsScript(captureStoreName: _store),
+        WorkLogSubmitScript.buildExtractConstantsScript(
+          captureStoreName: _store,
+        ),
       ),
     );
     if (fromSave != null) {
@@ -544,27 +571,77 @@ class WorkLogSubmitService {
       final raw = await runScript(
         WorkLogSubmitScript.build(
           workLogData: workLogData,
+          dateStr: entry.date,
           captureStoreName: _store,
         ),
       );
 
+      return parseSubmitResult(raw);
+    } on ArgumentError catch (e) {
+      return WorkLogSubmitResult(
+        status: WorkLogSubmitStatus.failed,
+        message: '${e.message}',
+      );
+    } catch (e) {
+      return WorkLogSubmitResult(
+        status: WorkLogSubmitStatus.deferred,
+        message: '提交结果无法确认：$e',
+      );
+    }
+  }
+
+  /// 把网页脚本的返回值归一成调用方可直接处理的状态。
+  static WorkLogSubmitResult parseSubmitResult(String? raw) {
+    try {
       final decoded = jsonDecode(raw ?? '{}');
-      if (decoded is Map && decoded['ok'] == true) {
+      if (decoded is! Map) {
+        return const WorkLogSubmitResult(
+          status: WorkLogSubmitStatus.deferred,
+          message: '提交结果无法确认，请稍后重试',
+        );
+      }
+
+      final hoursValue = decoded['existingHours'];
+      final existingHours = hoursValue is num
+          ? hoursValue.toDouble()
+          : double.tryParse('${hoursValue ?? ''}');
+      if (decoded['ok'] == true) {
+        final objectId = decoded['objectId']?.toString();
         return WorkLogSubmitResult(
-          ok: true,
-          objectId: '${decoded['objectId']}',
+          status: WorkLogSubmitStatus.submitted,
+          objectId: objectId?.isEmpty == true ? null : objectId,
+          message: decoded['message']?.toString(),
+          existingHours: existingHours,
+        );
+      }
+      if (decoded['alreadySubmitted'] == true) {
+        return WorkLogSubmitResult(
+          status: WorkLogSubmitStatus.alreadySubmitted,
+          message: decoded['message']?.toString(),
+          existingHours: existingHours,
+        );
+      }
+      if (decoded['deferred'] == true) {
+        return WorkLogSubmitResult(
+          status: WorkLogSubmitStatus.deferred,
+          message: decoded['message']?.toString(),
+        );
+      }
+      if (decoded['failed'] == true) {
+        return WorkLogSubmitResult(
+          status: WorkLogSubmitStatus.failed,
+          message: '${decoded['message'] ?? decoded['reason'] ?? '未知错误'}',
         );
       }
       return WorkLogSubmitResult(
-        ok: false,
-        message: decoded is Map
-            ? '${decoded['message'] ?? decoded['reason'] ?? '未知错误'}'
-            : '未知错误',
+        status: WorkLogSubmitStatus.deferred,
+        message: '${decoded['message'] ?? '提交结果无法确认，请稍后重试'}',
       );
-    } on ArgumentError catch (e) {
-      return WorkLogSubmitResult(ok: false, message: '${e.message}');
-    } catch (e) {
-      return WorkLogSubmitResult(ok: false, message: '$e');
+    } catch (_) {
+      return const WorkLogSubmitResult(
+        status: WorkLogSubmitStatus.deferred,
+        message: '提交结果无法确认，请稍后重试',
+      );
     }
   }
 
@@ -591,7 +668,9 @@ class WorkLogSubmitService {
       'preferredProjectName': projectName,
       'diagnostics': decoded,
     });
-    final conclusion = decoded is Map ? decoded['conclusion']?.toString() : null;
+    final conclusion = decoded is Map
+        ? decoded['conclusion']?.toString()
+        : null;
     return (conclusion, report);
   }
 

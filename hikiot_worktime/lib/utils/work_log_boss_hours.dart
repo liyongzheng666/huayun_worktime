@@ -24,7 +24,11 @@ class WorkLogBossHours {
   ///
   /// 返回值是 `[总额度, 已填, 剩余]`，第 2 项才是已填；取不到时返回 null，
   /// 由调用方决定当成「未知」还是「0」——这两者含义完全不同。
-  static const String _pickUsedFunction = '''
+  /// 供“查询工时”和“提交前防重复检查”共用的响应解析。
+  ///
+  /// BOSS 返回 `[总额度, 已填, 剩余]`，只能取第 2 项。提交脚本必须复用
+  /// 同一份解析，避免两个入口对“今日是否已提交”作出不同判断。
+  static const String pickUsedPreamble = '''
       function pickUsed(data) {
         if (!data || data.length < 2) return null;
         var used = parseFloat(data[1]);
@@ -50,7 +54,7 @@ class WorkLogBossHours {
       (function() {
         ${BossSessionScript.sessionPreamble(captureStoreName: captureStoreName)}
         ${BossSessionScript.callPreamble()}
-        $_pickUsedFunction
+        $pickUsedPreamble
 
         var YEAR = $year, MONTH = $month;
         var MONTH_KEY = ${jsonEncode(monthKey)};
@@ -103,7 +107,7 @@ class WorkLogBossHours {
       (function() {
         ${BossSessionScript.sessionPreamble(captureStoreName: captureStoreName)}
         ${BossSessionScript.callPreamble()}
-        $_pickUsedFunction
+        $pickUsedPreamble
 
         var para = bossFindPara();
         if (!para) return JSON.stringify({ ok: false, reason: 'noSession' });

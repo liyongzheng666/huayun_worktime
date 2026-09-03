@@ -1,6 +1,7 @@
 import 'dart:convert';
 
 import 'boss_session_script.dart';
+import 'work_log_boss_hours.dart';
 import 'work_log_csv_parser.dart';
 
 /// BOSS 工作日志提交报文构造
@@ -210,6 +211,7 @@ class WorkLogSubmitScript {
   /// 返回 JSON：`{"ok":true,"objectId":"WORKLOG_xxx"}` 或 `{"ok":false,"reason":...}`
   static String build({
     required Map<String, dynamic> workLogData,
+    required String dateStr,
     required String captureStoreName,
   }) {
     final dataJson = jsonEncode(jsonEncode(workLogData));
@@ -218,29 +220,86 @@ class WorkLogSubmitScript {
       (function() {
         ${BossSessionScript.sessionPreamble(captureStoreName: captureStoreName)}
         ${BossSessionScript.callPreamble()}
+        ${WorkLogBossHours.pickUsedPreamble}
 
         var WORKLOG_DATA = $dataJson;
-        var SERVICE_URI = ${jsonEncode(saveServiceUri)};
+        var DATE = ${jsonEncode(dateStr)};
+        var HOURS_SERVICE_URI = ${jsonEncode(WorkLogBossHours.hoursServiceUri)};
+        var SAVE_SERVICE_URI = ${jsonEncode(saveServiceUri)};
 
         // 复用抓包里的会话上下文，凭据始终停留在网页会话中，不落到 APP 存储
         var para = bossFindPara();
         if (!para) return ${BossSessionScript.noSessionResult};
 
-        var res = bossCall(para, SERVICE_URI, {
+        // BOSS 的保存接口不幂等。必须在真正写入前现查一次：查不到不是 0，
+        // 而是无法证明安全，此时宁可暂缓，也不能带着未知状态继续写。
+        function queryUsedHours() {
+          var result = bossCall(para, HOURS_SERVICE_URI, { SelectDate: DATE });
+          if (!result.ok) {
+            return { ok: false, cause: result.reason || 'network' };
+          }
+          var used = pickUsed(result.data);
+          if (used === null) return { ok: false, cause: 'parse' };
+          return { ok: true, used: used };
+        }
+
+        var before = queryUsedHours();
+        if (!before.ok) {
+          return JSON.stringify({
+            ok: false,
+            deferred: true,
+            reason: 'preflightUnavailable',
+            cause: before.cause,
+            message: '网络通信不稳定，未能确认当天是否已提交，本次已暂缓'
+          });
+        }
+        if (before.used > 0) {
+          return JSON.stringify({
+            ok: false,
+            alreadySubmitted: true,
+            reason: 'alreadySubmitted',
+            existingHours: before.used,
+            message: '当天已有工作日志，本次未重复提交'
+          });
+        }
+
+        var res = bossCall(para, SAVE_SERVICE_URI, {
           workLogData: WORKLOG_DATA,
           ctrlEvent: { o: { id: 'guid0' } }
         });
-        if (!res.ok) return JSON.stringify(res);
 
         // 成功时最内层就是新建记录的 ID
         var objectId = (typeof res.data === 'string') ? res.data : null;
         if (objectId && objectId.indexOf('WORKLOG_') === 0) {
           return JSON.stringify({ ok: true, objectId: objectId });
         }
+
+        // 网络中断时，保存请求可能已被服务端处理，只是响应没回到客户端。
+        // 立刻复查：若工时已出现，就按成功处理；若连复查也失败，则保持“未知”并
+        // 暂缓后续重试。用户下次再点时，最上面的前置查询会先把重复挡住。
+        var after = queryUsedHours();
+        if (after.ok && after.used > 0) {
+          return JSON.stringify({
+            ok: true,
+            recovered: true,
+            existingHours: after.used,
+            message: '提交响应未返回，但已确认当天日志存在'
+          });
+        }
+        if (!after.ok) {
+          return JSON.stringify({
+            ok: false,
+            deferred: true,
+            reason: 'submitResultUnknown',
+            cause: res.reason || after.cause,
+            message: '网络通信不稳定，提交结果暂时无法确认，请勿立即重试'
+          });
+        }
         return JSON.stringify({
           ok: false,
-          reason: 'unexpected',
-          message: (res.text || '').substring(0, 300)
+          failed: true,
+          reason: res.reason || 'unexpected',
+          message: (res.message || res.text || '').substring(0, 300)
         });
       })();
     ''';

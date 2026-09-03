@@ -171,9 +171,7 @@ class _WorkReportWebViewScreenState extends State<WorkReportWebViewScreen> {
           Expanded(
             child: InAppWebView(
               initialUrlRequest: URLRequest(
-                url: WebUri(
-                  widget.initialUrl ?? WorkReportEntry.all.first.url,
-                ),
+                url: WebUri(widget.initialUrl ?? WorkReportEntry.all.first.url),
               ),
               initialSettings: InAppWebViewSettings(
                 javaScriptEnabled: true,
@@ -477,16 +475,26 @@ class _WorkReportWebViewScreenState extends State<WorkReportWebViewScreen> {
     // 出差、补录、打卡异常这些场景本来就该由用户自己定工时。
 
     final service = WorkLogSubmitService(controller);
+    final existingHours = await service.queryExistingHours(draft.date);
+    if (!mounted) return;
+    if (existingHours == null) {
+      _notify('网络通信不稳定，未能确认 ${draft.date} 是否已提交，本次已暂缓');
+      return;
+    }
+    if (existingHours > 0) {
+      _notify(
+        '${draft.date} 已在 BOSS 填报 '
+        '${WorkTimeCalculator.formatHours(existingHours)} 小时，本次未重复提交',
+      );
+      return;
+    }
+
     final (resolved, pickables) = await _resolveBossConstants(
       service,
       entry.projectName,
     );
     if (resolved == null) return;
     var constants = resolved;
-
-    // BOSS 允许同一天填多条，重复提交不报错而是静默产生重复记录，
-    // 因此提交前先查当天是否已有填报。
-    final existingHours = await service.queryExistingHours(draft.date);
 
     if (!mounted) return;
     // 用户可在确认框里调整工时，因此提交的是它返回的值而非打卡原值；
@@ -553,44 +561,38 @@ class _WorkReportWebViewScreenState extends State<WorkReportWebViewScreen> {
       break;
     }
 
-    try {
-      final workLogData = WorkLogSubmitScript.buildWorkLogData(
-        entry: entry,
-        actWork: actWork,
-        projectId: constants['projectId']!,
-        projectCode: constants['projectCode'] ?? '',
-        projectName: WorkLogSubmitService.payloadProjectName(
-          constants,
-          entry.projectName,
-        ),
-        auditor: constants['auditor'] ?? '',
-      );
+    final result = await service.submit(
+      entry: entry,
+      actWork: actWork,
+      constants: constants,
+    );
+    if (!mounted) return;
 
-      // 联合调试用：SnackBar 一闪而过，原始返回值才是能定位问题的东西
-      debugPrint('[日志提交] payload=${jsonEncode(workLogData)}');
-
-      final result = await controller.evaluateJavascript(
-        source: WorkLogSubmitScript.build(
-          workLogData: workLogData,
-          captureStoreName: WorkLogRequestCapture.storeName,
-        ),
-      );
-      debugPrint('[日志提交] 返回=${result?.toString()}');
-
-      if (!mounted) return;
-      final decoded = jsonDecode(result?.toString() ?? '{}');
-      if (decoded is Map && decoded['ok'] == true) {
-        _notify('提交成功：${decoded['objectId']}');
-        await controller.reload();
-      } else {
+    switch (result.status) {
+      case WorkLogSubmitStatus.submitted:
         _notify(
-          '提交失败：${decoded is Map ? (decoded['message'] ?? decoded['reason']) : '未知错误'}',
+          result.objectId == null
+              ? (result.message ?? '提交成功')
+              : '提交成功：${result.objectId}',
         );
-      }
-    } on ArgumentError catch (e) {
-      _notify('${e.message}');
-    } catch (e) {
-      _notify('提交出错：$e');
+        await controller.reload();
+        return;
+      case WorkLogSubmitStatus.alreadySubmitted:
+        final hours = result.existingHours;
+        _notify(
+          hours == null
+              ? '${draft.date} 已有日志，本次未重复提交'
+              : '${draft.date} 已在 BOSS 填报 '
+                    '${WorkTimeCalculator.formatHours(hours)} 小时，本次未重复提交',
+        );
+        await controller.reload();
+        return;
+      case WorkLogSubmitStatus.deferred:
+        _notify(result.message ?? '网络通信不稳定，本次已暂缓提交');
+        return;
+      case WorkLogSubmitStatus.failed:
+        _notify('提交失败：${result.message ?? '未知错误'}');
+        return;
     }
   }
 
@@ -706,7 +708,10 @@ class _WorkReportWebViewScreenState extends State<WorkReportWebViewScreen> {
           );
           return (null, pickables);
         }
-        constants = await WorkLogSubmitService.bindConstants(picked, projectName);
+        constants = await WorkLogSubmitService.bindConstants(
+          picked,
+          projectName,
+        );
       }
       return (constants, pickables);
     }

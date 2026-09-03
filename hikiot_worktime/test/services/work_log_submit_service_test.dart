@@ -9,6 +9,60 @@ const _csvName = '面向比亚迪公司的项目-自筹';
 const _bossName = '面向比亚迪公司的项目-自筹(2)';
 
 void main() {
+  group('提交结果分类', () {
+    test('服务端确认成功', () {
+      final result = WorkLogSubmitService.parseSubmitResult(
+        '{"ok":true,"objectId":"WORKLOG_123"}',
+      );
+
+      expect(result.status, WorkLogSubmitStatus.submitted);
+      expect(result.ok, isTrue);
+      expect(result.objectId, 'WORKLOG_123');
+    });
+
+    test('当天已有日志时归类为跳过，不算提交失败', () {
+      final result = WorkLogSubmitService.parseSubmitResult(
+        '{"ok":false,"alreadySubmitted":true,"existingHours":8}',
+      );
+
+      expect(result.status, WorkLogSubmitStatus.alreadySubmitted);
+      expect(result.ok, isFalse);
+      expect(result.existingHours, 8);
+    });
+
+    test('网络检查失败时归类为暂缓', () {
+      final result = WorkLogSubmitService.parseSubmitResult(
+        '{"ok":false,"deferred":true,"message":"暂缓"}',
+      );
+
+      expect(result.status, WorkLogSubmitStatus.deferred);
+      expect(result.message, '暂缓');
+    });
+
+    test('无法解析返回值时按结果未知暂缓，不能诱导立即重试', () {
+      final result = WorkLogSubmitService.parseSubmitResult('坏数据');
+
+      expect(result.status, WorkLogSubmitStatus.deferred);
+    });
+
+    test('只有明确标记的业务错误才算确定失败', () {
+      final result = WorkLogSubmitService.parseSubmitResult(
+        '{"ok":false,"failed":true,"message":"服务端拒绝"}',
+      );
+
+      expect(result.status, WorkLogSubmitStatus.failed);
+      expect(result.message, '服务端拒绝');
+    });
+
+    test('未分类的执行异常按结果未知暂缓', () {
+      final result = WorkLogSubmitService.parseSubmitResult(
+        '{"ok":false,"reason":"evalError"}',
+      );
+
+      expect(result.status, WorkLogSubmitStatus.deferred);
+    });
+  });
+
   group('提交配置与 CSV 项目名的绑定', () {
     test('绑定后即使两边名字不同也算可用', () {
       // 这是本次修复的核心：名字差一个「(2)」不该导致每次提交都重学
@@ -30,18 +84,14 @@ void main() {
         WorkLogSubmitService.bindingKey: _csvName,
       };
 
-      expect(
-        WorkLogSubmitService.constantsUsableFor(saved, '另一个项目'),
-        isFalse,
-      );
+      expect(WorkLogSubmitService.constantsUsableFor(saved, '另一个项目'), isFalse);
     });
 
     test('没有项目 ID 一律不可用', () {
       expect(
-        WorkLogSubmitService.constantsUsableFor(
-          {WorkLogSubmitService.bindingKey: _csvName},
-          _csvName,
-        ),
+        WorkLogSubmitService.constantsUsableFor({
+          WorkLogSubmitService.bindingKey: _csvName,
+        }, _csvName),
         isFalse,
       );
     });
@@ -58,7 +108,10 @@ void main() {
       // 无声沿用等于把「可能记错项目」的状态永久固化下来
       final legacy = {'projectId': 'PROJECT_aaa', 'projectName': _bossName};
 
-      expect(WorkLogSubmitService.constantsUsableFor(legacy, _csvName), isFalse);
+      expect(
+        WorkLogSubmitService.constantsUsableFor(legacy, _csvName),
+        isFalse,
+      );
     });
 
     test('手工配置（没有任何项目名）不被阻塞', () {
@@ -165,10 +218,14 @@ void main() {
       );
 
       // 后写的那个不该抹掉先写的
-      expect((await storage.loadBossBinding(_csvName))?['projectId'],
-          'PROJECT_aaa');
-      expect((await storage.loadBossBinding('运维平台'))?['projectId'],
-          'PROJECT_zzz');
+      expect(
+        (await storage.loadBossBinding(_csvName))?['projectId'],
+        'PROJECT_aaa',
+      );
+      expect(
+        (await storage.loadBossBinding('运维平台'))?['projectId'],
+        'PROJECT_zzz',
+      );
     });
 
     test('清除配置会把按项目名记住的绑定一并清掉', () async {
@@ -307,24 +364,21 @@ void main() {
     ];
 
     test('按项目 ID 补上名字，顺带补编码', () {
-      final filled = WorkLogSubmitService.fillProjectName(
-        {'projectId': 'PROJECT_aaa', 'auditor': ';USERINFO_ccc'},
-        projects,
-      );
+      final filled = WorkLogSubmitService.fillProjectName({
+        'projectId': 'PROJECT_aaa',
+        'auditor': ';USERINFO_ccc',
+      }, projects);
 
       expect(filled['projectName'], _bossName);
       expect(filled['projectCode'], 'PROJECT_bbb');
     });
 
     test('已有的名字和编码绝不覆盖', () {
-      final filled = WorkLogSubmitService.fillProjectName(
-        {
-          'projectId': 'PROJECT_aaa',
-          'projectName': '用户自己确认过的写法',
-          'projectCode': 'PROJECT_原本的',
-        },
-        projects,
-      );
+      final filled = WorkLogSubmitService.fillProjectName({
+        'projectId': 'PROJECT_aaa',
+        'projectName': '用户自己确认过的写法',
+        'projectCode': 'PROJECT_原本的',
+      }, projects);
 
       expect(filled['projectName'], '用户自己确认过的写法');
       expect(filled['projectCode'], 'PROJECT_原本的');
@@ -332,29 +386,24 @@ void main() {
 
     test('清单里查不到就保持原样，不编一个名字', () {
       // 补不上时确认框会挂出「未能确认 BOSS 那边的项目名」，那也比编强
-      final filled = WorkLogSubmitService.fillProjectName(
-        {'projectId': 'PROJECT_不在清单里'},
-        projects,
-      );
+      final filled = WorkLogSubmitService.fillProjectName({
+        'projectId': 'PROJECT_不在清单里',
+      }, projects);
 
       expect(filled['projectName'] ?? '', '');
     });
 
     test('没有项目 ID 时原样返回，不至于崩', () {
-      expect(
-        WorkLogSubmitService.fillProjectName(const {}, projects),
-        isEmpty,
-      );
+      expect(WorkLogSubmitService.fillProjectName(const {}, projects), isEmpty);
     });
   });
 
   group('报文里的项目名', () {
     test('优先用 BOSS 的写法，让名字与 PROJECTID 同源', () {
       expect(
-        WorkLogSubmitService.payloadProjectName(
-          {'projectName': _bossName},
-          _csvName,
-        ),
+        WorkLogSubmitService.payloadProjectName({
+          'projectName': _bossName,
+        }, _csvName),
         _bossName,
       );
     });
@@ -365,10 +414,7 @@ void main() {
         _csvName,
       );
       expect(
-        WorkLogSubmitService.payloadProjectName(
-          {'projectName': ''},
-          _csvName,
-        ),
+        WorkLogSubmitService.payloadProjectName({'projectName': ''}, _csvName),
         _csvName,
       );
     });

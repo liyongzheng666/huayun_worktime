@@ -24,7 +24,7 @@ class Answer {
 Future<Answer> pumpDialog(
   WidgetTester tester, {
   required WorkLogHours hours,
-  double? existingHours,
+  double? existingHours = 0,
   Map<String, String> constants = const {'auditorName': '张三'},
   bool canChangeProject = false,
   bool canChangeAuditor = false,
@@ -61,6 +61,49 @@ Future<Answer> pumpDialog(
 }
 
 void main() {
+  group('提交前去重', () {
+    testWidgets('该日已有日志时不再提供继续提交入口', (tester) async {
+      final answer = await pumpDialog(
+        tester,
+        hours: const WorkLogHours(hours: 8),
+        existingHours: 8,
+      );
+
+      expect(find.textContaining('这一天在 BOSS 已填报 8.00 小时'), findsOneWidget);
+      final button = tester.widget<FilledButton>(
+        find.widgetWithText(FilledButton, '该日已提交'),
+      );
+      expect(button.onPressed, isNull);
+      expect(answer.returned, isFalse);
+    });
+
+    testWidgets('查询结果未知时暂缓提交', (tester) async {
+      await pumpDialog(
+        tester,
+        hours: const WorkLogHours(hours: 8),
+        existingHours: null,
+      );
+
+      expect(find.textContaining('本次将暂缓提交'), findsOneWidget);
+      final button = tester.widget<FilledButton>(
+        find.widgetWithText(FilledButton, '暂缓提交'),
+      );
+      expect(button.onPressed, isNull);
+    });
+
+    testWidgets('明确查到零工时才允许确认提交', (tester) async {
+      final answer = await pumpDialog(
+        tester,
+        hours: const WorkLogHours(hours: 8),
+        existingHours: 0,
+      );
+
+      await tester.tap(find.text('确认提交'));
+      await tester.pumpAndSettle();
+      expect(answer.value?.actWork, '8.00');
+    });
+  });
+
   group('凑整建议', () {
     testWidgets('11.55 小时提示还差 3 分钟到 11.60', (tester) async {
       await pumpDialog(
@@ -179,17 +222,11 @@ void main() {
       await pumpDialog(
         tester,
         hours: const WorkLogHours(hours: 8),
-        constants: const {
-          'auditorName': '张三',
-          'projectName': '某项目(2)',
-        },
+        constants: const {'auditorName': '张三', 'projectName': '某项目(2)'},
       );
 
       expect(find.text('某项目(2)'), findsOneWidget);
-      expect(
-        find.text('CSV 里写的是「某项目」，已按 BOSS 的名称提交'),
-        findsOneWidget,
-      );
+      expect(find.text('CSV 里写的是「某项目」，已按 BOSS 的名称提交'), findsOneWidget);
     });
 
     testWidgets('两边名字一致时不啰嗦', (tester) async {
@@ -346,12 +383,7 @@ void main() {
 
     testWidgets('今天且有上班打卡时给出两个来源，各自标出小时数', (tester) async {
       // 切换前就能看清两边差多少，不用切过去才知道
-      await pumpDialog(
-        tester,
-        hours: punched,
-        date: todayStr,
-        now: today,
-      );
+      await pumpDialog(tester, hours: punched, date: todayStr, now: today);
 
       expect(find.text('工时来源'), findsOneWidget);
       expect(find.text('打卡 3.00 h'), findsOneWidget);
@@ -423,12 +455,7 @@ void main() {
 
     testWidgets('不是今天就不给这个开关', (tester) async {
       // 拿此刻去减一个过去日期的上班时间，算出来的是个毫无意义的大数
-      await pumpDialog(
-        tester,
-        hours: punched,
-        date: '2026-08-10',
-        now: today,
-      );
+      await pumpDialog(tester, hours: punched, date: '2026-08-10', now: today);
 
       expect(find.text('工时来源'), findsNothing);
       expect(find.textContaining('当前时间'), findsNothing);
