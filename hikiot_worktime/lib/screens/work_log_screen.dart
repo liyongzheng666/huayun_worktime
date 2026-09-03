@@ -11,6 +11,7 @@ import '../services/work_log_repository.dart';
 import '../utils/date_helper.dart';
 import '../utils/haptic_utils.dart';
 import '../utils/work_log_csv_parser.dart';
+import '../utils/work_log_edit_script.dart';
 import '../utils/work_log_auditor_lookup.dart';
 import '../utils/work_log_project_list_lookup.dart';
 import '../utils/work_time_calculator.dart';
@@ -20,6 +21,7 @@ import '../widgets/boss_constants_dialog.dart';
 import '../widgets/work_log_auditor_picker_dialog.dart';
 import '../widgets/work_log_project_picker_dialog.dart';
 import '../widgets/work_log_confirm_dialog.dart';
+import '../widgets/work_log_edit_dialog.dart';
 import '../widgets/week_strip.dart';
 import 'work_report_webview_screen.dart';
 
@@ -44,6 +46,11 @@ class WorkLogScreenState extends State<WorkLogScreen> {
   DateTime? _importedAt;
   int _totalCount = 0;
   bool _loading = true;
+
+  /// App 创建成功后记住的 BOSS 记录 ID；有它才能保证编辑的是原记录。
+  String? _submittedObjectId;
+  BossWorkLogRecord? _submittedRecord;
+  bool _editingSubmitted = false;
 
   /// BOSS 提交配置是否已就绪。未就绪时提交必然失败，因此在界面上前置提示。
   bool _bossConfigured = false;
@@ -71,6 +78,9 @@ class WorkLogScreenState extends State<WorkLogScreen> {
     final (sourceName, importedAt) = await _repository.loadMeta();
     final all = await _repository.loadAll();
     final constants = await StorageService().loadBossConstants();
+    final submittedObjectId = await StorageService().loadWorkLogObjectId(
+      DateHelper.formatDate(date),
+    );
 
     // 已经有更新的一次加载在跑，本次结果作废
     if (!mounted || seq != _loadSeq) return;
@@ -83,6 +93,8 @@ class WorkLogScreenState extends State<WorkLogScreen> {
       _importedAt = importedAt;
       _totalCount = all.length;
       _bossConfigured = constants['projectId']?.isNotEmpty == true;
+      if (_submittedObjectId != submittedObjectId) _submittedRecord = null;
+      _submittedObjectId = submittedObjectId;
       _loading = false;
     });
   }
@@ -201,6 +213,90 @@ class WorkLogScreenState extends State<WorkLogScreen> {
       await _runHeadlessSubmit(entry, draft!);
     } finally {
       _submitting = false;
+      if (mounted) setState(() {});
+    }
+  }
+
+  /// 读取并编辑 App 创建过的那条 BOSS 日志。
+  Future<void> _editSubmittedLog() async {
+    final objectId = _submittedObjectId;
+    if (objectId == null || _editingSubmitted || _submitting) return;
+
+    _editingSubmitted = true;
+    if (mounted) setState(() {});
+    try {
+      _showMessage('正在读取 BOSS 已提交日志…');
+      final loaded = await BossSessionRunner.run<BossWorkLogRecord>((
+        controller,
+      ) {
+        return WorkLogSubmitService(controller).loadSubmittedLog(objectId);
+      });
+      if (!mounted) return;
+      if (loaded.status == BossSessionStatus.noSession) {
+        await _promptBossLogin();
+        return;
+      }
+      final record = loaded.value;
+      if (!loaded.isOk || record == null) {
+        _showMessage('未能读取原日志，本次不会修改，请稍后重试');
+        return;
+      }
+
+      setState(() => _submittedRecord = record);
+      final edited = await WorkLogEditDialog.show(
+        context: context,
+        record: record,
+      );
+      if (edited == null || !mounted) return;
+
+      _showMessage('正在保存修改…');
+      final updated = await BossSessionRunner.run<WorkLogUpdateResult>((
+        controller,
+      ) {
+        return WorkLogSubmitService(controller).updateSubmittedLog(
+          record: record,
+          title: edited.title,
+          content: edited.content,
+          actWork: edited.actWork,
+        );
+      });
+      if (!mounted) return;
+      if (updated.status == BossSessionStatus.noSession) {
+        await _promptBossLogin();
+        return;
+      }
+      final result = updated.value;
+      if (!updated.isOk || result == null) {
+        _showMessage('网络通信不稳定，修改结果无法确认，请勿立即重试');
+        return;
+      }
+
+      switch (result.status) {
+        case WorkLogUpdateStatus.updated:
+          final updatedData = WorkLogEditScript.buildUpdatedData(
+            record: record,
+            title: edited.title,
+            content: edited.content,
+            actWork: edited.actWork,
+          );
+          setState(() {
+            _submittedRecord = BossWorkLogRecord(
+              objectId: objectId,
+              rawData: updatedData,
+            );
+          });
+          _weekStripKey.currentState?.refresh();
+          _showMessage('修改成功，已重新读取原日志确认');
+          return;
+        case WorkLogUpdateStatus.deferred:
+          _showMessage(result.message ?? '网络通信不稳定，本次已暂缓修改');
+          return;
+        case WorkLogUpdateStatus.failed:
+          _showMessage('修改失败：${result.message ?? 'BOSS 未保存修改'}');
+          return;
+      }
+    } finally {
+      _editingSubmitted = false;
       if (mounted) setState(() {});
     }
   }
@@ -531,6 +627,8 @@ class WorkLogScreenState extends State<WorkLogScreen> {
   Widget _buildSubmitBar() {
     final canSubmit = _draft?.hasEntry == true;
     final date = _selectedDate;
+    final canEdit = _submittedObjectId != null;
+    final busy = _submitting || _editingSubmitted;
 
     return SafeArea(
       top: false,
@@ -569,7 +667,13 @@ class WorkLogScreenState extends State<WorkLogScreen> {
                 const SizedBox(width: 10),
                 Expanded(
                   child: FilledButton.icon(
-                    onPressed: canSubmit && !_submitting ? _submitLog : null,
+                    onPressed: busy
+                        ? null
+                        : canEdit
+                        ? _editSubmittedLog
+                        : canSubmit
+                        ? _submitLog
+                        : null,
                     style: FilledButton.styleFrom(
                       minimumSize: const Size(0, 52),
                       textStyle: const TextStyle(
@@ -577,15 +681,21 @@ class WorkLogScreenState extends State<WorkLogScreen> {
                         fontWeight: FontWeight.bold,
                       ),
                     ),
-                    icon: _submitting
+                    icon: busy
                         ? const SizedBox(
                             width: 18,
                             height: 18,
                             child: CircularProgressIndicator(strokeWidth: 2),
                           )
-                        : const Icon(Icons.rocket_launch),
+                        : Icon(canEdit ? Icons.edit_note : Icons.rocket_launch),
                     label: Text(
-                      _submitting ? '提交中…' : '提交 ${date.month}月${date.day}日 日志',
+                      _submitting
+                          ? '提交中…'
+                          : _editingSubmitted
+                          ? '保存修改中…'
+                          : canEdit
+                          ? '编辑 ${date.month}月${date.day}日 已提交日志'
+                          : '提交 ${date.month}月${date.day}日 日志',
                       maxLines: 1,
                       overflow: TextOverflow.ellipsis,
                     ),
@@ -845,6 +955,7 @@ class WorkLogScreenState extends State<WorkLogScreen> {
 
   Widget _buildEntryCard() {
     final entry = _draft?.entry;
+    final submitted = _submittedRecord;
 
     if (entry == null) {
       return Card(
@@ -870,15 +981,35 @@ class WorkLogScreenState extends State<WorkLogScreen> {
     }
 
     return _buildSectionCard(
-      icon: Icons.notes,
-      iconColor: Colors.deepPurple[400]!,
-      title: '日志内容',
+      icon: _submittedObjectId == null ? Icons.notes : Icons.task_alt,
+      iconColor: _submittedObjectId == null
+          ? Colors.deepPurple[400]!
+          : Colors.green[700]!,
+      title: _submittedObjectId == null ? '日志内容' : '已提交日志',
+      trailing: _submittedObjectId == null
+          ? null
+          : TextButton.icon(
+              onPressed: _editingSubmitted || _submitting
+                  ? null
+                  : _editSubmittedLog,
+              icon: const Icon(Icons.edit, size: 16),
+              label: const Text('编辑'),
+            ),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          _buildField('标题', entry.title, emphasize: true),
-          _buildField('工作内容', entry.content, multiline: true),
-          _buildField('项目名称', entry.projectName),
+          _buildField('标题', submitted?.title ?? entry.title, emphasize: true),
+          _buildField(
+            '工作内容',
+            submitted?.content ?? entry.content,
+            multiline: true,
+          ),
+          _buildField(
+            '项目名称',
+            submitted?.projectName.isNotEmpty == true
+                ? submitted!.projectName
+                : entry.projectName,
+          ),
           const SizedBox(height: 4),
           // 类型、阶段、活动都是短标签，做成芯片比三行「标签+值」清爽得多，
           // 也和月度页的统计芯片对上了

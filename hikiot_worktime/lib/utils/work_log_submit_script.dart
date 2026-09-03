@@ -271,7 +271,11 @@ class WorkLogSubmitScript {
         // 成功时最内层就是新建记录的 ID
         var objectId = (typeof res.data === 'string') ? res.data : null;
         if (objectId && objectId.indexOf('WORKLOG_') === 0) {
-          return JSON.stringify({ ok: true, objectId: objectId });
+          return JSON.stringify({
+            ok: true,
+            objectId: objectId,
+            existingHours: parseFloat(WORKLOG_DATA.ACTWORK)
+          });
         }
 
         // 网络中断时，保存请求可能已被服务端处理，只是响应没回到客户端。

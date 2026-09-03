@@ -98,6 +98,11 @@ class StorageKeys {
   /// 「确认后就记住」永远兑现不了。这份按 CSV 项目名分开存，切回来就还在。
   static const String workLogProjectBindings = 'work_log_project_bindings';
 
+  /// App 成功创建的日志：日期 → BOSS `WORKLOG_xxx`。
+  ///
+  /// 只保存业务记录 ID，不保存从网页会话取得的对象详情或登录凭据。
+  static const String workLogObjectIds = 'work_log_object_ids';
+
   /// BOSS 月度已填工时前缀 (实际key: boss_hours_{yyyy-MM})
   static const String bossHoursPrefix = 'boss_hours';
 

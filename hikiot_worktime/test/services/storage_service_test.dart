@@ -8,6 +8,42 @@ import 'package:hikiot_worktime/utils/work_time_calculator.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
 void main() {
+  group('StorageService 已提交日志 ID', () {
+    setUp(() {
+      SharedPreferences.setMockInitialValues({});
+    });
+
+    test('按日期保存，多个日期互不覆盖', () async {
+      final storage = StorageService();
+      await storage.saveWorkLogObjectId('2026-09-02', 'WORKLOG_a');
+      await storage.saveWorkLogObjectId('2026-09-03', 'WORKLOG_b');
+
+      expect(await storage.loadWorkLogObjectId('2026-09-02'), 'WORKLOG_a');
+      expect(await storage.loadWorkLogObjectId('2026-09-03'), 'WORKLOG_b');
+    });
+
+    test('非法 ID 不落盘，移除后不再提供编辑入口', () async {
+      final storage = StorageService();
+      await storage.saveWorkLogObjectId('2026-09-03', 'PROJECT_wrong');
+      expect(await storage.loadWorkLogObjectId('2026-09-03'), isNull);
+
+      await storage.saveWorkLogObjectId('2026-09-03', 'WORKLOG_ok');
+      await storage.removeWorkLogObjectId('2026-09-03');
+      expect(await storage.loadWorkLogObjectId('2026-09-03'), isNull);
+    });
+
+    test('更新单日 BOSS 工时时保留同月其他日期', () async {
+      final storage = StorageService();
+      await storage.saveBossHours('2026-09', {'2026-09-01': 8});
+      await storage.saveBossHoursForDate('2026-09-03', 9.5);
+
+      expect(await storage.loadBossHours('2026-09'), {
+        '2026-09-01': 8,
+        '2026-09-03': 9.5,
+      });
+    });
+  });
+
   group('StorageService BOSS 提交配置', () {
     setUp(() {
       SharedPreferences.setMockInitialValues({});

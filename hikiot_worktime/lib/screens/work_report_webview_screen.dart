@@ -208,6 +208,7 @@ class _WorkReportWebViewScreenState extends State<WorkReportWebViewScreen> {
                 // 无论是否一键提交，都在后台静默学习提交配置——
                 // 用户正常浏览的过程本身就是学习素材，不该让他去填内部 ID
                 _startBackgroundLearning();
+                _startRememberViewedLogs();
                 if (widget.autoSubmit) _startAutoSubmit();
                 if (widget.autoSyncBossMonth != null) _startAutoSyncBossHours();
               },
@@ -598,6 +599,32 @@ class _WorkReportWebViewScreenState extends State<WorkReportWebViewScreen> {
 
   /// 后台学习是否已启动，避免每次 onLoadStop 都开一轮轮询。
   bool _learningStarted = false;
+
+  /// 持续识别用户在 BOSS 中打开的历史日志。
+  ///
+  /// BOSS 是单页应用，点开编辑通常不触发 `onLoadStop`，因此进入网页后启动一轮
+  /// 轻量轮询。脚本只返回日期与 `WORKLOG` ID；存储中不保留对象内容或会话凭据。
+  bool _rememberViewedLogsStarted = false;
+
+  Future<void> _startRememberViewedLogs() async {
+    if (_rememberViewedLogsStarted) return;
+    _rememberViewedLogsStarted = true;
+
+    String? lastObjectId;
+    for (var attempt = 0; attempt < 60 && mounted; attempt++) {
+      final controller = _controller;
+      if (controller != null) {
+        final reference = await WorkLogSubmitService(
+          controller,
+        ).rememberLatestViewedLog();
+        if (reference != null && reference.objectId != lastObjectId) {
+          lastObjectId = reference.objectId;
+          debugPrint('[日志编辑] 已记住 ${reference.date} 的 ${reference.objectId}');
+        }
+      }
+      await Future.delayed(const Duration(seconds: 2));
+    }
+  }
 
   /// 后台静默学习 BOSS 提交配置。
   ///

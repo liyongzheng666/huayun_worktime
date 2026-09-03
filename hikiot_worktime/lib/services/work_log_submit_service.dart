@@ -8,6 +8,7 @@ import '../utils/work_log_boss_hours.dart';
 import '../utils/work_log_constants_scanner.dart';
 import '../utils/work_log_csv_parser.dart';
 import '../utils/work_log_diagnostics_script.dart';
+import '../utils/work_log_edit_script.dart';
 import '../utils/work_log_history_lookup.dart';
 import '../utils/work_log_project_list_lookup.dart';
 import '../utils/work_log_request_capture.dart';
@@ -576,7 +577,18 @@ class WorkLogSubmitService {
         ),
       );
 
-      return parseSubmitResult(raw);
+      final result = parseSubmitResult(raw);
+      if (result.status == WorkLogSubmitStatus.submitted) {
+        final objectId = result.objectId;
+        if (objectId != null) {
+          await _storage.saveWorkLogObjectId(entry.date, objectId);
+        }
+        final hours = result.existingHours;
+        if (hours != null) {
+          await _storage.saveBossHoursForDate(entry.date, hours);
+        }
+      }
+      return result;
     } on ArgumentError catch (e) {
       return WorkLogSubmitResult(
         status: WorkLogSubmitStatus.failed,
@@ -645,6 +657,64 @@ class WorkLogSubmitService {
     }
   }
 
+  /// 按已知的 BOSS 记录 ID 读取服务端原始日志。
+  Future<BossWorkLogRecord?> loadSubmittedLog(String objectId) async {
+    if (!objectId.startsWith('WORKLOG_')) return null;
+    return WorkLogEditScript.parseFetchResult(
+      await runScript(
+        WorkLogEditScript.buildFetch(
+          objectId: objectId,
+          captureStoreName: _store,
+        ),
+      ),
+    );
+  }
+
+  /// 记住用户刚在可见 BOSS 页面打开的历史日志，供返回工作日志页后编辑。
+  Future<BossWorkLogReference?> rememberLatestViewedLog() async {
+    final reference = WorkLogEditScript.parseDiscoveredReference(
+      await runScript(
+        WorkLogEditScript.buildDiscoverCaptured(captureStoreName: _store),
+        logResult: false,
+      ),
+    );
+    if (reference != null) {
+      await _storage.saveWorkLogObjectId(reference.date, reference.objectId);
+    }
+    return reference;
+  }
+
+  /// 更新已提交日志，并在服务端复读验证后刷新本地 BOSS 工时缓存。
+  Future<WorkLogUpdateResult> updateSubmittedLog({
+    required BossWorkLogRecord record,
+    required String title,
+    required String content,
+    required String actWork,
+  }) async {
+    final workLogData = WorkLogEditScript.buildUpdatedData(
+      record: record,
+      title: title,
+      content: content,
+      actWork: actWork,
+    );
+    final result = WorkLogEditScript.parseUpdateResult(
+      await runScript(
+        WorkLogEditScript.buildUpdate(
+          workLogData: workLogData,
+          captureStoreName: _store,
+        ),
+      ),
+    );
+    if (result.status == WorkLogUpdateStatus.updated) {
+      final date = record.date;
+      final hours = result.hours;
+      if (date.isNotEmpty && hours != null) {
+        await _storage.saveBossHoursForDate(date, hours);
+      }
+    }
+    return result;
+  }
+
   /// 收集诊断信息，供学不到配置时反馈。
   ///
   /// 返回 (可读结论, 完整报告)。凭据已在脚本内打码。
@@ -674,10 +744,10 @@ class WorkLogSubmitService {
     return (conclusion, report);
   }
 
-  Future<String?> runScript(String script) async {
+  Future<String?> runScript(String script, {bool logResult = true}) async {
     try {
       final raw = await _controller.evaluateJavascript(source: script);
-      debugPrint('[日志提交] 脚本返回=${raw?.toString()}');
+      if (logResult) debugPrint('[日志提交] 脚本返回=${raw?.toString()}');
       return raw?.toString();
     } catch (e) {
       return '{"ok":false,"reason":"evalError","message":"$e"}';

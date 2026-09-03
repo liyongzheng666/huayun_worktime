@@ -466,10 +466,7 @@ class StorageService {
     final prefs = await SharedPreferences.getInstance();
     final all = await loadBossBindings();
     all[csvProjectName] = constants;
-    await prefs.setString(
-      StorageKeys.workLogProjectBindings,
-      jsonEncode(all),
-    );
+    await prefs.setString(StorageKeys.workLogProjectBindings, jsonEncode(all));
   }
 
   /// 取 [csvProjectName] 记住的配置，没有则返回 null。
@@ -513,13 +510,69 @@ class StorageService {
     }
   }
 
-  /// 保存 BOSS 某月已填工时（日期 → 工时）。
-  Future<void> saveBossHours(
-    String monthKey,
-    Map<String, double> hours,
-  ) async {
+  /// 记住 App 为某天创建成功的 BOSS 日志 ID，供刷新后进入编辑。
+  Future<void> saveWorkLogObjectId(String date, String objectId) async {
+    if (date.isEmpty || !objectId.startsWith('WORKLOG_')) return;
     final prefs = await SharedPreferences.getInstance();
-    await prefs.setString(StorageKeys.bossHoursKey(monthKey), jsonEncode(hours));
+    final all = await loadWorkLogObjectIds();
+    all[date] = objectId;
+    await prefs.setString(StorageKeys.workLogObjectIds, jsonEncode(all));
+  }
+
+  Future<String?> loadWorkLogObjectId(String date) async {
+    if (date.isEmpty) return null;
+    return (await loadWorkLogObjectIds())[date];
+  }
+
+  Future<Map<String, String>> loadWorkLogObjectIds() async {
+    final prefs = await SharedPreferences.getInstance();
+    final jsonStr = prefs.getString(StorageKeys.workLogObjectIds);
+    if (jsonStr == null) return {};
+
+    try {
+      final decoded = jsonDecode(jsonStr);
+      if (decoded is! Map) return {};
+      final result = <String, String>{};
+      decoded.forEach((date, value) {
+        final objectId = '$value';
+        if (objectId.startsWith('WORKLOG_')) result['$date'] = objectId;
+      });
+      return result;
+    } catch (_) {
+      return {};
+    }
+  }
+
+  Future<void> removeWorkLogObjectId(String date) async {
+    final prefs = await SharedPreferences.getInstance();
+    final all = await loadWorkLogObjectIds();
+    if (all.remove(date) == null) return;
+    await prefs.setString(StorageKeys.workLogObjectIds, jsonEncode(all));
+  }
+
+  /// 更新某一天的 BOSS 已填工时，同时保留同月其他日期。
+  Future<void> saveBossHoursForDate(String date, double hours) async {
+    final parsed = DateTime.tryParse(date);
+    if (parsed == null) return;
+    final monthKey =
+        '${parsed.year.toString().padLeft(4, '0')}-'
+        '${parsed.month.toString().padLeft(2, '0')}';
+    final all = await loadBossHours(monthKey);
+    if (hours > 0) {
+      all[date] = hours;
+    } else {
+      all.remove(date);
+    }
+    await saveBossHours(monthKey, all);
+  }
+
+  /// 保存 BOSS 某月已填工时（日期 → 工时）。
+  Future<void> saveBossHours(String monthKey, Map<String, double> hours) async {
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setString(
+      StorageKeys.bossHoursKey(monthKey),
+      jsonEncode(hours),
+    );
   }
 
   /// 该月是否同步过 BOSS 工时。
