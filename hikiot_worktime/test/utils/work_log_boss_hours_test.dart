@@ -5,10 +5,7 @@ import 'package:hikiot_worktime/utils/work_log_boss_hours.dart';
 void main() {
   group('parseSingleDay', () {
     test('取出已填工时', () {
-      expect(
-        WorkLogBossHours.parseSingleDay('{"ok":true,"used":10.3}'),
-        10.3,
-      );
+      expect(WorkLogBossHours.parseSingleDay('{"ok":true,"used":10.3}'), 10.3);
     });
 
     test('未填报返回 0 而不是 null', () {
@@ -39,6 +36,18 @@ void main() {
       expect(WorkLogBossHours.parseResult('{"ok":false}'), isEmpty);
       expect(WorkLogBossHours.parseResult('坏数据'), isEmpty);
       expect(WorkLogBossHours.parseResult(null), isEmpty);
+    });
+
+    test('自动刷新解析能区分查询失败与成功的空月份', () {
+      expect(
+        WorkLogBossHours.parseSuccessfulResult('{"ok":true,"hours":{}}'),
+        isEmpty,
+      );
+      expect(
+        WorkLogBossHours.parseSuccessfulResult('{"ok":false,"hours":{}}'),
+        isNull,
+      );
+      expect(WorkLogBossHours.parseSuccessfulResult('坏数据'), isNull);
     });
   });
 

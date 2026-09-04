@@ -21,7 +21,7 @@ class MainScreen extends StatefulWidget {
   State<MainScreen> createState() => _MainScreenState();
 }
 
-class _MainScreenState extends State<MainScreen> {
+class _MainScreenState extends State<MainScreen> with WidgetsBindingObserver {
   int _currentIndex = 0;
   final AppUpdateService _appUpdateService = AppUpdateService();
 
@@ -32,11 +32,33 @@ class _MainScreenState extends State<MainScreen> {
   @override
   void initState() {
     super.initState();
+    WidgetsBinding.instance.addObserver(this);
     // 应用启动时自动刷新数据
     WidgetsBinding.instance.addPostFrameCallback((_) {
       unawaited(_runStartupRefresh());
       unawaited(_checkForUpdateSilently());
     });
+  }
+
+  @override
+  void dispose() {
+    WidgetsBinding.instance.removeObserver(this);
+    super.dispose();
+  }
+
+  @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    if (state == AppLifecycleState.resumed) {
+      unawaited(_refreshVisibleBossData());
+    }
+  }
+
+  Future<void> _refreshVisibleBossData() async {
+    if (_currentIndex == 1) {
+      await _monthlyKey.currentState?.refreshBossHoursSilently();
+    } else if (_currentIndex == 2) {
+      await _workLogKey.currentState?.refreshBossHoursSilently();
+    }
   }
 
   Future<void> _checkForUpdateSilently() async {

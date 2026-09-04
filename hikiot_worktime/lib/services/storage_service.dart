@@ -578,15 +578,38 @@ class StorageService {
     } else {
       all.remove(date);
     }
-    await saveBossHours(monthKey, all);
+    await _writeBossHours(monthKey, all);
   }
 
   /// 保存 BOSS 某月已填工时（日期 → 工时）。
-  Future<void> saveBossHours(String monthKey, Map<String, double> hours) async {
+  Future<void> saveBossHours(
+    String monthKey,
+    Map<String, double> hours, {
+    DateTime? refreshedAt,
+  }) async {
+    await _writeBossHours(monthKey, hours);
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setString(
+      StorageKeys.bossHoursRefreshedAtKey(monthKey),
+      (refreshedAt ?? DateTime.now()).toIso8601String(),
+    );
+  }
+
+  Future<void> _writeBossHours(
+    String monthKey,
+    Map<String, double> hours,
+  ) async {
     final prefs = await SharedPreferences.getInstance();
     await prefs.setString(
       StorageKeys.bossHoursKey(monthKey),
       jsonEncode(hours),
+    );
+  }
+
+  Future<DateTime?> loadBossHoursRefreshedAt(String monthKey) async {
+    final prefs = await SharedPreferences.getInstance();
+    return DateTime.tryParse(
+      prefs.getString(StorageKeys.bossHoursRefreshedAtKey(monthKey)) ?? '',
     );
   }
 

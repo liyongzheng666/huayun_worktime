@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
 
@@ -17,6 +18,7 @@ import '../utils/work_log_project_list_lookup.dart';
 import '../utils/work_time_calculator.dart';
 import '../services/boss_session_runner.dart';
 import '../services/boss_login_coordinator.dart';
+import '../services/boss_hours_auto_refresh_service.dart';
 import '../services/work_log_submit_service.dart';
 import '../widgets/boss_constants_dialog.dart';
 import '../widgets/work_log_auditor_picker_dialog.dart';
@@ -39,6 +41,8 @@ class WorkLogScreen extends StatefulWidget {
 
 class WorkLogScreenState extends State<WorkLogScreen> {
   final WorkLogRepository _repository = WorkLogRepository();
+  final BossHoursAutoRefreshService _bossAutoRefresh =
+      BossHoursAutoRefreshService.shared;
   final GlobalKey<WeekStripState> _weekStripKey = GlobalKey();
 
   DateTime _selectedDate = DateHelper.getWorkDate();
@@ -69,6 +73,16 @@ class WorkLogScreenState extends State<WorkLogScreen> {
   /// 供外部（主框架切换 tab 时）触发刷新。
   Future<void> refreshData() => _reload();
 
+  /// 缓存过期时静默刷新所选日期所在月；失败不提示、不覆盖旧数据。
+  Future<void> refreshBossHoursSilently({DateTime? date}) async {
+    final target = date ?? _selectedDate;
+    final monthKey = DateHelper.formatMonth(target);
+    final result = await _bossAutoRefresh.refreshIfStale(target);
+    if (!mounted || result.status != BossHoursAutoRefreshStatus.updated) return;
+    if (DateHelper.formatMonth(_selectedDate) != monthKey) return;
+    _weekStripKey.currentState?.refresh();
+  }
+
   Future<void> _reload() async {
     final seq = ++_loadSeq;
     setState(() => _loading = true);
@@ -98,6 +112,7 @@ class WorkLogScreenState extends State<WorkLogScreen> {
       _submittedObjectId = submittedObjectId;
       _loading = false;
     });
+    unawaited(refreshBossHoursSilently(date: date));
   }
 
   /// 周条选中某一天。
@@ -552,11 +567,12 @@ class WorkLogScreenState extends State<WorkLogScreen> {
       BossLoginCoordinator.prompt(context: context, openWeb: _openReportSystem);
 
   Future<void> _loginBossFromConfig() async {
-    await BossLoginCoordinator.prompt(
+    final loggedIn = await BossLoginCoordinator.prompt(
       context: context,
       openWeb: _openReportSystem,
       successMessage: 'BOSS 登录成功，之后可直接提交日志',
     );
+    if (loggedIn && mounted) unawaited(refreshBossHoursSilently());
   }
 
   void _showMessage(String message) {

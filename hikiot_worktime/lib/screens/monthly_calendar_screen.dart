@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:intl/intl.dart';
@@ -17,6 +19,7 @@ import '../utils/target_progress_helper.dart';
 import '../widgets/home_button.dart';
 import '../services/boss_session_runner.dart';
 import '../services/boss_login_coordinator.dart';
+import '../services/boss_hours_auto_refresh_service.dart';
 import '../utils/work_log_boss_hours.dart';
 import '../utils/work_log_request_capture.dart';
 import 'work_report_webview_screen.dart';
@@ -41,6 +44,8 @@ class MonthlyCalendarScreen extends StatefulWidget {
 class MonthlyCalendarScreenState extends State<MonthlyCalendarScreen> {
   final HikiotApiClient _apiClient = HikiotApiClient();
   final StorageService _storage = StorageService();
+  final BossHoursAutoRefreshService _bossAutoRefresh =
+      BossHoursAutoRefreshService.shared;
   late final TeamContextService _teamContextService;
   late final MonthlyAttendanceRepository _monthlyRepository;
   bool _isLoading = true;
@@ -237,6 +242,7 @@ class MonthlyCalendarScreenState extends State<MonthlyCalendarScreen> {
     _pinnedTarget = await _storage.loadPinnedTarget();
     _baseTarget = await _storage.loadBaseTarget();
     _minTarget = await _storage.loadMinTarget();
+    unawaited(refreshBossHoursSilently());
 
     if (_monthlyData.isEmpty) {
       await _loadMonthlyData();
@@ -257,6 +263,16 @@ class MonthlyCalendarScreenState extends State<MonthlyCalendarScreen> {
     });
   }
 
+  /// 缓存过期时在后台刷新当前月 BOSS 工时；无登录态或网络失败时保持静默。
+  Future<void> refreshBossHoursSilently({DateTime? month}) async {
+    final target = month ?? _selectedMonth;
+    final monthKey = DateFormat('yyyy-MM').format(target);
+    final result = await _bossAutoRefresh.refreshIfStale(target);
+    if (!mounted || result.status != BossHoursAutoRefreshStatus.updated) return;
+    if (DateFormat('yyyy-MM').format(_selectedMonth) != monthKey) return;
+    setState(() => _bossHours = result.hours);
+  }
+
   /// 加载月度数据 (forceRefresh=true时强制刷新)
   Future<void> _loadMonthlyData({bool forceRefresh = false}) async {
     if (_personNo == null || _teamNo == null) return;
@@ -268,11 +284,12 @@ class MonthlyCalendarScreenState extends State<MonthlyCalendarScreen> {
       _error = null;
     });
 
-    // BOSS 工时来自本地缓存，由日志页手动同步写入，读不到不影响主流程
+    // 先用本地缓存秒开；过期刷新在下面静默启动，读不到不影响主流程。
     final bossHours = await _storage.loadBossHours(monthStr);
     if (mounted) {
       setState(() => _bossHours = bossHours);
     }
+    unawaited(refreshBossHoursSilently(month: _selectedMonth));
 
     try {
       final result = await _monthlyRepository.loadMonth(

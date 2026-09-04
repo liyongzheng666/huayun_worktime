@@ -109,8 +109,14 @@ class StorageKeys {
   /// BOSS 月度已填工时前缀 (实际key: boss_hours_{yyyy-MM})
   static const String bossHoursPrefix = 'boss_hours';
 
+  /// BOSS 月度工时最近一次完整刷新时间前缀。
+  static const String bossHoursRefreshedAtPrefix = 'boss_hours_refreshed_at';
+
   /// 获取 BOSS 月度工时的完整 key
   static String bossHoursKey(String monthKey) => '${bossHoursPrefix}_$monthKey';
+
+  static String bossHoursRefreshedAtKey(String monthKey) =>
+      '${bossHoursRefreshedAtPrefix}_$monthKey';
 
   // ============ 引导相关 ============
   /// 新手引导完成标记

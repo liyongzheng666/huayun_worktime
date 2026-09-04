@@ -34,13 +34,21 @@ void main() {
 
     test('更新单日 BOSS 工时时保留同月其他日期', () async {
       final storage = StorageService();
-      await storage.saveBossHours('2026-09', {'2026-09-01': 8});
+      final refreshedAt = DateTime(2026, 9, 4, 8);
+      await storage.saveBossHours('2026-09', {
+        '2026-09-01': 8,
+      }, refreshedAt: refreshedAt);
       await storage.saveBossHoursForDate('2026-09-03', 9.5);
 
       expect(await storage.loadBossHours('2026-09'), {
         '2026-09-01': 8,
         '2026-09-03': 9.5,
       });
+      expect(
+        await storage.loadBossHoursRefreshedAt('2026-09'),
+        refreshedAt,
+        reason: '单日提交或编辑不能冒充整月已经刷新',
+      );
     });
   });
 

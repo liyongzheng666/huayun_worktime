@@ -144,13 +144,19 @@ class WorkLogBossHours {
   }
 
   /// 解析脚本返回值为「日期 → 工时」表。
-  static Map<String, double> parseResult(String? raw) {
-    if (raw == null || raw.isEmpty) return {};
+  static Map<String, double> parseResult(String? raw) =>
+      parseSuccessfulResult(raw) ?? {};
+
+  /// 解析整月查询；失败返回 null，成功但没有日志返回空表。
+  ///
+  /// 自动刷新必须区分这两种状态，否则一次网络错误会用空表覆盖有效缓存。
+  static Map<String, double>? parseSuccessfulResult(String? raw) {
+    if (raw == null || raw.isEmpty) return null;
     try {
       final decoded = jsonDecode(raw);
-      if (decoded is! Map || decoded['ok'] != true) return {};
+      if (decoded is! Map || decoded['ok'] != true) return null;
       final hours = decoded['hours'];
-      if (hours is! Map) return {};
+      if (hours is! Map) return null;
 
       final result = <String, double>{};
       hours.forEach((key, value) {
@@ -160,8 +166,8 @@ class WorkLogBossHours {
         if (parsed != null) result['$key'] = parsed;
       });
       return result;
-    } catch (e) {
-      return {};
+    } catch (_) {
+      return null;
     }
   }
 }
