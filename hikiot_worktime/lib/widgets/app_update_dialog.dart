@@ -153,11 +153,11 @@ class _AppUpdateDialogState extends State<AppUpdateDialog>
         ? null
         : _receivedBytes / _totalBytes!;
     final releaseNotes = widget.update.releaseNotes.isEmpty
-        ? '本版本未提供更新说明。'
+        ? '谢谢你愿意试用华云工时 🫶 又带来一点小改进，愿今天的填报更省心！'
         : widget.update.releaseNotes;
 
     return AlertDialog(
-      title: Text('发现新版本 ${widget.update.displayVersion}'),
+      title: Text('小更新来啦 🎁 ${widget.update.displayVersion}'),
       content: SizedBox(
         width: 420,
         child: SingleChildScrollView(
@@ -167,7 +167,10 @@ class _AppUpdateDialogState extends State<AppUpdateDialog>
             children: [
               Text('当前版本：${widget.update.installedVersion.displayName}'),
               const SizedBox(height: 12),
-              const Text('更新说明', style: TextStyle(fontWeight: FontWeight.bold)),
+              const Text(
+                '这次带来了什么 ✨',
+                style: TextStyle(fontWeight: FontWeight.bold),
+              ),
               const SizedBox(height: 6),
               SelectableText(releaseNotes),
               if (_isDownloading) ...[
@@ -211,7 +214,7 @@ class _AppUpdateDialogState extends State<AppUpdateDialog>
         if (!_isDownloading && !_isLaunchingInstaller)
           TextButton(
             onPressed: () => Navigator.of(context).pop(),
-            child: const Text('稍后'),
+            child: const Text('晚点再说 ☕'),
           ),
         if (_waitingForPermission)
           FilledButton(
@@ -223,7 +226,7 @@ class _AppUpdateDialogState extends State<AppUpdateDialog>
             onPressed: _downloadedUpdate == null
                 ? _downloadAndInstall
                 : _continueInstall,
-            child: Text(_errorMessage == null ? '下载并安装' : '重试'),
+            child: Text(_errorMessage == null ? '下载并安装 🚀' : '再试一次 💪'),
           ),
       ],
     );

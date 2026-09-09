@@ -6,7 +6,7 @@
 - Java：Temurin JDK `17.0.20`
 - Android SDK：API 36，最低支持 API 24
 - 应用 ID：`com.hikiot.worktime`
-- 当前版本：`2.9.0+9`
+- 当前版本：`2.9.1+10`
 - 分发方式：公司内部直接安装 APK，不上架应用商店
 - 正式版本来源：GitHub Releases；国内网络不可达时可转发同一个 APK
 
@@ -46,6 +46,8 @@ build/app/outputs/flutter-apk/huayun-worktime-v<版本名+构建号>.apk.sha256
 > release keystore 一旦丢失，已安装版本将无法再被后续 APK 覆盖升级。首次正式分发前，必须把 keystore 和密码做一份离机加密备份。
 
 ## 发布前检查
+
+手机端直接显示 GitHub Release 正文。每次发布在 `docs/releases/<tag>.md` 准备面向试用者的纯文本更新说明：感谢试用与反馈，使用轻松俏皮的语气、表情和颜文字，简明列出实际变化。流水线在创建 Release 时同步带上该正文，保证旧版用户第一次收到更新提示就能看到；未提供版本说明文件时保留自动生成说明的兼容路径。
 
 1. 更新 `pubspec.yaml` 中的版本，例如从 `2.4.0+4` 提升到 `2.4.1+5`。
 2. 运行 `flutter analyze` 和 `flutter test`。

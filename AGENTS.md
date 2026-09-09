@@ -16,6 +16,7 @@
 - GitHub Releases 是 Android 安装包和版本信息的唯一权威发布源；普通使用者不拉取源码自行编译。
 - Android App 优先从 GitHub Releases 检查并下载更新，系统安装界面仍需用户确认；GitHub 在中国大陆网络不可达时，允许用户取得同一个正式签名 APK 后手动覆盖安装。
 - GitHub 更新检查失败不得阻塞启动、登录、工时查询等核心功能，也不得反复弹错干扰使用。
+- 手机端更新说明要明确感谢试用者，语气轻松俏皮，搭配表情或颜文字；修复内容说清楚，保留稍后更新的选择。Release 正文使用适合 App 纯文本展示的排版。
 - 所有 Android 正式 APK 必须使用同一个 release keystore；密钥不得入库，需同时保存在 GitHub Actions Secrets 与离机加密备份中。
 
 ## 交互验收约定

@@ -145,13 +145,21 @@ jobs:
           set -euo pipefail
           apk_path="build/app/outputs/flutter-apk/${APK_NAME}"
           checksum_path="${apk_path}.sha256"
+          notes_path="../docs/releases/${RELEASE_TAG}.md"
+          notes_args=(--generate-notes)
+          if [[ -f "${notes_path}" ]]; then
+            notes_args=(--notes-file "${notes_path}")
+          fi
 
           if gh release view "${RELEASE_TAG}" --repo "${GITHUB_REPOSITORY}" >/dev/null 2>&1; then
             gh release upload "${RELEASE_TAG}" "${apk_path}" "${checksum_path}" --clobber --repo "${GITHUB_REPOSITORY}"
+            if [[ -f "${notes_path}" ]]; then
+              gh release edit "${RELEASE_TAG}" --notes-file "${notes_path}" --repo "${GITHUB_REPOSITORY}"
+            fi
           else
             gh release create "${RELEASE_TAG}" "${apk_path}" "${checksum_path}" \
               --verify-tag \
-              --generate-notes \
+              "${notes_args[@]}" \
               --title "${RELEASE_TAG}" \
               --repo "${GITHUB_REPOSITORY}"
           fi
