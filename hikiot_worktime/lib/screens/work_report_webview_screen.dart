@@ -496,6 +496,7 @@ class _WorkReportWebViewScreenState extends State<WorkReportWebViewScreen> {
     );
     if (resolved == null) return;
     var constants = resolved;
+    var auditors = pickables.auditors;
 
     if (!mounted) return;
     // 用户可在确认框里调整工时，因此提交的是它返回的值而非打卡原值；
@@ -531,15 +532,33 @@ class _WorkReportWebViewScreenState extends State<WorkReportWebViewScreen> {
           purpose: ProjectPickPurpose.change,
         );
         if (!mounted) return;
-        if (picked != null) constants = picked;
+        if (picked != null) {
+          final changed = picked['projectId'] != constants['projectId'];
+          constants = picked;
+          if (changed) {
+            _notify('正在查询项目审核人…');
+            auditors = await service.lookupAuditors(
+              projectId: constants['projectId'] ?? '',
+            );
+            if (!mounted) return;
+            final confirmed = await _confirmRequiredAuditor(
+              constants,
+              auditors,
+              entry.projectName,
+            );
+            if (confirmed == null || !mounted) return;
+            constants = confirmed;
+          }
+        }
         continue;
       }
 
       if (outcome.changeAuditor) {
-        var auditors = pickables.auditors;
         if (auditors.isEmpty) {
           _notify('正在扫描审核人…');
-          auditors = await service.lookupAuditors();
+          auditors = await service.lookupAuditors(
+            projectId: constants['projectId'] ?? '',
+          );
           if (!mounted) return;
         }
         final picked = await WorkLogAuditorPickerDialog.pick(
@@ -695,7 +714,7 @@ class _WorkReportWebViewScreenState extends State<WorkReportWebViewScreen> {
     // 走服务里的统一解析，绑定判定与后台提交保持一致；
     // 两条路径各判各的，迟早会出现「网页里能提交、后台却要求重新确认」。
     final resolution = await service.resolveConstants(projectName);
-    final pickables = BossPickables(resolution.projects, resolution.auditors);
+    var pickables = BossPickables(resolution.projects, resolution.auditors);
 
     var constants = resolution.constants;
 
@@ -714,32 +733,25 @@ class _WorkReportWebViewScreenState extends State<WorkReportWebViewScreen> {
         _notify('已取消。若清单里没有正确的项目，可在工作日志页的「提交配置」里手工填 ID');
         return (null, pickables);
       }
-      constants = picked;
+      // 预选配置的人员可能属于其他项目，确认真实项目后重新查一次。
+      constants = await WorkLogSubmitService.bindConstants({
+        ...picked,
+        'auditor': '',
+        'auditorName': '',
+      }, projectName);
+      final auditors = await service.lookupAuditors(
+        projectId: constants['projectId'] ?? '',
+      );
+      if (!mounted) return (null, pickables);
+      pickables = BossPickables(pickables.projects, auditors);
     }
 
     if (constants != null) {
-      // 审核人和项目是两件独立的事，缺了单独补，不封死另一条路
-      if ((constants['auditor'] ?? '').isEmpty) {
-        if (!mounted) return (null, pickables);
-        final picked = await WorkLogAuditorPickerDialog.pick(
-          context: context,
-          constants: constants,
-          auditors: pickables.auditors,
-        );
-        if (!mounted) return (null, pickables);
-        if (picked == null) {
-          _notify(
-            pickables.auditors.isEmpty
-                ? '没扫到审核人。到「我的工作日志」点开一个已填过的日期，再回来提交'
-                : '已取消。审核人必须选一个，否则日志会发给错误的审批人',
-          );
-          return (null, pickables);
-        }
-        constants = await WorkLogSubmitService.bindConstants(
-          picked,
-          projectName,
-        );
-      }
+      constants = await _confirmRequiredAuditor(
+        constants,
+        pickables.auditors,
+        projectName,
+      );
       return (constants, pickables);
     }
 
@@ -766,6 +778,34 @@ class _WorkReportWebViewScreenState extends State<WorkReportWebViewScreen> {
               : '$conclusion（诊断已复制到剪贴板）'),
     );
     return (null, pickables);
+  }
+
+  /// 只有当前项目尚未确认审核人时才补齐；明确改选过的人保持不变。
+  Future<Map<String, String>?> _confirmRequiredAuditor(
+    Map<String, String> constants,
+    List<BossAuditor> auditors,
+    String projectName,
+  ) async {
+    if ((constants['auditor'] ?? '').isNotEmpty) return constants;
+    if (!mounted) return null;
+    final preferred = WorkLogSubmitService.preferredAuditor(auditors);
+    final picked = preferred == null
+        ? await WorkLogAuditorPickerDialog.pick(
+            context: context,
+            constants: constants,
+            auditors: auditors,
+          )
+        : WorkLogSubmitService.constantsForAuditor(constants, preferred);
+    if (!mounted) return null;
+    if (picked == null) {
+      _notify(
+        auditors.isEmpty
+            ? '未查到该项目的审核人，请在 BOSS 核对项目审核人设置，或在「提交配置」里手工填写'
+            : '已取消提交，请确认该项目的审核人后再提交',
+      );
+      return null;
+    }
+    return WorkLogSubmitService.bindConstants(picked, projectName);
   }
 
   /// 当日 CSV 条目里的项目名，用于在多项目时挑对那一个；取不到返回空串。

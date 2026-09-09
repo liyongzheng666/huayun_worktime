@@ -152,8 +152,8 @@ class WorkLogProjectPickerDialog {
                       if (currentId.isNotEmpty && selected?.id != currentId)
                         _warning(
                           '你选的不是当前这份配置所属的项目。'
-                          '审核人仍沿用「${_auditorLabel(constants)}」，'
-                          '请在提交确认框里核对。',
+                          '确认后会重新查询这个项目的审核人，'
+                          '请在提交前核对。',
                         ),
                     ],
                     const SizedBox(height: 8),
@@ -223,7 +223,10 @@ class WorkLogProjectPickerDialog {
   }
 
   /// 按关键词过滤。归一化之后比较，用户不必纠结全半角和空格。
-  static List<ProjectMatch> _filter(List<ProjectMatch> matches, String keyword) {
+  static List<ProjectMatch> _filter(
+    List<ProjectMatch> matches,
+    String keyword,
+  ) {
     if (keyword.isEmpty) return matches;
     final needle = ProjectNameMatcher.normalize(keyword);
     return matches

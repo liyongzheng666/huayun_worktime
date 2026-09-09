@@ -53,8 +53,8 @@ class BossLoginScript {
           password.dispatchEvent(new Event('input', { bubbles: true }));
           password.dispatchEvent(new Event('change', { bubbles: true }));
 
-          // 不勾选网页的自动登录；App 只复用登录成功后的 Cookie，不让网页把
-          // 含加密密码的整份 LoginPara 额外写入 autoLoginInfo。
+          // 不勾选网页的自动登录，避免创建保留 10 天的自动登录 Cookie。
+          // 网页仍会写自己的 autoLoginInfo 会话 Cookie，App 不另存登录参数。
           var autoLogin = document.getElementById('autoLogin');
           if (autoLogin) {
             autoLogin.removeAttribute('checked');

@@ -12,18 +12,10 @@ class AuditorPickResult {
   final BossAuditor? auditor;
 }
 
-/// 从抓包里认出的候选中挑出工作日志的审核人
+/// 从当前项目的审核人接口、个人设置和历史数据里选择审核人。
 ///
-/// **为什么让用户选而不是自动认**：审核人是个人设置，不是项目属性，也不在
-/// 项目清单里。自动识别已经在真实使用中失败过两次——设置项在响应里以哪种
-/// 形状出现，我们始终没有实测证据，再猜下去只是换个姿势碰运气。
-///
-/// 而抓包里的 `USERINFO_` 大多带着姓名：**APP 分不清哪个是审核人、哪个是
-/// 用户自己，但用户一眼就能认出来**。这和项目选择框是同一个思路——别猜，
-/// 把候选全列出来交给用户定。
-///
-/// **填错审核人的后果是日志提交给错误的审批人**，所以这里同样不预选「看着
-/// 像的那个」：只有来自个人设置的候选才预选，其余一律要用户自己点。
+/// 同一用户在不同项目可以有不同审核人。当前项目接口的唯一候选可以作为
+/// 默认值；只有历史抓包等候选时，仍由用户核对姓名，避免误选自己或其他人员。
 class WorkLogAuditorPickerDialog {
   WorkLogAuditorPickerDialog._();
 
@@ -50,15 +42,15 @@ class WorkLogAuditorPickerDialog {
                 children: [
                   if (auditors.isEmpty)
                     _warning(
-                      '没能从 BOSS 的抓包里认出任何审核人。\n'
-                      '请到「我的工作日志」点开一个已填过的日期，'
-                      '让页面把审核人信息发出来，再回来提交；'
+                      '没能查到当前项目的审核人。\n'
+                      '请在 BOSS 核对该项目的审核人设置；'
+                      '也可打开这个项目的历史日志后重试，'
                       '或在「提交配置」里手工填审核人 ID。',
                     )
                   else ...[
                     Text(
-                      '扫到 ${auditors.length} 个候选。'
-                      'APP 分不清哪个是审核人、哪个是你自己，请你确认：',
+                      '查到 ${auditors.length} 个候选。'
+                      '请根据姓名和来源确认当前项目的审核人：',
                       style: TextStyle(fontSize: 12, color: Colors.grey[700]),
                     ),
                     const SizedBox(height: 8),
@@ -99,10 +91,7 @@ class WorkLogAuditorPickerDialog {
                     ? null
                     : () => Navigator.pop(
                         dialogContext,
-                        AuditorPickResult(
-                          confirmed: true,
-                          auditor: selected,
-                        ),
+                        AuditorPickResult(confirmed: true, auditor: selected),
                       ),
                 child: const Text('就用选中的'),
               ),
@@ -116,8 +105,7 @@ class WorkLogAuditorPickerDialog {
 
   /// 弹选择框 → 按选择重建配置。返回新配置；放弃时返回 null。
   ///
-  /// **不落绑定**：审核人是个人设置，跟着人走而不是跟着 CSV 项目走；
-  /// 由调用方在项目也定下来之后统一绑定，免得存下一份只有审核人的残缺配置。
+  /// 不落绑定：由调用方在项目和审核人都定下来之后统一保存。
   static Future<Map<String, String>?> pick({
     required BuildContext context,
     required Map<String, String> constants,
@@ -135,8 +123,8 @@ class WorkLogAuditorPickerDialog {
 
   /// 默认选中哪一个。
   ///
-  /// 只认两种：当前配置里已有的那个，或者来自个人设置的那个（权威出处）。
-  /// **不拿「第一个」当默认**——排序靠前不代表就是审核人。
+  /// 已确认的人员优先，否则使用当前项目接口或个人设置的唯一候选。
+  /// 多个候选不按排序预选，交给用户确认。
   static BossAuditor? _initialSelection(
     List<BossAuditor> auditors,
     String currentId,
@@ -144,10 +132,7 @@ class WorkLogAuditorPickerDialog {
     for (final a in auditors) {
       if (a.id == currentId && currentId.isNotEmpty) return a;
     }
-    for (final a in auditors) {
-      if (a.source == BossAuditorSource.setting) return a;
-    }
-    return null;
+    return WorkLogSubmitService.preferredAuditor(auditors);
   }
 
   static Widget _candidate({

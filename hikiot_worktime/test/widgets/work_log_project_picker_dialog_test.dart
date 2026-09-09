@@ -55,10 +55,8 @@ Future<Answer> pumpDialog(
 }
 
 /// 造一批互不相像的项目，用来验证搜索与「不预选」。
-List<BossProject> manyProjects(int count) => List.generate(
-  count,
-  (i) => BossProject(id: 'PROJECT_$i', name: '独立系统$i号'),
-);
+List<BossProject> manyProjects(int count) =>
+    List.generate(count, (i) => BossProject(id: 'PROJECT_$i', name: '独立系统$i号'));
 
 void main() {
   group('扫不到项目清单时（退回单项确认）', () {
@@ -139,15 +137,15 @@ void main() {
       expect(answer.value!.project?.id, 'PROJECT_zzz');
     });
 
-    testWidgets('改选后必须提示审核人仍是旧的', (tester) async {
+    testWidgets('改选后提示重新查询该项目审核人', (tester) async {
       // 审核人填错会把日志提交给错误的审批人，不能默默沿用
       await pumpDialog(tester, projects: _projects);
 
       await tester.tap(find.text('运维平台三期'));
       await tester.pumpAndSettle();
 
-      expect(find.textContaining('审核人仍沿用'), findsOneWidget);
-      expect(find.textContaining('张三'), findsOneWidget);
+      expect(find.textContaining('重新查询这个项目的审核人'), findsOneWidget);
+      expect(find.textContaining('审核人仍沿用'), findsNothing);
     });
 
     testWidgets('选中的就是当前那个时不回传，避免覆盖完整配置', (tester) async {

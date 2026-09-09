@@ -3,7 +3,269 @@ import 'dart:convert';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:hikiot_worktime/utils/work_log_auditor_lookup.dart';
 
+import '../support/javascript_runner.dart';
+
 void main() {
+  List<BossAuditor> scan(
+    Object response, {
+    Object? requestBody,
+    String pageSetup = '',
+    String projectId = '',
+  }) {
+    final script = WorkLogAuditorLookup.build(
+      captureStoreName: 'store',
+      projectId: projectId,
+    );
+    final result = runJavaScript('''
+      const window = {frames: [], store: [{
+        response: ${jsonEncode(response)},
+        body: ${jsonEncode(requestBody)}
+      }]};
+      $pageSetup
+      const result = $script
+      console.log(JSON.stringify(result));
+    ''');
+    return WorkLogAuditorLookup.parse(result as String);
+  }
+
+  group('实际执行审核人扫描脚本', () {
+    final setting = {
+      'auditor': ';USERINFO_default',
+      'auditorText': '默认审核人',
+      'focusor': ';USERINFO_observer',
+      'focusorText': '关注人',
+    };
+
+    test('登录响应的真实 ENAME 和 SETTINGVALUE 形状保留设置来源', () {
+      expect(
+        scan({
+          'SystemSettings': jsonEncode([
+            {
+              'ENAME': WorkLogAuditorLookup.settingKey,
+              'SETTINGVALUE': jsonEncode(setting),
+            },
+          ]),
+        }),
+        [
+          const BossAuditor(
+            id: ';USERINFO_default',
+            name: '默认审核人',
+            source: BossAuditorSource.setting,
+          ),
+        ],
+      );
+    });
+
+    test('只在网页内存中的个人设置也可读取且不需要历史响应', () {
+      expect(
+        scan(
+          {},
+          pageSetup:
+              '''
+        window.frames.push({frames: [], HoteamUI: {Common: {
+          GetPersonalSetting(key) {
+            if (key !== ${jsonEncode(WorkLogAuditorLookup.settingKey)}) {
+              throw new Error('读取了无关设置');
+            }
+            return ${jsonEncode(jsonEncode(setting))};
+          }
+        }}});
+      ''',
+        ),
+        [
+          const BossAuditor(
+            id: ';USERINFO_default',
+            name: '默认审核人',
+            source: BossAuditorSource.setting,
+          ),
+        ],
+      );
+    });
+
+    test('复用网页专用只读查询，基础与项目审核人归并且服务来源优先', () {
+      expect(
+        scan(
+          {WorkLogAuditorLookup.settingKey: setting},
+          projectId: 'PROJECT_example',
+          pageSetup: '''
+          let calls = 0;
+          const ui = {DataService: {Call(service, args) {
+            if (service !== 'Hoteam.InforCenter.WorkReportService.GetWorkLogAuditor') {
+              throw new Error('调用了无关接口');
+            }
+            calls++;
+            if (calls > 2) throw new Error('重复 frame 查询');
+            if (JSON.stringify(args) === JSON.stringify({para: {UseLast: true}})) {
+              return [{Value: 'USERINFO_default', Text: '当前审核人'}];
+            }
+            if (JSON.stringify(args) === JSON.stringify({
+              para: {UseLast: true, ProjectID: 'PROJECT_example'}
+            })) {
+              return [{Value: 'USERINFO_manager', Text: '项目经理'}];
+            }
+            throw new Error('参数与网页调用不一致');
+          }}};
+          window.HoteamUI = ui;
+          window.frames.push({frames: [], HoteamUI: ui});
+          process.on('exit', () => {
+            if (calls !== 2) throw new Error('查询次数不正确: ' + calls);
+          });
+        ''',
+        ),
+        containsAll([
+          const BossAuditor(
+            id: ';USERINFO_default',
+            name: '当前审核人',
+            source: BossAuditorSource.service,
+          ),
+          const BossAuditor(
+            id: ';USERINFO_manager',
+            name: '项目经理',
+            source: BossAuditorSource.service,
+          ),
+        ]),
+      );
+    });
+
+    test('查询失败时仍可从网页设置取审核人', () {
+      expect(
+        scan(
+          {},
+          pageSetup:
+              '''
+        window.HoteamUI = {
+          Common: {GetPersonalSetting() { return ${jsonEncode(setting)}; }},
+          DataService: {Call() { throw new Error('查询失败'); }}
+        };
+      ''',
+        ),
+        [
+          const BossAuditor(
+            id: ';USERINFO_default',
+            name: '默认审核人',
+            source: BossAuditorSource.setting,
+          ),
+        ],
+      );
+    });
+
+    test('默认设置经过两层 JSON 编码仍能识别并保留设置来源', () {
+      expect(
+        scan({
+          WorkLogAuditorLookup.settingKey: jsonEncode(jsonEncode(setting)),
+        }),
+        [
+          const BossAuditor(
+            id: ';USERINFO_default',
+            name: '默认审核人',
+            source: BossAuditorSource.setting,
+          ),
+        ],
+      );
+    });
+
+    test('设置值内的响应包装解开后仍是默认审核人', () {
+      expect(
+        scan({
+          'Key': WorkLogAuditorLookup.settingKey,
+          'Value': jsonEncode({'d': jsonEncode(setting)}),
+        }),
+        [
+          const BossAuditor(
+            id: ';USERINFO_default',
+            name: '默认审核人',
+            source: BossAuditorSource.setting,
+          ),
+        ],
+      );
+    });
+
+    test('历史网格同一行的姓名列与原始 ID 伴生列配对', () {
+      expect(
+        scan({
+          'Rows': [
+            [
+              {'ColName': 'AUDITOR', 'ColText': '张三', 'ColValue': null},
+              {
+                'ColName': r'AUDITOR$DBValue',
+                'ColText': 'USERINFO_zhang',
+                'ColValue': null,
+              },
+            ],
+            [
+              {
+                'ColName': 'AUDITOR',
+                'ColText': '李四',
+                'ColValue': 'USERINFO_li',
+              },
+            ],
+          ],
+        }),
+        containsAll([
+          const BossAuditor(id: ';USERINFO_zhang', name: '张三'),
+          const BossAuditor(id: ';USERINFO_li', name: '李四'),
+        ]),
+      );
+    });
+
+    test('不把另一行的姓名配给只有 ID 的审核人', () {
+      expect(
+        scan({
+          'Rows': [
+            [
+              {'ColName': 'AUDITOR', 'ColText': '其他人', 'ColValue': null},
+            ],
+            [
+              {
+                'ColName': r'AUDITOR$DBValue',
+                'ColText': 'USERINFO_unknown',
+                'ColValue': null,
+              },
+            ],
+          ],
+        }),
+        [const BossAuditor(id: ';USERINFO_unknown')],
+      );
+    });
+
+    test('带分号的审核人 ID 不作为姓名展示', () {
+      expect(
+        scan({
+          'auditor': ';USERINFO_unknown',
+          'auditorText': ';USERINFO_unknown',
+        }),
+        [const BossAuditor(id: ';USERINFO_unknown')],
+      );
+    });
+
+    test('不从请求体、填报人或关注人字段误收审核人', () {
+      expect(
+        scan({
+          'CREATOR': 'USERINFO_creator',
+          'focusor': ';USERINFO_observer',
+          'UserID': 'USERINFO_self',
+        }, requestBody: jsonEncode({'auditor': ';USERINFO_request'})),
+        isEmpty,
+      );
+    });
+
+    test('设置优先级与历史姓名补全合并到同一个 ID', () {
+      expect(
+        scan({
+          WorkLogAuditorLookup.settingKey: {'auditor': ';USERINFO_zhang'},
+          'history': {'AUDITOR': 'USERINFO_zhang', 'AUDITORNAME': '张三'},
+        }),
+        [
+          const BossAuditor(
+            id: ';USERINFO_zhang',
+            name: '张三',
+            source: BossAuditorSource.setting,
+          ),
+        ],
+      );
+    });
+  });
+
   group('扫描脚本', () {
     final script = WorkLogAuditorLookup.build(captureStoreName: 'store');
 
@@ -68,17 +330,18 @@ void main() {
       expect(list.single.source, BossAuditorSource.setting);
     });
 
-    test('个人设置的排最前，其次是有姓名的', () {
-      // 设置项是「当前默认审核人」的权威出处；没名字的没法核对，排后面
+    test('当前服务优先于个人设置，同一来源有姓名的排前面', () {
       final list = WorkLogAuditorLookup.parse(
         payload([
           {'id': ';USERINFO_a', 'name': '', 'source': 'field'},
           {'id': ';USERINFO_b', 'name': '李四', 'source': 'field'},
           {'id': ';USERINFO_c', 'name': '张三', 'source': 'setting'},
+          {'id': ';USERINFO_d', 'name': '当前审核人', 'source': 'service'},
         ]),
       );
 
       expect(list.map((a) => a.id).toList(), [
+        ';USERINFO_d',
         ';USERINFO_c',
         ';USERINFO_b',
         ';USERINFO_a',

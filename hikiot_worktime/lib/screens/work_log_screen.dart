@@ -397,6 +397,7 @@ class WorkLogScreenState extends State<WorkLogScreen> {
     // CSV 的项目名在 BOSS 里没有同名项目：先让用户从全量清单里挑出正确的那个。
     // 替他猜等于把「静默绑错项目」换身衣服重来一遍，且更难被发现。
     var constants = prep.constants ?? const <String, String>{};
+    var auditors = prep.auditors;
     if (prep.needsProjectPick) {
       final picked = await WorkLogProjectPickerDialog.pickAndBind(
         context: context,
@@ -413,29 +414,15 @@ class WorkLogScreenState extends State<WorkLogScreen> {
         );
         return;
       }
-      constants = picked;
-    }
-
-    // 审核人是和项目并列的另一件事，不是它的附属。缺了就单独补，
-    // 不该因为审核人没扫到就把选项目那条路一起封死（那正是上一版的错）。
-    if ((constants['auditor'] ?? '').isEmpty) {
-      final picked = await WorkLogAuditorPickerDialog.pick(
-        context: context,
-        constants: constants,
-        auditors: prep.auditors,
-      );
-      if (!mounted) return;
-      if (picked == null) {
-        _showMessage(
-          prep.auditors.isEmpty
-              ? '没扫到审核人。去「我的工作日志」点开一个已填过的日期，或在「提交配置」里手工填'
-              : '已取消提交。审核人必须选一个，否则日志会发给错误的审批人',
-        );
-        return;
-      }
-      constants = await WorkLogSubmitService.bindConstants(
-        picked,
-        entry.projectName,
+      // 项目刚确认后，按真实 ID 查询；预选配置的审核人可能来自其他项目。
+      constants = await WorkLogSubmitService.bindConstants({
+        ...picked,
+        'auditor': '',
+        'auditorName': '',
+      }, entry.projectName);
+      auditors = await _ensureAuditors(
+        const [],
+        projectId: constants['projectId'] ?? '',
       );
       if (!mounted) return;
     }
@@ -445,6 +432,31 @@ class WorkLogScreenState extends State<WorkLogScreen> {
     // 改了项目或审核人还接着用上一屏的核对结果，等于没核对。
     String actWork;
     while (true) {
+      // 改项目后也会回到这里，审核人确认完成之前不能继续提交。
+      if ((constants['auditor'] ?? '').isEmpty) {
+        final preferred = WorkLogSubmitService.preferredAuditor(auditors);
+        final picked = preferred == null
+            ? await WorkLogAuditorPickerDialog.pick(
+                context: context,
+                constants: constants,
+                auditors: auditors,
+              )
+            : WorkLogSubmitService.constantsForAuditor(constants, preferred);
+        if (!mounted) return;
+        if (picked == null) {
+          _showMessage(
+            auditors.isEmpty
+                ? '未查到该项目的审核人，请在 BOSS 核对项目审核人设置，或在「提交配置」里手工填写'
+                : '已取消提交，请确认该项目的审核人后再提交',
+          );
+          return;
+        }
+        constants = await WorkLogSubmitService.bindConstants(
+          picked,
+          entry.projectName,
+        );
+        if (!mounted) return;
+      }
       final outcome = await WorkLogConfirmDialog.show(
         context: context,
         date: draft.date,
@@ -471,12 +483,25 @@ class WorkLogScreenState extends State<WorkLogScreen> {
           purpose: ProjectPickPurpose.change,
         );
         if (!mounted) return;
-        if (picked != null) constants = picked;
+        if (picked != null) {
+          final changed = picked['projectId'] != constants['projectId'];
+          constants = picked;
+          if (changed) {
+            auditors = await _ensureAuditors(
+              const [],
+              projectId: constants['projectId'] ?? '',
+            );
+            if (!mounted) return;
+          }
+        }
         continue;
       }
 
       if (outcome.changeAuditor) {
-        final auditors = await _ensureAuditors(prep);
+        auditors = await _ensureAuditors(
+          auditors,
+          projectId: constants['projectId'] ?? '',
+        );
         if (!mounted) return;
         final picked = await WorkLogAuditorPickerDialog.pick(
           context: context,
@@ -551,13 +576,17 @@ class WorkLogScreenState extends State<WorkLogScreen> {
     return result.value ?? const [];
   }
 
-  /// 拿审核人候选，理由同 [_ensureProjects]。
-  Future<List<BossAuditor>> _ensureAuditors(_SubmitPreparation prep) async {
-    if (prep.auditors.isNotEmpty) return prep.auditors;
+  /// 候选只属于当前项目；改项目时传空列表，重新建立后台会话查询。
+  Future<List<BossAuditor>> _ensureAuditors(
+    List<BossAuditor> auditors, {
+    required String projectId,
+  }) async {
+    if (auditors.isNotEmpty) return auditors;
 
-    _showMessage('正在扫描审核人…');
+    _showMessage('正在查询项目审核人…');
     final result = await BossSessionRunner.run<List<BossAuditor>>(
-      (controller) => WorkLogSubmitService(controller).lookupAuditors(),
+      (controller) =>
+          WorkLogSubmitService(controller).lookupAuditors(projectId: projectId),
     );
     return result.value ?? const [];
   }

@@ -216,9 +216,37 @@ class WorkLogSubmitService {
       // 已经绑好了，不该为了「万一用户要改选」去等清单——扫一次就走，
       // 扫到就在确认框里给「改选」入口，扫不到这次就没有，不影响提交
       final projects = await listProjects(retries: 0);
+      var constants = fillProjectName(remembered, projects);
+      var auditors = const <BossAuditor>[];
+      final auditorId = constants['auditor'] ?? '';
+      // 项目绑定可能在选择审核人之前保存；不能把命中项目缓存当作人员已齐全。
+      if (auditorId.isEmpty || (constants['auditorName'] ?? '').isEmpty) {
+        auditors = await lookupAuditors(
+          projectId: constants['projectId'] ?? '',
+        );
+        BossAuditor? selected;
+        if (auditorId.isEmpty) {
+          selected = preferredAuditor(auditors);
+        } else {
+          // 已选过的人只补姓名，不因抓到其他默认人而替换用户选择。
+          for (final candidate in auditors) {
+            if (candidate.id == auditorId) {
+              selected = candidate;
+              break;
+            }
+          }
+        }
+        if (selected != null) {
+          constants = await _bind(
+            constantsForAuditor(constants, selected),
+            csvProjectName,
+          );
+        }
+      }
       return BossConstantsResolution(
-        constants: fillProjectName(remembered, projects),
+        constants: constants,
         projects: projects,
+        auditors: auditors,
       );
     }
 
@@ -228,20 +256,46 @@ class WorkLogSubmitService {
     // 历史日志仍然试一次：它同时给出审核人，也给出一个「上次用的项目」当预选
     final learned = await learnConstants(csvProjectName);
 
-    // 审核人不在项目清单里（它是个人设置，不是项目属性），必须单独扫。
+    final exact = csvProjectName.isEmpty
+        ? null
+        : _findExact(projects, csvProjectName);
+    final learnedMatches =
+        learned != null &&
+        csvProjectName.isNotEmpty &&
+        (learned['projectName'] ?? '') == csvProjectName;
+
+    // 网页按当前项目查询审核人；CSV 尚未确定对应项目时先取默认候选。
     //
     // **拿不到也照样往下走。** 早先这里是一道闸：审核人为空就直接返回原因，
     // 于是清单明明爬到手了，用户却永远走不到项目选择框。项目和审核人是两件
     // 独立的事，缺哪环补哪环。审核人最后由调用方让用户从候选里挑。
-    final auditors = await lookupAuditors();
-    final auditor = _auditorFrom(learned) ?? _preferredAuditor(auditors);
+    final auditors = await lookupAuditors(
+      projectId:
+          exact?.id ?? (learnedMatches ? learned['projectId'] ?? '' : ''),
+    );
+    // 当前个人设置优先于旧日志；只有没有默认设置才沿用历史记录。
+    final defaultAuditors = auditors
+        .where((a) => a.source == BossAuditorSource.setting)
+        .toList();
+    final hasCurrentAuditors = auditors.any(
+      (a) => a.source == BossAuditorSource.service,
+    );
+    final auditor = hasCurrentAuditors || defaultAuditors.isNotEmpty
+        ? preferredAuditor(auditors)
+        : learnedMatches
+        ? _auditorFrom(learned)
+        : null;
+    final learnedWithAuditor = learned == null
+        ? null
+        : {
+            ...learned,
+            'auditor': auditor?.id ?? '',
+            'auditorName': auditor?.name ?? '',
+          };
 
     // 清单里有与 CSV 一字不差的项目 → 就是它，不必打扰用户。
     // 只认「一字不差」：差一个「(2)」就可能是另一个项目，替用户判等于
     // 把「静默绑错项目」换身衣服重来一遍，而且更难被发现。
-    final exact = csvProjectName.isEmpty
-        ? null
-        : _findExact(projects, csvProjectName);
     if (exact != null) {
       final composed = _composeConstants(auditor: auditor, project: exact);
       return BossConstantsResolution(
@@ -255,11 +309,11 @@ class WorkLogSubmitService {
     }
 
     // 清单没扫到，但历史日志学到的就是同名项目 → 同样不必打扰
-    if (learned != null &&
-        csvProjectName.isNotEmpty &&
-        (learned['projectName'] ?? '') == csvProjectName) {
+    if (learnedMatches) {
       return BossConstantsResolution(
-        constants: await _bind(learned, csvProjectName),
+        constants: auditor == null
+            ? learnedWithAuditor
+            : await _bind(learnedWithAuditor!, csvProjectName),
         projects: projects,
         auditors: auditors,
       );
@@ -275,7 +329,7 @@ class WorkLogSubmitService {
     // 对不上：把全量清单端出来让用户自己选。
     // learned 为 null 时预选配置里没有项目，选择框必须强制选一个才放行。
     return BossConstantsResolution(
-      constants: learned ?? _composeConstants(auditor: auditor),
+      constants: learnedWithAuditor ?? _composeConstants(auditor: auditor),
       needsProjectPick: true,
       projects: projects,
       auditors: auditors,
@@ -284,14 +338,18 @@ class WorkLogSubmitService {
 
   /// 候选里那个可以直接用、不必问用户的审核人。
   ///
-  /// 只有两种情况敢自动定：来自个人设置（权威出处），或者**统共就扫到一个**
-  /// （没得选，问了也是白问）。其余一律交给用户挑——抓包里的 `USERINFO_`
-  /// 大多是用户自己，替他猜就是在赌日志发给谁。
-  static BossAuditor? _preferredAuditor(List<BossAuditor> auditors) {
-    for (final a in auditors) {
-      if (a.source == BossAuditorSource.setting) return a;
-    }
-    return auditors.length == 1 ? auditors.first : null;
+  /// 当前业务接口优先；同一来源有多人时交给用户选择，不能用旧设置盖掉。
+  static BossAuditor? preferredAuditor(List<BossAuditor> auditors) {
+    final current = auditors
+        .where((a) => a.source == BossAuditorSource.service)
+        .toList();
+    if (current.isNotEmpty) return current.length == 1 ? current.single : null;
+    final defaults = auditors
+        .where((a) => a.source == BossAuditorSource.setting)
+        .toList();
+    if (defaults.length == 1) return defaults.single;
+    // 历史候选可能来自别的项目；即使只剩一个，也不能自动认作当前审核人。
+    return null;
   }
 
   /// 用户选定审核人之后，据此重建配置。
@@ -409,10 +467,7 @@ class WorkLogSubmitService {
   /// 只有扫不到 `EUID` 时才清空——旧项目的编码带过去是个确定错误的值，
   /// 留空还能由服务端兜底（手工配置一直是这么用的）。
   ///
-  /// **`auditor` 保留**：审核人是个人设置而非项目属性——系统设置里的
-  /// `WorkReport_AudtiorFocusor_defaultSetting` 存的就是当前用户的默认
-  /// 审核人。因此换项目时沿用是对的。但这仍是从一次抓包得出的结论，
-  /// 界面上照旧提示用户核对，不默默替换。
+  /// 项目改变时清除旧审核人，避免选择框先保存绑定后又取消查询而留下错配。
   static Map<String, String> constantsForProject(
     Map<String, String> constants,
     BossProject project,
@@ -421,6 +476,10 @@ class WorkLogSubmitService {
     'projectId': project.id,
     'projectName': project.name,
     'projectCode': project.code,
+    if (constants['projectId'] != project.id) ...{
+      'auditor': '',
+      'auditorName': '',
+    },
   };
 
   /// 记住「这份配置对应 CSV 里的哪个项目」，之后同名项目不再询问也不再重学。
@@ -520,22 +579,23 @@ class WorkLogSubmitService {
 
   /// 扫出所有能认出的审核人候选，扫不到时返回空列表。
   ///
-  /// 审核人**不在项目清单里**——它是个人设置（`WorkReport_AudtiorFocusor_defaultSetting`，
-  /// 踩坑记录 3.21），不是项目属性。所以选好项目还得单独取它，否则凑不齐报文。
-  ///
-  /// **返回候选而不是「那一个」**：自动识别已经在真实使用中失败两次，设置项
-  /// 在响应里以哪种形状出现始终没有实测证据。抓包里的 `USERINFO_` 大多带姓名，
-  /// APP 分不清哪个是审核人、哪个是用户自己，但用户一眼能认出来。
+  /// 复用网页 GetWorkLogAuditor 查询，按项目取候选；个人设置和历史抓包作兜底。
   ///
   /// 和 [listProjects] 一样要重试：会话就绪只要求抓到任意一条带 `para` 的请求，
   /// 承载设置项的那个响应可能稍晚才回来，第一次扫空不代表没有。
   Future<List<BossAuditor>> lookupAuditors({
+    String projectId = '',
     int retries = 4,
     Duration interval = const Duration(milliseconds: 500),
   }) async {
     for (var attempt = 0; ; attempt++) {
       final auditors = WorkLogAuditorLookup.parse(
-        await runScript(WorkLogAuditorLookup.build(captureStoreName: _store)),
+        await runScript(
+          WorkLogAuditorLookup.build(
+            captureStoreName: _store,
+            projectId: projectId,
+          ),
+        ),
       );
       if (auditors.isNotEmpty || attempt >= retries) return auditors;
       await Future.delayed(interval);

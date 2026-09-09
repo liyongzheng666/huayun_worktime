@@ -459,11 +459,18 @@ void main() {
       expect(rebuilt['projectCode'], isEmpty);
     });
 
-    test('审核人保留', () {
-      // 项目清单只给了名字和 ID，没有新项目的审核人。清空会直接提交失败；
-      // 沿用是个假设，因此界面上必须提示用户核对（见弹窗测试）
+    test('不同项目清除旧审核人，等待按新项目重新获取', () {
       final rebuilt = WorkLogSubmitService.constantsForProject(learned, picked);
 
+      expect(rebuilt['auditor'], isEmpty);
+      expect(rebuilt['auditorName'], isEmpty);
+    });
+
+    test('仍选择同一项目时保留已确认审核人', () {
+      final rebuilt = WorkLogSubmitService.constantsForProject(
+        learned,
+        const BossProject(id: 'PROJECT_aaa', name: _bossName),
+      );
       expect(rebuilt['auditor'], ';USERINFO_ccc');
       expect(rebuilt['auditorName'], '张三');
     });

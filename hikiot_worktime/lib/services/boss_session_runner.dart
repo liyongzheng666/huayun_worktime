@@ -6,8 +6,8 @@ import 'package:flutter_inappwebview/flutter_inappwebview.dart';
 
 import '../screens/work_report_webview_screen.dart';
 import '../utils/boss_login_script.dart';
+import '../utils/boss_session_script.dart';
 import '../utils/work_log_request_capture.dart';
-import '../utils/work_log_submit_script.dart';
 
 /// 无头 BOSS 会话执行结果
 enum BossSessionStatus {
@@ -162,7 +162,7 @@ class BossSessionRunner {
     );
   }
 
-  /// 轮询等待页面发出带 `UserID` 的请求，返回可用的控制器。
+  /// 轮询等待认证完成且页面发出当前会话的业务请求，返回可用的控制器。
   ///
   /// 不能只等 `onLoadStop`：页面加载完之后才会陆续发业务请求，
   /// 而我们要的 `para` 正是从那些请求里来的。
@@ -177,7 +177,7 @@ class BossSessionRunner {
       if (controller != null) {
         try {
           final probe = await controller.evaluateJavascript(
-            source: WorkLogSubmitScript.buildSessionProbeScript(
+            source: BossSessionScript.buildReadyProbe(
               captureStoreName: WorkLogRequestCapture.storeName,
             ),
           );

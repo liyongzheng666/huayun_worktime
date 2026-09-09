@@ -21,6 +21,37 @@ class BossSessionScript {
   /// BOSS 所有业务服务的统一入口。
   static const String dataServicePath = '/Base/BaseService.asmx/DataService';
 
+  /// 认证完成并且捕获到当前登录会话的业务请求，才允许销毁登录页或执行操作。
+  ///
+  /// GetLoginUser 在验证密码前就设置 UserID；TryLogin 是异步请求，只有成功
+  /// 回调才设置 LoginID。仅凭 UserID 会误判成功，提前关闭 WebView 可中断认证。
+  /// LoginID 只在页面内比对，返回值不包含任何凭据。
+  static String buildReadyProbe({required String captureStoreName}) {
+    return '''
+      (function() {
+        ${sessionPreamble(captureStoreName: captureStoreName)}
+        var security = window.HoteamUI && window.HoteamUI.Security;
+        var current = security && security.LoginPara;
+        // 自动恢复会先把旧 Cookie 放入 LoginPara；仍停在登录表单时不可复用。
+        if (!current || !current.UserID || !current.LoginID ||
+            document.getElementById('txtUserName')) {
+          return JSON.stringify({ ready: false });
+        }
+        var store = bossCaptured();
+        for (var i = store.length - 1; i >= 0; i--) {
+          try {
+            var para = JSON.parse(store[i].body).para;
+            if (para && para.UserID === current.UserID &&
+                para.LoginID === current.LoginID) {
+              return JSON.stringify({ ready: true });
+            }
+          } catch (e) {}
+        }
+        return JSON.stringify({ ready: false });
+      })();
+    ''';
+  }
+
   /// 会话相关的 JS 函数定义，调用方嵌到自己脚本的开头即可。
   ///
   /// 提供两个函数：
@@ -246,8 +277,7 @@ class BossSessionScript {
   }
 
   /// 生成「未捕获到会话」的统一返回值，各脚本提示文案保持一致。
-  static const String noSessionResult =
-      '''JSON.stringify({
+  static const String noSessionResult = '''JSON.stringify({
           ok: false,
           reason: 'noSession',
           message: '未捕获到会话上下文，请先在页面上做一次任意操作（如切换日期）'

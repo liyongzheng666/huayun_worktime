@@ -8,6 +8,11 @@ const _fromSetting = BossAuditor(
   name: '张三',
   source: BossAuditorSource.setting,
 );
+const _fromService = BossAuditor(
+  id: ';USERINFO_service',
+  name: '项目审核人',
+  source: BossAuditorSource.service,
+);
 const _fromField = BossAuditor(id: ';USERINFO_field', name: '李四');
 const _noName = BossAuditor(id: ';USERINFO_noname');
 
@@ -44,12 +49,11 @@ Future<Answer> pumpDialog(
 
 void main() {
   group('有候选时', () {
-    testWidgets('列出候选并说明 APP 分不清谁是谁', (tester) async {
-      // 抓包里的 USERINFO_ 大多是用户自己，必须讲清楚为什么要问他
+    testWidgets('列出候选并提示核对当前项目的审核人', (tester) async {
       await pumpDialog(tester, auditors: const [_fromSetting, _fromField]);
 
-      expect(find.textContaining('扫到 2 个候选'), findsOneWidget);
-      expect(find.textContaining('APP 分不清'), findsOneWidget);
+      expect(find.textContaining('查到 2 个候选'), findsOneWidget);
+      expect(find.textContaining('确认当前项目的审核人'), findsOneWidget);
       expect(find.text('张三'), findsOneWidget);
       expect(find.text('李四'), findsOneWidget);
     });
@@ -74,11 +78,71 @@ void main() {
       expect(find.byIcon(Icons.radio_button_checked), findsOneWidget);
     });
 
+    testWidgets('当前项目接口的唯一候选优先于个人设置', (tester) async {
+      final answer = await pumpDialog(
+        tester,
+        auditors: const [_fromSetting, _fromService],
+      );
+
+      await tester.tap(find.text('就用选中的'));
+      await tester.pumpAndSettle();
+
+      expect(answer.value!.auditor?.id, _fromService.id);
+    });
+
+    testWidgets('当前项目有多个审核人时不预选个人设置', (tester) async {
+      await pumpDialog(
+        tester,
+        auditors: const [
+          _fromSetting,
+          _fromService,
+          BossAuditor(
+            id: ';USERINFO_service2',
+            name: '另一项目审核人',
+            source: BossAuditorSource.service,
+          ),
+        ],
+      );
+
+      expect(find.byIcon(Icons.radio_button_checked), findsNothing);
+      expect(
+        tester
+            .widget<FilledButton>(find.widgetWithText(FilledButton, '就用选中的'))
+            .onPressed,
+        isNull,
+      );
+    });
+
+    testWidgets('已确认的审核人不被当前项目默认候选替换', (tester) async {
+      final answer = await pumpDialog(
+        tester,
+        auditors: const [_fromField, _fromService],
+        currentId: _fromField.id,
+      );
+
+      await tester.tap(find.text('就用选中的'));
+      await tester.pumpAndSettle();
+
+      expect(answer.value!.auditor?.id, _fromField.id);
+    });
+
     testWidgets('全是普通字段来源时一个都不预选', (tester) async {
       // 排序靠前不代表就是审核人；预选就是一次默认同意
       await pumpDialog(tester, auditors: const [_fromField, _noName]);
 
       expect(find.byIcon(Icons.radio_button_checked), findsNothing);
+    });
+
+    testWidgets('只有一位历史字段候选也不自动预选', (tester) async {
+      await pumpDialog(tester, auditors: const [_fromField]);
+
+      expect(find.byIcon(Icons.radio_button_checked), findsNothing);
+      expect(
+        tester
+            .widget<FilledButton>(find.widgetWithText(FilledButton, '就用选中的'))
+            .onPressed,
+        isNull,
+      );
     });
 
     testWidgets('一个都没选时不许确定', (tester) async {
@@ -139,8 +203,8 @@ void main() {
     testWidgets('给出该怎么办，而不是只说没有', (tester) async {
       await pumpDialog(tester);
 
-      expect(find.textContaining('没能从 BOSS 的抓包里认出任何审核人'), findsOneWidget);
-      expect(find.textContaining('我的工作日志'), findsOneWidget);
+      expect(find.textContaining('没能查到当前项目的审核人'), findsOneWidget);
+      expect(find.textContaining('这个项目的历史日志'), findsOneWidget);
       expect(find.textContaining('手工填审核人 ID'), findsOneWidget);
     });
 
