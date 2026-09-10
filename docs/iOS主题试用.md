@@ -30,4 +30,6 @@
 - profile授权xl666（UDID `00008140-000231542862201C`），有效至2026-09-17 23:04:50北京时间；签名验证通过。
 - IPA：`hikiot_worktime/build/ios/ipa/huayun_worktime-2.11.0+12-ios-theme-preview.ipa`，10,648,892字节。SHA-256：`758866f5efdf14fd45d92d35d5ca06d03e59d471c94d7a41320824406a0b8559`。
 - IPA顶层仅Payload，ZIP完整性及解包签名校验通过；真机包使用生产入口lib/main.dart，没有模拟器演示数据。
-- 安装尝试时xl666离线，CoreDevice返回1011；设备列表也显示unavailable。已请求用户解锁并连接USB，当前仍未安装此版本，不宣称真机体验通过。
+- 安装尝试时xl666离线，CoreDevice返回1011；设备列表也显示unavailable。当时已请求用户重新连接，安装结果见下方后续记录。
+
+- 2026-09-11 06:53，用户确认xl666在线后，已复核签名和设备授权并覆盖安装成功；devicectl启动成功，设备安装列表确认2.11.0(12)。原版com.hikiot.worktime仍保留；未卸载任何App，实际交互体验仍由用户验收。
