@@ -1,9 +1,11 @@
+import '../core/theme/legacy_theme_colors.dart';
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:url_launcher/url_launcher.dart';
 import 'dart:io';
 import 'dart:async';
+import '../services/app_theme_controller.dart';
 import '../services/app_update_platform.dart';
 import '../services/app_update_service.dart';
 import '../services/session_service.dart';
@@ -20,6 +22,7 @@ import '../utils/date_helper.dart';
 import '../widgets/haptic_refresh_indicator.dart';
 import '../widgets/app_update_dialog.dart';
 import '../widgets/team_selection_dialog.dart';
+import 'theme_selection_screen.dart';
 import 'login_screen.dart';
 import 'main_screen.dart';
 import 'phone_permission_guide.dart';
@@ -222,6 +225,25 @@ class _SettingsScreenState extends State<SettingsScreen> {
               child: ListView(
                 padding: const EdgeInsets.all(16),
                 children: [
+                  if (PlatformCapabilities.supportsTodayWrapUp) ...[
+                    Card(
+                      child: ListTile(
+                        leading: Icon(
+                          Icons.palette_outlined,
+                          color: Theme.of(context).colorScheme.primary,
+                        ),
+                        title: const Text('外观与主题'),
+                        subtitle: Text(AppThemeController.shared.current.name),
+                        trailing: const Icon(Icons.chevron_right),
+                        onTap: () => Navigator.of(context).push(
+                          MaterialPageRoute<void>(
+                            builder: (_) => const ThemeSelectionScreen(),
+                          ),
+                        ),
+                      ),
+                    ),
+                    const SizedBox(height: 24),
+                  ],
                   _buildSectionHeader('工时计算', Icons.access_time),
                   const SizedBox(height: 12),
                   _buildLunchTimeSettings(),
@@ -277,14 +299,18 @@ class _SettingsScreenState extends State<SettingsScreen> {
   Widget _buildSectionHeader(String title, IconData icon) {
     return Row(
       children: [
-        Icon(icon, size: 20, color: Colors.blue[700]),
+        Icon(
+          icon,
+          size: 20,
+          color: LegacyThemeColors.primary(context, Colors.blue[700]!),
+        ),
         const SizedBox(width: 8),
         Text(
           title,
           style: TextStyle(
             fontSize: 16,
             fontWeight: FontWeight.bold,
-            color: Colors.grey[800],
+            color: LegacyThemeColors.text(context, Colors.grey[800]!),
           ),
         ),
       ],
@@ -299,14 +325,18 @@ class _SettingsScreenState extends State<SettingsScreen> {
   ) {
     return Row(
       children: [
-        Icon(icon, size: 20, color: Colors.blue[700]),
+        Icon(
+          icon,
+          size: 20,
+          color: LegacyThemeColors.primary(context, Colors.blue[700]!),
+        ),
         const SizedBox(width: 8),
         Text(
           title,
           style: TextStyle(
             fontSize: 16,
             fontWeight: FontWeight.bold,
-            color: Colors.grey[800],
+            color: LegacyThemeColors.text(context, Colors.grey[800]!),
           ),
         ),
         const SizedBox(width: 6),
@@ -319,7 +349,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
             width: 18,
             height: 18,
             decoration: BoxDecoration(
-              color: Colors.grey[400],
+              color: LegacyThemeColors.border(context, Colors.grey[400]!),
               shape: BoxShape.circle,
             ),
             child: const Center(
@@ -343,9 +373,12 @@ class _SettingsScreenState extends State<SettingsScreen> {
     showDialog(
       context: context,
       builder: (context) => AlertDialog(
-        title: const Row(
+        title: Row(
           children: [
-            Icon(Icons.help_outline, color: Colors.blue),
+            Icon(
+              Icons.help_outline,
+              color: LegacyThemeColors.primary(context, Colors.blue),
+            ),
             SizedBox(width: 8),
             Text('打卡提醒说明'),
           ],
@@ -383,7 +416,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
               Container(
                 padding: const EdgeInsets.all(10),
                 decoration: BoxDecoration(
-                  color: Colors.orange[50],
+                  color: LegacyThemeColors.panel(context, Colors.orange[50]!),
                   borderRadius: BorderRadius.circular(8),
                 ),
                 child: Row(
@@ -411,7 +444,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
               Container(
                 padding: const EdgeInsets.all(10),
                 decoration: BoxDecoration(
-                  color: Colors.red[50],
+                  color: LegacyThemeColors.panel(context, Colors.red[50]!),
                   borderRadius: BorderRadius.circular(8),
                   border: Border.all(color: Colors.red[200]!),
                 ),
@@ -495,7 +528,10 @@ class _SettingsScreenState extends State<SettingsScreen> {
             padding: const EdgeInsets.only(left: 4, bottom: 2),
             child: Text(
               item,
-              style: TextStyle(fontSize: 12, color: Colors.grey[700]),
+              style: TextStyle(
+                fontSize: 12,
+                color: LegacyThemeColors.muted(context, Colors.grey[700]!),
+              ),
             ),
           ),
         ),
@@ -530,7 +566,11 @@ class _SettingsScreenState extends State<SettingsScreen> {
           children: [
             Row(
               children: [
-                Icon(Icons.track_changes, size: 20, color: Colors.blue[700]),
+                Icon(
+                  Icons.track_changes,
+                  size: 20,
+                  color: LegacyThemeColors.primary(context, Colors.blue[700]!),
+                ),
                 const SizedBox(width: 8),
                 const Expanded(
                   child: Text(
@@ -544,7 +584,10 @@ class _SettingsScreenState extends State<SettingsScreen> {
                     vertical: 6,
                   ),
                   decoration: BoxDecoration(
-                    color: Colors.blue[100],
+                    color: LegacyThemeColors.primaryContainer(
+                      context,
+                      Colors.blue[100]!,
+                    ),
                     borderRadius: BorderRadius.circular(16),
                   ),
                   child: Text(
@@ -552,7 +595,10 @@ class _SettingsScreenState extends State<SettingsScreen> {
                     style: TextStyle(
                       fontSize: 16,
                       fontWeight: FontWeight.bold,
-                      color: Colors.blue[700],
+                      color: LegacyThemeColors.primary(
+                        context,
+                        Colors.blue[700]!,
+                      ),
                     ),
                   ),
                 ),
@@ -562,11 +608,18 @@ class _SettingsScreenState extends State<SettingsScreen> {
             // 扩展范围开关
             Row(
               children: [
-                Icon(Icons.expand, size: 18, color: Colors.grey[600]),
+                Icon(
+                  Icons.expand,
+                  size: 18,
+                  color: LegacyThemeColors.muted(context, Colors.grey[600]!),
+                ),
                 const SizedBox(width: 8),
                 Text(
                   '更多挡位',
-                  style: TextStyle(fontSize: 13, color: Colors.grey[700]),
+                  style: TextStyle(
+                    fontSize: 13,
+                    color: LegacyThemeColors.muted(context, Colors.grey[700]!),
+                  ),
                 ),
                 const Spacer(),
                 Switch(
@@ -584,7 +637,10 @@ class _SettingsScreenState extends State<SettingsScreen> {
                       baseTarget: _baseTarget,
                     );
                   },
-                  activeThumbColor: Colors.blue[700],
+                  activeThumbColor: LegacyThemeColors.primary(
+                    context,
+                    Colors.blue[700]!,
+                  ),
                   materialTapTargetSize: MaterialTapTargetSize.shrinkWrap,
                 ),
               ],
@@ -592,13 +648,28 @@ class _SettingsScreenState extends State<SettingsScreen> {
             const SizedBox(height: 8),
             SliderTheme(
               data: SliderTheme.of(context).copyWith(
-                activeTrackColor: Colors.blue[700],
-                inactiveTrackColor: Colors.blue[100],
-                thumbColor: Colors.blue[700],
-                overlayColor: Colors.blue.withValues(alpha: 0.2),
-                valueIndicatorColor: Colors.blue[700],
-                valueIndicatorTextStyle: const TextStyle(
-                  color: Colors.white,
+                activeTrackColor: LegacyThemeColors.primary(
+                  context,
+                  Colors.blue[700]!,
+                ),
+                inactiveTrackColor: LegacyThemeColors.primaryContainer(
+                  context,
+                  Colors.blue[100]!,
+                ),
+                thumbColor: LegacyThemeColors.primary(
+                  context,
+                  Colors.blue[700]!,
+                ),
+                overlayColor: LegacyThemeColors.primary(
+                  context,
+                  Colors.blue,
+                ).withValues(alpha: 0.2),
+                valueIndicatorColor: LegacyThemeColors.primary(
+                  context,
+                  Colors.blue[700]!,
+                ),
+                valueIndicatorTextStyle: TextStyle(
+                  color: LegacyThemeColors.onPrimary(context, Colors.white),
                   fontWeight: FontWeight.bold,
                 ),
               ),
@@ -624,48 +695,105 @@ class _SettingsScreenState extends State<SettingsScreen> {
                   ? [
                       Text(
                         '100%',
-                        style: TextStyle(fontSize: 11, color: Colors.grey[600]),
+                        style: TextStyle(
+                          fontSize: 11,
+                          color: LegacyThemeColors.muted(
+                            context,
+                            Colors.grey[600]!,
+                          ),
+                        ),
                       ),
                       Text(
                         '150%',
-                        style: TextStyle(fontSize: 11, color: Colors.grey[600]),
+                        style: TextStyle(
+                          fontSize: 11,
+                          color: LegacyThemeColors.muted(
+                            context,
+                            Colors.grey[600]!,
+                          ),
+                        ),
                       ),
                       Text(
                         '200%',
-                        style: TextStyle(fontSize: 11, color: Colors.grey[600]),
+                        style: TextStyle(
+                          fontSize: 11,
+                          color: LegacyThemeColors.muted(
+                            context,
+                            Colors.grey[600]!,
+                          ),
+                        ),
                       ),
                       Text(
                         '250%',
-                        style: TextStyle(fontSize: 11, color: Colors.grey[600]),
+                        style: TextStyle(
+                          fontSize: 11,
+                          color: LegacyThemeColors.muted(
+                            context,
+                            Colors.grey[600]!,
+                          ),
+                        ),
                       ),
                       Text(
                         '300%',
-                        style: TextStyle(fontSize: 11, color: Colors.grey[600]),
+                        style: TextStyle(
+                          fontSize: 11,
+                          color: LegacyThemeColors.muted(
+                            context,
+                            Colors.grey[600]!,
+                          ),
+                        ),
                       ),
                     ]
                   : [
                       Text(
                         '100%',
-                        style: TextStyle(fontSize: 11, color: Colors.grey[600]),
+                        style: TextStyle(
+                          fontSize: 11,
+                          color: LegacyThemeColors.muted(
+                            context,
+                            Colors.grey[600]!,
+                          ),
+                        ),
                       ),
                       Text(
                         '120%',
-                        style: TextStyle(fontSize: 11, color: Colors.grey[600]),
+                        style: TextStyle(
+                          fontSize: 11,
+                          color: LegacyThemeColors.muted(
+                            context,
+                            Colors.grey[600]!,
+                          ),
+                        ),
                       ),
                       Text(
                         '140%',
-                        style: TextStyle(fontSize: 11, color: Colors.grey[600]),
+                        style: TextStyle(
+                          fontSize: 11,
+                          color: LegacyThemeColors.muted(
+                            context,
+                            Colors.grey[600]!,
+                          ),
+                        ),
                       ),
                       Text(
                         '160%',
-                        style: TextStyle(fontSize: 11, color: Colors.grey[600]),
+                        style: TextStyle(
+                          fontSize: 11,
+                          color: LegacyThemeColors.muted(
+                            context,
+                            Colors.grey[600]!,
+                          ),
+                        ),
                       ),
                     ],
             ),
             const SizedBox(height: 12),
             Text(
               '用于达标后工时统计和目标进度的颜色判断',
-              style: TextStyle(fontSize: 12, color: Colors.grey[600]),
+              style: TextStyle(
+                fontSize: 12,
+                color: LegacyThemeColors.muted(context, Colors.grey[600]!),
+              ),
             ),
 
             const Divider(height: 28),
@@ -744,7 +872,10 @@ class _SettingsScreenState extends State<SettingsScreen> {
             Text(
               '目标进度只显示 $_minTarget% ~ $_baseTarget%，'
               '从低到高排列，基础目标在最后',
-              style: TextStyle(fontSize: 12, color: Colors.grey[600]),
+              style: TextStyle(
+                fontSize: 12,
+                color: LegacyThemeColors.muted(context, Colors.grey[600]!),
+              ),
             ),
           ],
         ),
@@ -791,7 +922,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
                     vertical: 8,
                   ),
                   decoration: BoxDecoration(
-                    color: Colors.orange[50],
+                    color: LegacyThemeColors.panel(context, Colors.orange[50]!),
                     borderRadius: BorderRadius.circular(8),
                   ),
                   child: Row(
@@ -846,7 +977,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
                     vertical: 8,
                   ),
                   decoration: BoxDecoration(
-                    color: Colors.indigo[50],
+                    color: LegacyThemeColors.panel(context, Colors.indigo[50]!),
                     borderRadius: BorderRadius.circular(8),
                   ),
                   child: Row(
@@ -910,19 +1041,35 @@ class _SettingsScreenState extends State<SettingsScreen> {
             Container(
               padding: const EdgeInsets.all(10),
               decoration: BoxDecoration(
-                color: Colors.blue[50],
+                color: LegacyThemeColors.primaryContainer(
+                  context,
+                  Colors.blue[50]!,
+                ),
                 borderRadius: BorderRadius.circular(8),
               ),
               child: Row(
                 children: [
-                  Icon(Icons.info_outline, size: 16, color: Colors.blue[700]),
+                  Icon(
+                    Icons.info_outline,
+                    size: 16,
+                    color: LegacyThemeColors.primary(
+                      context,
+                      Colors.blue[700]!,
+                    ),
+                  ),
                   const SizedBox(width: 8),
                   Expanded(
                     child: Text(
                       PlatformCapabilities.supportsExactBackgroundAlarm
                           ? '需开启自启动、关闭省电优化才能正常提醒'
                           : '提醒由系统按时推送，文案为固定内容，打开 App 查看实时工时',
-                      style: TextStyle(fontSize: 12, color: Colors.blue[700]),
+                      style: TextStyle(
+                        fontSize: 12,
+                        color: LegacyThemeColors.primary(
+                          context,
+                          Colors.blue[700]!,
+                        ),
+                      ),
                     ),
                   ),
                 ],
@@ -1173,7 +1320,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
               Container(
                 padding: const EdgeInsets.all(10),
                 decoration: BoxDecoration(
-                  color: Colors.red[50],
+                  color: LegacyThemeColors.panel(context, Colors.red[50]!),
                   borderRadius: BorderRadius.circular(8),
                   border: Border.all(color: Colors.red[200]!),
                 ),
@@ -1310,7 +1457,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
             Container(
               padding: const EdgeInsets.all(10),
               decoration: BoxDecoration(
-                color: Colors.teal[50],
+                color: LegacyThemeColors.panel(context, Colors.teal[50]!),
                 borderRadius: BorderRadius.circular(8),
               ),
               child: Row(
@@ -1355,10 +1502,14 @@ class _SettingsScreenState extends State<SettingsScreen> {
       child: Container(
         padding: const EdgeInsets.all(12),
         decoration: BoxDecoration(
-          color: isSelected ? color[50] : Colors.grey[50],
+          color: isSelected
+              ? LegacyThemeColors.panel(context, color[50]!)
+              : LegacyThemeColors.surface(context, Colors.grey[50]!),
           borderRadius: BorderRadius.circular(10),
           border: Border.all(
-            color: isSelected ? color[400]! : Colors.grey[300]!,
+            color: isSelected
+                ? color[400]!
+                : LegacyThemeColors.border(context, Colors.grey[300]!),
             width: isSelected ? 2 : 1,
           ),
         ),
@@ -1367,13 +1518,17 @@ class _SettingsScreenState extends State<SettingsScreen> {
             Container(
               padding: const EdgeInsets.all(8),
               decoration: BoxDecoration(
-                color: isSelected ? color[100] : Colors.grey[200],
+                color: isSelected
+                    ? LegacyThemeColors.panel(context, color[100]!)
+                    : LegacyThemeColors.inset(context, Colors.grey[200]!),
                 borderRadius: BorderRadius.circular(8),
               ),
               child: Icon(
                 icon,
                 size: 20,
-                color: isSelected ? color[700] : Colors.grey[600],
+                color: isSelected
+                    ? LegacyThemeColors.primary(context, color[700]!)
+                    : LegacyThemeColors.muted(context, Colors.grey[600]!),
               ),
             ),
             const SizedBox(width: 12),
@@ -1386,12 +1541,20 @@ class _SettingsScreenState extends State<SettingsScreen> {
                     style: TextStyle(
                       fontSize: 14,
                       fontWeight: FontWeight.w600,
-                      color: isSelected ? color[700] : Colors.grey[800],
+                      color: isSelected
+                          ? LegacyThemeColors.primary(context, color[700]!)
+                          : LegacyThemeColors.text(context, Colors.grey[800]!),
                     ),
                   ),
                   Text(
                     subtitle,
-                    style: TextStyle(fontSize: 11, color: Colors.grey[600]),
+                    style: TextStyle(
+                      fontSize: 11,
+                      color: LegacyThemeColors.muted(
+                        context,
+                        Colors.grey[600]!,
+                      ),
+                    ),
                   ),
                 ],
               ),
@@ -1427,7 +1590,10 @@ class _SettingsScreenState extends State<SettingsScreen> {
             const SizedBox(height: 8),
             Text(
               '工时计算时，跨越午休时间段会自动扣除',
-              style: TextStyle(fontSize: 12, color: Colors.grey[600]),
+              style: TextStyle(
+                fontSize: 12,
+                color: LegacyThemeColors.muted(context, Colors.grey[600]!),
+              ),
             ),
             const SizedBox(height: 16),
             Row(
@@ -1443,7 +1609,10 @@ class _SettingsScreenState extends State<SettingsScreen> {
                   ),
                 ),
                 const SizedBox(width: 16),
-                Icon(Icons.arrow_forward, color: Colors.grey[400]),
+                Icon(
+                  Icons.arrow_forward,
+                  color: LegacyThemeColors.border(context, Colors.grey[400]!),
+                ),
                 const SizedBox(width: 16),
                 Expanded(
                   child: _buildTimeSelector(
@@ -1461,17 +1630,33 @@ class _SettingsScreenState extends State<SettingsScreen> {
             Container(
               padding: const EdgeInsets.all(10),
               decoration: BoxDecoration(
-                color: Colors.blue[50],
+                color: LegacyThemeColors.primaryContainer(
+                  context,
+                  Colors.blue[50]!,
+                ),
                 borderRadius: BorderRadius.circular(8),
               ),
               child: Row(
                 children: [
-                  Icon(Icons.info_outline, size: 16, color: Colors.blue[700]),
+                  Icon(
+                    Icons.info_outline,
+                    size: 16,
+                    color: LegacyThemeColors.primary(
+                      context,
+                      Colors.blue[700]!,
+                    ),
+                  ),
                   const SizedBox(width: 8),
                   Expanded(
                     child: Text(
                       '午休时长: ${_calculateLunchDuration()}分钟',
-                      style: TextStyle(fontSize: 12, color: Colors.blue[700]),
+                      style: TextStyle(
+                        fontSize: 12,
+                        color: LegacyThemeColors.primary(
+                          context,
+                          Colors.blue[700]!,
+                        ),
+                      ),
                     ),
                   ),
                 ],
@@ -1506,7 +1691,10 @@ class _SettingsScreenState extends State<SettingsScreen> {
             const SizedBox(height: 8),
             Text(
               '检测到 00:00 至该时间前的打卡时，仅提醒手动调整工时，不自动归入上一日',
-              style: TextStyle(fontSize: 12, color: Colors.grey[600]),
+              style: TextStyle(
+                fontSize: 12,
+                color: LegacyThemeColors.muted(context, Colors.grey[600]!),
+              ),
             ),
             const SizedBox(height: 16),
             InkWell(
@@ -1518,7 +1706,9 @@ class _SettingsScreenState extends State<SettingsScreen> {
                   horizontal: 16,
                 ),
                 decoration: BoxDecoration(
-                  border: Border.all(color: Colors.grey[300]!),
+                  border: Border.all(
+                    color: LegacyThemeColors.border(context, Colors.grey[300]!),
+                  ),
                   borderRadius: BorderRadius.circular(8),
                 ),
                 child: Row(
@@ -1537,7 +1727,14 @@ class _SettingsScreenState extends State<SettingsScreen> {
                       ),
                     ),
                     const Spacer(),
-                    Icon(Icons.edit, size: 18, color: Colors.grey[400]),
+                    Icon(
+                      Icons.edit,
+                      size: 18,
+                      color: LegacyThemeColors.border(
+                        context,
+                        Colors.grey[400]!,
+                      ),
+                    ),
                   ],
                 ),
               ),
@@ -1546,7 +1743,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
             Container(
               padding: const EdgeInsets.all(10),
               decoration: BoxDecoration(
-                color: Colors.amber[50],
+                color: LegacyThemeColors.panel(context, Colors.amber[50]!),
                 borderRadius: BorderRadius.circular(8),
               ),
               child: Row(
@@ -1629,7 +1826,9 @@ class _SettingsScreenState extends State<SettingsScreen> {
       child: Container(
         padding: const EdgeInsets.symmetric(vertical: 12, horizontal: 16),
         decoration: BoxDecoration(
-          border: Border.all(color: Colors.grey[300]!),
+          border: Border.all(
+            color: LegacyThemeColors.border(context, Colors.grey[300]!),
+          ),
           borderRadius: BorderRadius.circular(8),
         ),
         child: Column(
@@ -1637,7 +1836,10 @@ class _SettingsScreenState extends State<SettingsScreen> {
           children: [
             Text(
               label,
-              style: TextStyle(fontSize: 11, color: Colors.grey[600]),
+              style: TextStyle(
+                fontSize: 11,
+                color: LegacyThemeColors.muted(context, Colors.grey[600]!),
+              ),
             ),
             const SizedBox(height: 4),
             Text(
@@ -1645,7 +1847,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
               style: TextStyle(
                 fontSize: 18,
                 fontWeight: FontWeight.bold,
-                color: Colors.blue[700],
+                color: LegacyThemeColors.primary(context, Colors.blue[700]!),
               ),
             ),
           ],
@@ -1676,7 +1878,11 @@ class _SettingsScreenState extends State<SettingsScreen> {
             if (_userName != null || _teamName != null) ...[
               Row(
                 children: [
-                  Icon(Icons.person, size: 20, color: Colors.grey[600]),
+                  Icon(
+                    Icons.person,
+                    size: 20,
+                    color: LegacyThemeColors.muted(context, Colors.grey[600]!),
+                  ),
                   const SizedBox(width: 8),
                   Expanded(
                     child: Column(
@@ -1695,7 +1901,10 @@ class _SettingsScreenState extends State<SettingsScreen> {
                             _teamName!,
                             style: TextStyle(
                               fontSize: 14,
-                              color: Colors.grey[600],
+                              color: LegacyThemeColors.muted(
+                                context,
+                                Colors.grey[600]!,
+                              ),
                             ),
                           ),
                       ],
@@ -1770,17 +1979,23 @@ class _SettingsScreenState extends State<SettingsScreen> {
                     Container(
                       padding: const EdgeInsets.all(8),
                       decoration: BoxDecoration(
-                        color: Colors.blue[50],
+                        color: LegacyThemeColors.primaryContainer(
+                          context,
+                          Colors.blue[50]!,
+                        ),
                         borderRadius: BorderRadius.circular(8),
                       ),
                       child: Icon(
                         Icons.menu_book,
-                        color: Colors.blue[700],
+                        color: LegacyThemeColors.primary(
+                          context,
+                          Colors.blue[700]!,
+                        ),
                         size: 22,
                       ),
                     ),
                     const SizedBox(width: 12),
-                    const Expanded(
+                    Expanded(
                       child: Column(
                         crossAxisAlignment: CrossAxisAlignment.start,
                         children: [
@@ -1794,12 +2009,24 @@ class _SettingsScreenState extends State<SettingsScreen> {
                           SizedBox(height: 2),
                           Text(
                             '了解App的各项功能和使用方法',
-                            style: TextStyle(fontSize: 12, color: Colors.grey),
+                            style: TextStyle(
+                              fontSize: 12,
+                              color: LegacyThemeColors.muted(
+                                context,
+                                Colors.grey,
+                              ),
+                            ),
                           ),
                         ],
                       ),
                     ),
-                    Icon(Icons.chevron_right, color: Colors.grey[400]),
+                    Icon(
+                      Icons.chevron_right,
+                      color: LegacyThemeColors.border(
+                        context,
+                        Colors.grey[400]!,
+                      ),
+                    ),
                   ],
                 ),
               ),
@@ -1816,7 +2043,10 @@ class _SettingsScreenState extends State<SettingsScreen> {
                     Container(
                       padding: const EdgeInsets.all(8),
                       decoration: BoxDecoration(
-                        color: Colors.orange[50],
+                        color: LegacyThemeColors.panel(
+                          context,
+                          Colors.orange[50]!,
+                        ),
                         borderRadius: BorderRadius.circular(8),
                       ),
                       child: Icon(
@@ -1826,7 +2056,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
                       ),
                     ),
                     const SizedBox(width: 12),
-                    const Expanded(
+                    Expanded(
                       child: Column(
                         crossAxisAlignment: CrossAxisAlignment.start,
                         children: [
@@ -1840,12 +2070,24 @@ class _SettingsScreenState extends State<SettingsScreen> {
                           SizedBox(height: 2),
                           Text(
                             '再次查看下拉刷新等操作引导',
-                            style: TextStyle(fontSize: 12, color: Colors.grey),
+                            style: TextStyle(
+                              fontSize: 12,
+                              color: LegacyThemeColors.muted(
+                                context,
+                                Colors.grey,
+                              ),
+                            ),
                           ),
                         ],
                       ),
                     ),
-                    Icon(Icons.chevron_right, color: Colors.grey[400]),
+                    Icon(
+                      Icons.chevron_right,
+                      color: LegacyThemeColors.border(
+                        context,
+                        Colors.grey[400]!,
+                      ),
+                    ),
                   ],
                 ),
               ),
@@ -1874,7 +2116,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
               Container(
                 padding: const EdgeInsets.all(8),
                 decoration: BoxDecoration(
-                  color: Colors.green[50],
+                  color: LegacyThemeColors.panel(context, Colors.green[50]!),
                   borderRadius: BorderRadius.circular(8),
                 ),
                 child: Icon(Icons.android, color: Colors.green[700], size: 22),
@@ -1894,7 +2136,10 @@ class _SettingsScreenState extends State<SettingsScreen> {
                     const SizedBox(height: 2),
                     Text(
                       versionText,
-                      style: const TextStyle(fontSize: 12, color: Colors.grey),
+                      style: TextStyle(
+                        fontSize: 12,
+                        color: LegacyThemeColors.muted(context, Colors.grey),
+                      ),
                     ),
                   ],
                 ),
@@ -1906,7 +2151,10 @@ class _SettingsScreenState extends State<SettingsScreen> {
                   child: CircularProgressIndicator(strokeWidth: 2),
                 )
               else
-                Icon(Icons.chevron_right, color: Colors.grey[400]),
+                Icon(
+                  Icons.chevron_right,
+                  color: LegacyThemeColors.border(context, Colors.grey[400]!),
+                ),
             ],
           ),
         ),
@@ -2097,7 +2345,11 @@ class _SettingsScreenState extends State<SettingsScreen> {
   Widget _buildDebugToolsHeader() {
     return Row(
       children: [
-        Icon(Icons.developer_mode, size: 20, color: Colors.blue[700]),
+        Icon(
+          Icons.developer_mode,
+          size: 20,
+          color: LegacyThemeColors.primary(context, Colors.blue[700]!),
+        ),
         const SizedBox(width: 8),
         Expanded(
           child: Text(
@@ -2105,7 +2357,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
             style: TextStyle(
               fontSize: 16,
               fontWeight: FontWeight.bold,
-              color: Colors.grey[800],
+              color: LegacyThemeColors.text(context, Colors.grey[800]!),
             ),
           ),
         ),
@@ -2170,7 +2422,10 @@ class _SettingsScreenState extends State<SettingsScreen> {
             const SizedBox(height: 8),
             Text(
               '替换当前Token为无效值，测试Token过期后的流程',
-              style: TextStyle(fontSize: 11, color: Colors.grey[600]),
+              style: TextStyle(
+                fontSize: 11,
+                color: LegacyThemeColors.muted(context, Colors.grey[600]!),
+              ),
             ),
             const SizedBox(height: 16),
             // 复制Token按钮
@@ -2178,14 +2433,27 @@ class _SettingsScreenState extends State<SettingsScreen> {
               width: double.infinity,
               child: OutlinedButton.icon(
                 onPressed: _copyCurrentToken,
-                icon: Icon(Icons.content_copy, color: Colors.blue[700]),
+                icon: Icon(
+                  Icons.content_copy,
+                  color: LegacyThemeColors.primary(context, Colors.blue[700]!),
+                ),
                 label: Text(
                   '复制当前Token',
-                  style: TextStyle(color: Colors.blue[700]),
+                  style: TextStyle(
+                    color: LegacyThemeColors.primary(
+                      context,
+                      Colors.blue[700]!,
+                    ),
+                  ),
                 ),
                 style: OutlinedButton.styleFrom(
                   padding: const EdgeInsets.symmetric(vertical: 12),
-                  side: BorderSide(color: Colors.blue[300]!),
+                  side: BorderSide(
+                    color: LegacyThemeColors.primary(
+                      context,
+                      Colors.blue[300]!,
+                    ),
+                  ),
                   shape: RoundedRectangleBorder(
                     borderRadius: BorderRadius.circular(8),
                   ),
@@ -2195,7 +2463,10 @@ class _SettingsScreenState extends State<SettingsScreen> {
             const SizedBox(height: 8),
             Text(
               '复制Token到剪贴板，用于API调试',
-              style: TextStyle(fontSize: 11, color: Colors.grey[600]),
+              style: TextStyle(
+                fontSize: 11,
+                color: LegacyThemeColors.muted(context, Colors.grey[600]!),
+              ),
             ),
           ],
         ),
@@ -2306,13 +2577,19 @@ class _SettingsScreenState extends State<SettingsScreen> {
               children: [
                 Text(
                   '原Token:',
-                  style: TextStyle(color: Colors.grey[600], fontSize: 12),
+                  style: TextStyle(
+                    color: LegacyThemeColors.muted(context, Colors.grey[600]!),
+                    fontSize: 12,
+                  ),
                 ),
                 Text(shortToken, style: const TextStyle(fontSize: 13)),
                 const SizedBox(height: 12),
                 Text(
                   '新Token:',
-                  style: TextStyle(color: Colors.grey[600], fontSize: 12),
+                  style: TextStyle(
+                    color: LegacyThemeColors.muted(context, Colors.grey[600]!),
+                    fontSize: 12,
+                  ),
                 ),
                 const Text(
                   'INVALID_TOKEN_FOR_DEBUG...',
@@ -2322,7 +2599,10 @@ class _SettingsScreenState extends State<SettingsScreen> {
                 Container(
                   padding: const EdgeInsets.all(10),
                   decoration: BoxDecoration(
-                    color: Colors.blue[50],
+                    color: LegacyThemeColors.primaryContainer(
+                      context,
+                      Colors.blue[50]!,
+                    ),
                     borderRadius: BorderRadius.circular(8),
                   ),
                   child: Row(
@@ -2330,7 +2610,10 @@ class _SettingsScreenState extends State<SettingsScreen> {
                       Icon(
                         Icons.info_outline,
                         size: 16,
-                        color: Colors.blue[700],
+                        color: LegacyThemeColors.primary(
+                          context,
+                          Colors.blue[700]!,
+                        ),
                       ),
                       const SizedBox(width: 8),
                       Expanded(
@@ -2338,7 +2621,10 @@ class _SettingsScreenState extends State<SettingsScreen> {
                           '返回主页后刷新数据即可触发Token失效流程',
                           style: TextStyle(
                             fontSize: 12,
-                            color: Colors.blue[700],
+                            color: LegacyThemeColors.primary(
+                              context,
+                              Colors.blue[700]!,
+                            ),
                           ),
                         ),
                       ),
@@ -2436,7 +2722,7 @@ class _TestCountdownDialogState extends State<_TestCountdownDialog> {
             width: 60,
             height: 60,
             decoration: BoxDecoration(
-              color: Colors.teal[50],
+              color: LegacyThemeColors.panel(context, Colors.teal[50]!),
               borderRadius: BorderRadius.circular(30),
             ),
             child: Center(

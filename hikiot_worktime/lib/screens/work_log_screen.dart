@@ -6,6 +6,7 @@ import 'package:file_picker/file_picker.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 
+import '../core/theme/legacy_theme_colors.dart';
 import '../core/theme/theme.dart';
 import '../services/storage_service.dart';
 import '../services/work_log_repository.dart';
@@ -660,8 +661,8 @@ class WorkLogScreenState extends State<WorkLogScreen> {
     return Scaffold(
       appBar: AppBar(
         title: const Text('工作日志'),
-        backgroundColor: AppColors.primary,
-        foregroundColor: AppColors.onPrimary,
+        backgroundColor: LegacyThemeColors.surface(context, AppColors.primary),
+        foregroundColor: LegacyThemeColors.text(context, AppColors.onPrimary),
         actions: [
           IconButton(
             icon: const Icon(Icons.tune),
@@ -726,7 +727,11 @@ class WorkLogScreenState extends State<WorkLogScreen> {
         padding: const EdgeInsets.fromLTRB(12, 10, 12, 10),
         decoration: BoxDecoration(
           color: Theme.of(context).colorScheme.surface,
-          border: Border(top: BorderSide(color: Colors.grey.shade300)),
+          border: Border(
+            top: BorderSide(
+              color: LegacyThemeColors.border(context, Colors.grey.shade300),
+            ),
+          ),
         ),
         child: Column(
           mainAxisSize: MainAxisSize.min,
@@ -739,7 +744,10 @@ class WorkLogScreenState extends State<WorkLogScreen> {
                   _totalCount == 0
                       ? '请先导入日志 CSV'
                       : 'CSV 中没有 ${DateHelper.formatDate(date)} 的记录',
-                  style: TextStyle(fontSize: 12, color: Colors.grey[600]),
+                  style: TextStyle(
+                    fontSize: 12,
+                    color: LegacyThemeColors.muted(context, Colors.grey[600]!),
+                  ),
                   textAlign: TextAlign.center,
                 ),
               ),
@@ -809,7 +817,7 @@ class WorkLogScreenState extends State<WorkLogScreen> {
     // 浅色底 + 同色描边 + 同色图标，elevation 与其它卡片一致
     return Card(
       elevation: 2,
-      color: AppColors.warningLight,
+      color: LegacyThemeColors.panel(context, AppColors.warningLight),
       shape: RoundedRectangleBorder(
         borderRadius: BorderRadius.circular(12),
         side: BorderSide(color: AppColors.warning),
@@ -926,7 +934,9 @@ class WorkLogScreenState extends State<WorkLogScreen> {
     final hasData = _totalCount > 0;
     return _buildSectionCard(
       icon: hasData ? Icons.description : Icons.upload_file,
-      iconColor: hasData ? Colors.teal[700]! : Colors.grey,
+      iconColor: hasData
+          ? LegacyThemeColors.primary(context, Colors.teal[700]!)
+          : LegacyThemeColors.muted(context, Colors.grey),
       title: hasData ? '已导入 $_totalCount 条日志' : '尚未导入日志 CSV',
       trailing: TextButton(onPressed: _importCsv, child: const Text('导入')),
       child: Text(
@@ -934,7 +944,10 @@ class WorkLogScreenState extends State<WorkLogScreen> {
             ? '${_sourceName ?? '未知文件'}'
                   '${_importedAt == null ? '' : ' · ${DateHelper.formatDate(_importedAt!)}'}'
             : '点右上角或此处的导入按钮选择 CSV 文件',
-        style: TextStyle(fontSize: 12, color: Colors.grey[600]),
+        style: TextStyle(
+          fontSize: 12,
+          color: LegacyThemeColors.muted(context, Colors.grey[600]!),
+        ),
       ),
     );
   }
@@ -968,7 +981,9 @@ class WorkLogScreenState extends State<WorkLogScreen> {
     final display = hasHours
         ? WorkTimeCalculator.formatHours(hours!.hours!)
         : '--';
-    final color = hasHours ? Colors.indigo[700]! : Colors.grey;
+    final color = hasHours
+        ? LegacyThemeColors.primary(context, Colors.indigo[700]!)
+        : LegacyThemeColors.muted(context, Colors.grey);
 
     return _buildSectionCard(
       icon: Icons.timer_outlined,
@@ -1023,14 +1038,26 @@ class WorkLogScreenState extends State<WorkLogScreen> {
                   const SizedBox(width: 4),
                   Text(
                     hours.checkIn ?? '--:--',
-                    style: TextStyle(fontSize: 13, color: Colors.grey[700]),
+                    style: TextStyle(
+                      fontSize: 13,
+                      color: LegacyThemeColors.muted(
+                        context,
+                        Colors.grey[700]!,
+                      ),
+                    ),
                   ),
                   const SizedBox(width: 12),
                   Icon(Icons.logout, size: 14, color: Colors.orange[600]),
                   const SizedBox(width: 4),
                   Text(
                     hours.checkOut ?? '--:--',
-                    style: TextStyle(fontSize: 13, color: Colors.grey[700]),
+                    style: TextStyle(
+                      fontSize: 13,
+                      color: LegacyThemeColors.muted(
+                        context,
+                        Colors.grey[700]!,
+                      ),
+                    ),
                   ),
                 ],
               ),
@@ -1052,13 +1079,20 @@ class WorkLogScreenState extends State<WorkLogScreen> {
           padding: const EdgeInsets.all(24),
           child: Column(
             children: [
-              Icon(Icons.event_busy, size: 40, color: Colors.grey[400]),
+              Icon(
+                Icons.event_busy,
+                size: 40,
+                color: LegacyThemeColors.border(context, Colors.grey[400]!),
+              ),
               const SizedBox(height: 12),
               Text(
                 _totalCount == 0
                     ? '请先导入日志 CSV'
                     : 'CSV 中没有 ${_draft?.date ?? ''} 的记录',
-                style: TextStyle(fontSize: 14, color: Colors.grey[600]),
+                style: TextStyle(
+                  fontSize: 14,
+                  color: LegacyThemeColors.muted(context, Colors.grey[600]!),
+                ),
                 textAlign: TextAlign.center,
               ),
             ],
@@ -1107,7 +1141,10 @@ class WorkLogScreenState extends State<WorkLogScreen> {
               if (entry.workType.isNotEmpty)
                 _buildChip(entry.workType, Colors.deepPurple[400]!),
               if (entry.stage.isNotEmpty)
-                _buildChip(entry.stage, Colors.blue[700]!),
+                _buildChip(
+                  entry.stage,
+                  LegacyThemeColors.primary(context, Colors.blue[700]!),
+                ),
               if (entry.activity.isNotEmpty)
                 _buildChip(entry.activity, Colors.teal[700]!),
             ],
@@ -1134,7 +1171,10 @@ class WorkLogScreenState extends State<WorkLogScreen> {
               children: [
                 Text(
                   label,
-                  style: TextStyle(fontSize: 11, color: Colors.grey[500]),
+                  style: TextStyle(
+                    fontSize: 11,
+                    color: LegacyThemeColors.muted(context, Colors.grey[500]!),
+                  ),
                 ),
                 const SizedBox(height: 3),
                 Text(
@@ -1143,7 +1183,7 @@ class WorkLogScreenState extends State<WorkLogScreen> {
                     fontSize: emphasize ? 15 : 14,
                     height: 1.5,
                     fontWeight: emphasize ? FontWeight.bold : FontWeight.normal,
-                    color: Colors.grey[850],
+                    color: LegacyThemeColors.text(context, Colors.grey[850]!),
                   ),
                   maxLines: multiline ? null : 2,
                   overflow: multiline ? null : TextOverflow.ellipsis,

@@ -11,6 +11,7 @@ import '../utils/startup_refresh_coordinator.dart';
 import '../widgets/home_button.dart';
 import '../widgets/app_update_dialog.dart';
 import '../models/today_wrap_up.dart';
+import '../services/platform_capabilities.dart';
 
 /// 主框架页面 - 包含底部导航栏
 class MainScreen extends StatefulWidget {
@@ -91,6 +92,7 @@ class _MainScreenState extends State<MainScreen> with WidgetsBindingObserver {
       },
       isMounted: () => mounted,
     );
+    if (mounted) await _dailyKey.currentState?.refreshMonthCache();
   }
 
   Future<void> _onTabTap(int index) async {
@@ -147,29 +149,95 @@ class _MainScreenState extends State<MainScreen> with WidgetsBindingObserver {
           const SettingsScreen(),
         ],
       ),
-      bottomNavigationBar: Container(
-        decoration: BoxDecoration(
-          color: theme.colorScheme.surface,
-          boxShadow: [
-            BoxShadow(
-              color: AppColors.shadow,
-              blurRadius: 8,
-              offset: const Offset(0, -2),
+      bottomNavigationBar: PlatformCapabilities.supportsTodayWrapUp
+          ? _buildIosNavigation()
+          : Container(
+              decoration: BoxDecoration(
+                color: theme.colorScheme.surface,
+                boxShadow: [
+                  BoxShadow(
+                    color: AppColors.shadow,
+                    blurRadius: 8,
+                    offset: const Offset(0, -2),
+                  ),
+                ],
+              ),
+              child: SafeArea(
+                child: Padding(
+                  padding: const EdgeInsets.symmetric(
+                    horizontal: 8,
+                    vertical: 8,
+                  ),
+                  child: Row(
+                    mainAxisAlignment: MainAxisAlignment.spaceAround,
+                    children: [
+                      _buildNavItem(0, Icons.today, '每日工时'),
+                      _buildNavItem(1, Icons.calendar_month, '月度统计'),
+                      _buildNavItem(2, Icons.edit_note, '工作日志'),
+                      _buildNavItem(3, Icons.settings, '设置'),
+                    ],
+                  ),
+                ),
+              ),
             ),
-          ],
-        ),
-        child: SafeArea(
-          child: Padding(
-            padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 8),
-            child: Row(
-              mainAxisAlignment: MainAxisAlignment.spaceAround,
-              children: [
-                _buildNavItem(0, Icons.today, '每日工时'),
-                _buildNavItem(1, Icons.calendar_month, '月度统计'),
-                _buildNavItem(2, Icons.edit_note, '工作日志'),
-                _buildNavItem(3, Icons.settings, '设置'),
-              ],
-            ),
+    );
+  }
+
+  Widget _buildIosNavigation() {
+    final colors = Theme.of(context).colorScheme;
+    const labels = ['今日', '月度', '日志', '我的'];
+    const icons = [
+      Icons.today_outlined,
+      Icons.bar_chart_outlined,
+      Icons.description_outlined,
+      Icons.person_outline,
+    ];
+    return DecoratedBox(
+      decoration: BoxDecoration(
+        color: colors.surface,
+        border: Border(top: BorderSide(color: colors.outlineVariant)),
+      ),
+      child: SafeArea(
+        top: false,
+        child: Padding(
+          padding: const EdgeInsets.symmetric(vertical: 6),
+          child: Row(
+            children: [
+              for (var i = 0; i < labels.length; i++)
+                Expanded(
+                  child: Semantics(
+                    selected: i == _currentIndex,
+                    child: InkWell(
+                      onTap: () => _onTabTap(i),
+                      child: Padding(
+                        padding: const EdgeInsets.symmetric(vertical: 6),
+                        child: Column(
+                          mainAxisSize: MainAxisSize.min,
+                          children: [
+                            Icon(
+                              icons[i],
+                              size: 24,
+                              color: i == _currentIndex
+                                  ? colors.primary
+                                  : colors.onSurfaceVariant,
+                            ),
+                            const SizedBox(height: 4),
+                            Text(
+                              labels[i],
+                              style: TextStyle(
+                                fontSize: 11,
+                                color: i == _currentIndex
+                                    ? colors.primary
+                                    : colors.onSurfaceVariant,
+                              ),
+                            ),
+                          ],
+                        ),
+                      ),
+                    ),
+                  ),
+                ),
+            ],
           ),
         ),
       ),

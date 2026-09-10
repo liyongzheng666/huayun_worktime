@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 
+import '../core/theme/legacy_theme_colors.dart';
 import '../utils/work_time_calculator.dart';
 
 /// 已达成目标的折叠卡片
@@ -55,7 +56,7 @@ class CollapsedTargetGoal extends StatelessWidget {
               onPinToggle!();
             },
       child: Card(
-        color: Colors.green[50],
+        color: LegacyThemeColors.panel(context, Colors.green[50]!),
         margin: const EdgeInsets.only(bottom: 8),
         shape: isPinned
             ? RoundedRectangleBorder(
@@ -102,7 +103,10 @@ class CollapsedTargetGoal extends StatelessWidget {
                   '${WorkTimeCalculator.formatHours(currentHours)}h'
                   ' / ${WorkTimeCalculator.formatHours(targetHours)}h',
                   textAlign: TextAlign.end,
-                  style: TextStyle(fontSize: 11, color: Colors.grey[600]),
+                  style: TextStyle(
+                    fontSize: 11,
+                    color: LegacyThemeColors.muted(context, Colors.grey[600]!),
+                  ),
                 ),
               ),
             ],

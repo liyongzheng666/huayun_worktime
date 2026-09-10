@@ -6,6 +6,8 @@ import 'screens/login_screen.dart';
 import 'screens/main_screen.dart';
 import 'screens/disclaimer_dialog.dart';
 import 'services/storage_service.dart';
+import 'services/app_theme_controller.dart';
+import 'services/platform_capabilities.dart';
 import 'utils/work_time_calculator.dart';
 import 'utils/date_helper.dart';
 import 'utils/haptic_utils.dart';
@@ -29,6 +31,10 @@ Future<void> main() async {
 
   // 初始化震动设置
   await HapticUtils.init();
+
+  if (PlatformCapabilities.supportsTodayWrapUp) {
+    await AppThemeController.shared.load();
+  }
 
   // 捕获所有未处理的异常
   runZonedGuarded(
@@ -55,13 +61,25 @@ class MyApp extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    return MaterialApp(
-      title: '华云工时查询工具',
-      theme: ThemeData(
+    if (PlatformCapabilities.supportsTodayWrapUp) {
+      return AnimatedBuilder(
+        animation: AppThemeController.shared,
+        builder: (context, _) => _buildApp(AppThemeController.shared.themeData),
+      );
+    }
+    return _buildApp(
+      ThemeData(
         primarySwatch: Colors.blue,
         visualDensity: VisualDensity.adaptivePlatformDensity,
         useMaterial3: true,
       ),
+    );
+  }
+
+  Widget _buildApp(ThemeData theme) {
+    return MaterialApp(
+      title: '华云工时查询工具',
+      theme: theme,
       localizationsDelegates: const [
         GlobalMaterialLocalizations.delegate,
         GlobalWidgetsLocalizations.delegate,
@@ -161,6 +179,47 @@ class _SplashScreenState extends State<SplashScreen>
 
   @override
   Widget build(BuildContext context) {
+    if (PlatformCapabilities.supportsTodayWrapUp) {
+      final colors = Theme.of(context).colorScheme;
+      return Scaffold(
+        body: SafeArea(
+          child: Center(
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                Icon(
+                  Icons.calendar_today_outlined,
+                  size: 42,
+                  color: colors.primary,
+                ),
+                const SizedBox(height: 18),
+                Text(
+                  '华云工时',
+                  style: TextStyle(
+                    fontSize: 24,
+                    fontWeight: FontWeight.w600,
+                    color: colors.onSurface,
+                  ),
+                ),
+                const SizedBox(height: 10),
+                Text(
+                  '准备今天的工时…',
+                  style: TextStyle(color: colors.onSurfaceVariant),
+                ),
+                const SizedBox(height: 28),
+                SizedBox.square(
+                  dimension: 20,
+                  child: CircularProgressIndicator(
+                    strokeWidth: 2,
+                    color: colors.primary,
+                  ),
+                ),
+              ],
+            ),
+          ),
+        ),
+      );
+    }
     return Scaffold(
       body: Container(
         decoration: const BoxDecoration(

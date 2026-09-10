@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 
+import '../core/theme/legacy_theme_colors.dart';
 import '../services/work_log_repository.dart';
 import '../utils/date_helper.dart';
 import '../utils/haptic_utils.dart';
@@ -149,7 +150,11 @@ class WeekStripState extends State<WeekStrip> {
       padding: const EdgeInsets.symmetric(horizontal: 14),
       child: Row(
         children: [
-          Icon(Icons.calendar_today, size: 18, color: Colors.blue[700]),
+          Icon(
+            Icons.calendar_today,
+            size: 18,
+            color: LegacyThemeColors.primary(context, Colors.blue[700]!),
+          ),
           const SizedBox(width: 8),
           Expanded(
             child: Text(
@@ -157,7 +162,7 @@ class WeekStripState extends State<WeekStrip> {
               style: TextStyle(
                 fontSize: 14,
                 fontWeight: FontWeight.bold,
-                color: Colors.grey[800],
+                color: LegacyThemeColors.text(context, Colors.grey[800]!),
               ),
               maxLines: 1,
               overflow: TextOverflow.ellipsis,
@@ -188,9 +193,7 @@ class WeekStripState extends State<WeekStrip> {
       children: List.generate(7, (i) {
         final date = monday.add(Duration(days: i));
         final summary = days == null || i >= days.length ? null : days[i];
-        return Expanded(
-          child: _buildDay(date, weekdayNames[i], summary),
-        );
+        return Expanded(child: _buildDay(date, weekdayNames[i], summary));
       }),
     );
   }
@@ -202,11 +205,11 @@ class WeekStripState extends State<WeekStrip> {
 
     final Color textColor;
     if (isSelected) {
-      textColor = Colors.white;
+      textColor = LegacyThemeColors.onPrimary(context, Colors.white);
     } else if (isWeekend) {
-      textColor = Colors.grey[500]!;
+      textColor = LegacyThemeColors.muted(context, Colors.grey[500]!);
     } else {
-      textColor = Colors.grey[850]!;
+      textColor = LegacyThemeColors.text(context, Colors.grey[850]!);
     }
 
     return InkWell(
@@ -221,11 +224,16 @@ class WeekStripState extends State<WeekStrip> {
         margin: const EdgeInsets.symmetric(horizontal: 2),
         padding: const EdgeInsets.symmetric(vertical: 6),
         decoration: BoxDecoration(
-          color: isSelected ? Colors.blue[700] : Colors.transparent,
+          color: isSelected
+              ? LegacyThemeColors.primary(context, Colors.blue[700]!)
+              : Colors.transparent,
           borderRadius: BorderRadius.circular(10),
           // 今天但未选中时用描边标出，不跟选中态抢视觉
           border: !isSelected && isToday
-              ? Border.all(color: Colors.blue[700]!, width: 1.5)
+              ? Border.all(
+                  color: LegacyThemeColors.primary(context, Colors.blue[700]!),
+                  width: 1.5,
+                )
               : null,
         ),
         // 整格内容随字体放大而变高，而 PageView 高度是固定的。
@@ -233,48 +241,50 @@ class WeekStripState extends State<WeekStrip> {
         child: FittedBox(
           fit: BoxFit.scaleDown,
           child: Column(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            Text(
-              weekday,
-              style: TextStyle(
-                fontSize: 11,
-                color: isSelected ? Colors.white70 : Colors.grey[500],
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Text(
+                weekday,
+                style: TextStyle(
+                  fontSize: 11,
+                  color: isSelected
+                      ? LegacyThemeColors.onPrimary(context, Colors.white70)
+                      : LegacyThemeColors.muted(context, Colors.grey[500]!),
+                ),
               ),
-            ),
-            const SizedBox(height: 2),
-            Text(
-              '${date.day}',
-              style: TextStyle(
-                fontSize: 16,
-                height: 1.1,
-                fontWeight: FontWeight.bold,
-                color: textColor,
+              const SizedBox(height: 2),
+              Text(
+                '${date.day}',
+                style: TextStyle(
+                  fontSize: 16,
+                  height: 1.1,
+                  fontWeight: FontWeight.bold,
+                  color: textColor,
+                ),
               ),
-            ),
-            const SizedBox(height: 2),
-            // 工时最长是「11.10」，窄屏上宁可缩小也不能被裁掉
-            SizedBox(
-              height: 12,
-              child: FittedBox(
-                fit: BoxFit.scaleDown,
-                child: Text(
-                  summary != null && summary.hasHours
-                      ? WorkTimeCalculator.formatHours(summary.hours!)
-                      : '--',
-                  style: TextStyle(
-                    fontSize: 10,
-                    height: 1.0,
-                    color: isSelected
-                        ? Colors.white
-                        : textColor.withValues(alpha: 0.7),
+              const SizedBox(height: 2),
+              // 工时最长是「11.10」，窄屏上宁可缩小也不能被裁掉
+              SizedBox(
+                height: 12,
+                child: FittedBox(
+                  fit: BoxFit.scaleDown,
+                  child: Text(
+                    summary != null && summary.hasHours
+                        ? WorkTimeCalculator.formatHours(summary.hours!)
+                        : '--',
+                    style: TextStyle(
+                      fontSize: 10,
+                      height: 1.0,
+                      color: isSelected
+                          ? LegacyThemeColors.onPrimary(context, Colors.white)
+                          : textColor.withValues(alpha: 0.7),
+                    ),
                   ),
                 ),
               ),
-            ),
-            const SizedBox(height: 3),
-            _buildStatusDot(summary, isSelected),
-          ],
+              const SizedBox(height: 3),
+              _buildStatusDot(summary, isSelected),
+            ],
           ),
         ),
       ),
@@ -299,7 +309,9 @@ class WeekStripState extends State<WeekStrip> {
 
     if (summary.isSubmitted) {
       return _dot(
-        fill: isSelected ? Colors.white : Colors.grey.shade500,
+        fill: isSelected
+            ? LegacyThemeColors.onPrimary(context, Colors.white)
+            : LegacyThemeColors.muted(context, Colors.grey.shade500),
         filled: true,
       );
     }
@@ -308,13 +320,17 @@ class WeekStripState extends State<WeekStrip> {
     // 据此标红会让整个没同步过的月份都变成欠账，是纯粹的误报。
     if (summary.bossSynced && isPast && summary.hasHours) {
       return _dot(
-        fill: isSelected ? Colors.white : _overdueColor,
+        fill: isSelected
+            ? LegacyThemeColors.onPrimary(context, Colors.white)
+            : _overdueColor,
         filled: true,
       );
     }
     if (summary.hasEntry) {
       return _dot(
-        fill: isSelected ? Colors.white : Colors.blue.shade700,
+        fill: isSelected
+            ? LegacyThemeColors.onPrimary(context, Colors.white)
+            : LegacyThemeColors.primary(context, Colors.blue.shade700),
         filled: false,
       );
     }
@@ -359,12 +375,19 @@ class WeekStripState extends State<WeekStrip> {
         padding: const EdgeInsets.only(top: 8, left: 14, right: 14),
         child: Row(
           children: [
-            Icon(Icons.help_outline, size: 12, color: Colors.grey[500]),
+            Icon(
+              Icons.help_outline,
+              size: 12,
+              color: LegacyThemeColors.muted(context, Colors.grey[500]!),
+            ),
             const SizedBox(width: 4),
             Expanded(
               child: Text(
                 '本月未同步 BOSS，提交状态未知（可在月度页「全量更新工时」同步）',
-                style: TextStyle(fontSize: 10, color: Colors.grey[600]),
+                style: TextStyle(
+                  fontSize: 10,
+                  color: LegacyThemeColors.muted(context, Colors.grey[600]!),
+                ),
                 maxLines: 2,
               ),
             ),
@@ -379,10 +402,19 @@ class WeekStripState extends State<WeekStrip> {
         spacing: 12,
         runSpacing: 4,
         children: [
-          _legendItem(_dot(fill: Colors.grey.shade500, filled: true), '已提交'),
+          _legendItem(
+            _dot(
+              fill: LegacyThemeColors.muted(context, Colors.grey.shade500),
+              filled: true,
+            ),
+            '已提交',
+          ),
           _legendItem(_dot(fill: _overdueColor, filled: true), '待补交'),
           _legendItem(
-            _dot(fill: Colors.blue.shade700, filled: false),
+            _dot(
+              fill: LegacyThemeColors.primary(context, Colors.blue.shade700),
+              filled: false,
+            ),
             '素材已就绪',
           ),
         ],
@@ -396,7 +428,13 @@ class WeekStripState extends State<WeekStrip> {
       children: [
         sample,
         const SizedBox(width: 4),
-        Text(label, style: TextStyle(fontSize: 10, color: Colors.grey[600])),
+        Text(
+          label,
+          style: TextStyle(
+            fontSize: 10,
+            color: LegacyThemeColors.muted(context, Colors.grey[600]!),
+          ),
+        ),
       ],
     );
   }

@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 
+import '../core/theme/legacy_theme_colors.dart';
 import '../core/theme/theme.dart';
 import '../services/work_log_submit_service.dart';
 import '../utils/work_log_auditor_lookup.dart';
@@ -42,6 +43,7 @@ class WorkLogAuditorPickerDialog {
                 children: [
                   if (auditors.isEmpty)
                     _warning(
+                      context,
                       '没能查到当前项目的审核人。\n'
                       '请在 BOSS 核对该项目的审核人设置；'
                       '也可打开这个项目的历史日志后重试，'
@@ -51,11 +53,18 @@ class WorkLogAuditorPickerDialog {
                     Text(
                       '查到 ${auditors.length} 个候选。'
                       '请根据姓名和来源确认当前项目的审核人：',
-                      style: TextStyle(fontSize: 12, color: Colors.grey[700]),
+                      style: TextStyle(
+                        fontSize: 12,
+                        color: LegacyThemeColors.muted(
+                          context,
+                          Colors.grey[700]!,
+                        ),
+                      ),
                     ),
                     const SizedBox(height: 8),
                     ...auditors.map(
                       (a) => _candidate(
+                        context: context,
                         auditor: a,
                         selected: selected?.id == a.id,
                         current: a.id == currentId && currentId.isNotEmpty,
@@ -136,6 +145,7 @@ class WorkLogAuditorPickerDialog {
   }
 
   static Widget _candidate({
+    required BuildContext context,
     required BossAuditor auditor,
     required bool selected,
     required bool current,
@@ -147,10 +157,14 @@ class WorkLogAuditorPickerDialog {
         margin: const EdgeInsets.only(bottom: 6),
         padding: const EdgeInsets.all(10),
         decoration: BoxDecoration(
-          color: selected ? AppColors.infoLight : null,
+          color: selected
+              ? LegacyThemeColors.primaryContainer(context, AppColors.infoLight)
+              : null,
           borderRadius: BorderRadius.circular(8),
           border: Border.all(
-            color: selected ? AppColors.info : Colors.grey.shade300,
+            color: selected
+                ? LegacyThemeColors.primary(context, AppColors.info)
+                : LegacyThemeColors.border(context, Colors.grey.shade300),
           ),
         ),
         child: Row(
@@ -161,7 +175,9 @@ class WorkLogAuditorPickerDialog {
                   ? Icons.radio_button_checked
                   : Icons.radio_button_unchecked,
               size: 18,
-              color: selected ? AppColors.info : Colors.grey,
+              color: selected
+                  ? LegacyThemeColors.primary(context, AppColors.info)
+                  : LegacyThemeColors.muted(context, Colors.grey),
             ),
             const SizedBox(width: 8),
             Expanded(
@@ -174,20 +190,28 @@ class WorkLogAuditorPickerDialog {
                     style: TextStyle(
                       fontSize: 13,
                       fontWeight: FontWeight.w600,
-                      color: auditor.name.isEmpty ? Colors.grey : null,
+                      color: auditor.name.isEmpty
+                          ? LegacyThemeColors.muted(context, Colors.grey)
+                          : null,
                     ),
                   ),
                   const SizedBox(height: 2),
                   Text(
                     auditor.source.label,
-                    style: TextStyle(fontSize: 10, color: Colors.grey[600]),
+                    style: TextStyle(
+                      fontSize: 10,
+                      color: LegacyThemeColors.muted(
+                        context,
+                        Colors.grey[600]!,
+                      ),
+                    ),
                   ),
                   SelectableText(
                     auditor.id,
-                    style: const TextStyle(
+                    style: TextStyle(
                       fontSize: 10,
                       fontFamily: 'monospace',
-                      color: Colors.grey,
+                      color: LegacyThemeColors.muted(context, Colors.grey),
                     ),
                   ),
                   if (current)
@@ -207,11 +231,11 @@ class WorkLogAuditorPickerDialog {
     );
   }
 
-  static Widget _warning(String text) {
+  static Widget _warning(BuildContext context, String text) {
     return Container(
       padding: const EdgeInsets.all(10),
       decoration: BoxDecoration(
-        color: AppColors.warningLight,
+        color: LegacyThemeColors.panel(context, AppColors.warningLight),
         borderRadius: BorderRadius.circular(8),
         border: Border.all(color: AppColors.warning),
       ),

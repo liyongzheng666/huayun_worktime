@@ -2,6 +2,7 @@ import '../core/constants/app_constants.dart';
 import '../utils/date_helper.dart';
 import '../utils/smart_day_type_helper.dart';
 import '../utils/work_time_calculator.dart';
+import '../utils/work_log_csv_parser.dart';
 
 enum TodayWrapUpAction {
   refresh,
@@ -21,6 +22,7 @@ class TodayWrapUpData {
   const TodayWrapUpData({
     required this.date,
     this.hasEntry = false,
+    this.entry,
     this.bossStatus = TodayBossStatus.unknown,
     this.bossHours,
     this.checkedAt,
@@ -30,6 +32,7 @@ class TodayWrapUpData {
 
   final DateTime date;
   final bool hasEntry;
+  final WorkLogEntry? entry;
   final TodayBossStatus bossStatus;
   final double? bossHours;
 

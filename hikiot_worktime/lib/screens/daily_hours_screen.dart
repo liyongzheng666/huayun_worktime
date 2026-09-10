@@ -5,11 +5,13 @@ import 'package:flutter/services.dart';
 import 'package:intl/intl.dart';
 import 'package:intl/date_symbol_data_local.dart';
 import '../core/constants/constants.dart';
+import '../core/theme/legacy_theme_colors.dart';
 import '../services/daily_attendance_repository.dart';
 import '../services/platform_capabilities.dart';
 import '../services/today_wrap_up_service.dart';
 import '../models/today_wrap_up.dart';
-import '../widgets/today_wrap_up_card.dart';
+import '../widgets/ios_workbench.dart';
+import '../utils/workbench_month_hours.dart';
 import '../services/storage_service.dart';
 import '../services/token_expired_service.dart';
 import '../utils/work_time_calculator.dart';
@@ -51,6 +53,7 @@ class DailyHoursScreenState extends State<DailyHoursScreen>
   late final DailyAttendanceRepository _dailyRepository;
   late final TodayWrapUpService _wrapUpService;
   TodayWrapUpData? _wrapUpData;
+  double? _monthHours;
   bool _wrapUpLoading = false;
   bool _wrapUpError = false;
   bool _wrapUpActionRunning = false;
@@ -239,9 +242,55 @@ class DailyHoursScreenState extends State<DailyHoursScreen>
         setState(() => _isLoading = false);
         if (PlatformCapabilities.supportsTodayWrapUp && _isWrapUpToday(date)) {
           unawaited(_refreshWrapUp(date));
+          unawaited(refreshMonthCache());
         }
       }
     }
+  }
+
+  /// 月度页完成刷新后只复读缓存，不另发整月网络查询。
+  Future<void> refreshMonthCache() async {
+    if (!PlatformCapabilities.supportsTodayWrapUp) return;
+    final date = _selectedDate;
+    final team = _teamNo;
+    double? hours;
+    try {
+      if (team != null) {
+        hours = WorkbenchMonthHours.calculate(
+          date: date,
+          cached: await _storage.loadMonthlyData(
+            team,
+            DateHelper.formatMonth(date),
+          ),
+          marks: await _storage.loadCalendarMarks(team),
+        );
+      }
+    } catch (_) {
+      // 缓存尚不可用时显示破折号，不拿零冒充累计值。
+    }
+    if (!mounted ||
+        !DateHelper.isSameDay(date, _selectedDate) ||
+        team != _teamNo) {
+      return;
+    }
+    setState(() => _monthHours = hours);
+  }
+
+  Future<void> _selectWorkbenchDate(DateTime date) async {
+    if (_wrapUpActionRunning ||
+        DateHelper.isSameDay(date, _selectedDate) ||
+        DateHelper.getWorkDate(
+          now: date,
+        ).isAfter(DateHelper.getWorkDate(now: _wrapUpNow))) {
+      return;
+    }
+    setState(() {
+      _selectedDate = date;
+      _dayData = null;
+      _attendanceData = null;
+      _monthHours = null;
+    });
+    await _loadDailyData();
   }
 
   /// 先展示本地素材，再单独核对当天 BOSS；不让网页查询阻塞工时页面。
@@ -412,6 +461,8 @@ class DailyHoursScreenState extends State<DailyHoursScreen>
             _teamNo = result.teamNo;
             _dayData = result.dayData;
           });
+          await refreshMonthCache();
+          if (!mounted) return;
 
           ScaffoldMessenger.of(
             context,
@@ -432,6 +483,8 @@ class DailyHoursScreenState extends State<DailyHoursScreen>
                   _teamNo = result.teamNo;
                   _dayData = result.dayData;
                 });
+                await refreshMonthCache();
+                if (!mounted) return;
 
                 final defaultType = result.dayData['type'] as String? ?? '';
                 ScaffoldMessenger.of(context).showSnackBar(
@@ -529,13 +582,21 @@ class DailyHoursScreenState extends State<DailyHoursScreen>
             },
             errorBuilder: (context, error, stackTrace) => Container(
               height: 150,
-              color: Colors.grey[200],
+              color: LegacyThemeColors.inset(context, Colors.grey[200]!),
               child: Column(
                 mainAxisAlignment: MainAxisAlignment.center,
                 children: [
-                  const Icon(Icons.broken_image, color: Colors.grey),
+                  Icon(
+                    Icons.broken_image,
+                    color: LegacyThemeColors.muted(context, Colors.grey),
+                  ),
                   const SizedBox(height: 8),
-                  const Text('照片加载失败', style: TextStyle(color: Colors.grey)),
+                  Text(
+                    '照片加载失败',
+                    style: TextStyle(
+                      color: LegacyThemeColors.muted(context, Colors.grey),
+                    ),
+                  ),
                   // 移除详细错误显示，保持界面整洁(KISS)
                 ],
               ),
@@ -550,26 +611,69 @@ class DailyHoursScreenState extends State<DailyHoursScreen>
   Widget build(BuildContext context) {
     final hours = _calculateHours();
     final type = _dayData?['type'] ?? AppConstants.typeWorkday;
+    final useWorkbench =
+        PlatformCapabilities.supportsTodayWrapUp &&
+        _isWrapUpToday(_selectedDate);
+    final currentWrapUp =
+        _wrapUpData != null &&
+            DateHelper.isSameDay(_wrapUpData!.date, _selectedDate)
+        ? _wrapUpData
+        : null;
+    final summary = currentWrapUp == null
+        ? null
+        : TodayWrapUpSummary.compose(
+            date: _selectedDate,
+            data: currentWrapUp,
+            attendanceData: _attendanceData,
+            dayType: type,
+            effectiveHours: hours,
+            attendanceFailed: _attendanceFailed,
+            now: _wrapUpNow,
+          );
 
     return Stack(
       children: [
         Scaffold(
-          appBar: AppBar(
-            title: const Text('每日工时'),
-            actions: [
-              IconButton(
-                icon: const Icon(Icons.refresh),
-                onPressed: _isLoading
-                    ? null
-                    : () async {
-                        await HapticUtils.lightImpact();
-                        _loadDailyData();
-                      },
-                tooltip: '刷新',
-              ),
-            ],
-          ),
-          body: _isLoading
+          appBar: useWorkbench
+              ? null
+              : AppBar(
+                  title: const Text('每日工时'),
+                  actions: [
+                    IconButton(
+                      icon: const Icon(Icons.refresh),
+                      onPressed: _isLoading
+                          ? null
+                          : () async {
+                              await HapticUtils.lightImpact();
+                              _loadDailyData();
+                            },
+                      tooltip: '刷新',
+                    ),
+                  ],
+                ),
+          body: useWorkbench
+              ? HapticRefreshIndicator(
+                  onRefresh: _loadDailyData,
+                  child: IosWorkbench(
+                    selectedDate: _selectedDate,
+                    today: _wrapUpNow,
+                    hours: hours,
+                    monthHours: _monthHours,
+                    attendanceData: _attendanceData,
+                    attendanceFailed: _attendanceFailed,
+                    summary: summary,
+                    entry: currentWrapUp?.entry,
+                    isRefreshing:
+                        _isLoading || _wrapUpLoading || _wrapUpActionRunning,
+                    loadFailed: _wrapUpError,
+                    updatedAt: currentWrapUp?.checkedAt,
+                    onRefresh: _loadDailyData,
+                    onSelectDate: _selectWorkbenchDate,
+                    onAction: _handleWrapUpAction,
+                    onEditAttendance: _showEditDialog,
+                  ),
+                )
+              : _isLoading
               ? const Center(child: CircularProgressIndicator())
               : HapticRefreshIndicator(
                   onRefresh: () async {
@@ -582,52 +686,6 @@ class DailyHoursScreenState extends State<DailyHoursScreen>
                     child: Column(
                       crossAxisAlignment: CrossAxisAlignment.start,
                       children: [
-                        if (PlatformCapabilities.supportsTodayWrapUp &&
-                            _isWrapUpToday(_selectedDate)) ...[
-                          if (_wrapUpData != null &&
-                              DateHelper.isSameDay(
-                                _wrapUpData!.date,
-                                _selectedDate,
-                              ))
-                            TodayWrapUpCard(
-                              summary: TodayWrapUpSummary.compose(
-                                date: _selectedDate,
-                                data: _wrapUpData!,
-                                attendanceData: _attendanceData,
-                                dayType: type,
-                                effectiveHours: hours,
-                                attendanceFailed: _attendanceFailed,
-                                now: _wrapUpNow,
-                              ),
-                              isRefreshing:
-                                  _wrapUpLoading || _wrapUpActionRunning,
-                              onAction: _handleWrapUpAction,
-                              onRefresh: () => _loadDailyData(),
-                            )
-                          else
-                            Card(
-                              child: Padding(
-                                padding: const EdgeInsets.all(20),
-                                child: Column(
-                                  crossAxisAlignment: CrossAxisAlignment.start,
-                                  children: [
-                                    Text(
-                                      _wrapUpError
-                                          ? '☕ 今日状态暂时没查清楚'
-                                          : '☕ 正在整理今日状态…',
-                                    ),
-                                    if (_wrapUpError)
-                                      TextButton(
-                                        onPressed: () =>
-                                            _refreshWrapUp(_selectedDate),
-                                        child: const Text('再试一次'),
-                                      ),
-                                  ],
-                                ),
-                              ),
-                            ),
-                          const SizedBox(height: 16),
-                        ],
                         _buildDateSelector(),
                         const SizedBox(height: 12),
                         _buildTypeWarning(type),
@@ -670,7 +728,10 @@ class DailyHoursScreenState extends State<DailyHoursScreen>
         padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
         child: Row(
           children: [
-            Icon(Icons.calendar_today, color: Colors.blue[700]),
+            Icon(
+              Icons.calendar_today,
+              color: LegacyThemeColors.primary(context, Colors.blue[700]!),
+            ),
             const SizedBox(width: 12),
             Expanded(
               child: GestureDetector(
@@ -683,7 +744,7 @@ class DailyHoursScreenState extends State<DailyHoursScreen>
                   style: TextStyle(
                     fontSize: 16,
                     fontWeight: FontWeight.bold,
-                    color: Colors.grey[800],
+                    color: LegacyThemeColors.text(context, Colors.grey[800]!),
                   ),
                 ),
               ),
@@ -706,7 +767,10 @@ class DailyHoursScreenState extends State<DailyHoursScreen>
                 ),
               ),
             IconButton(
-              icon: Icon(Icons.arrow_drop_down, color: Colors.blue[700]),
+              icon: Icon(
+                Icons.arrow_drop_down,
+                color: LegacyThemeColors.primary(context, Colors.blue[700]!),
+              ),
               onPressed: () async {
                 await HapticUtils.selectionClick();
                 _selectDate();
@@ -804,7 +868,9 @@ class DailyHoursScreenState extends State<DailyHoursScreen>
               Container(
                 padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
                 decoration: BoxDecoration(
-                  color: isManual ? Colors.orange[50] : Colors.green[50],
+                  color: isManual
+                      ? LegacyThemeColors.panel(context, Colors.orange[50]!)
+                      : LegacyThemeColors.panel(context, Colors.green[50]!),
                   borderRadius: BorderRadius.circular(8),
                 ),
                 child: Text(
@@ -826,7 +892,10 @@ class DailyHoursScreenState extends State<DailyHoursScreen>
                       vertical: 4,
                     ),
                     decoration: BoxDecoration(
-                      color: Colors.blue[50],
+                      color: LegacyThemeColors.primaryContainer(
+                        context,
+                        Colors.blue[50]!,
+                      ),
                       borderRadius: BorderRadius.circular(8),
                     ),
                     child: Row(
@@ -835,14 +904,20 @@ class DailyHoursScreenState extends State<DailyHoursScreen>
                         Icon(
                           Icons.photo_camera,
                           size: 14,
-                          color: Colors.blue[700],
+                          color: LegacyThemeColors.primary(
+                            context,
+                            Colors.blue[700]!,
+                          ),
                         ),
                         const SizedBox(width: 4),
                         Text(
                           '查看打卡照片',
                           style: TextStyle(
                             fontSize: 11,
-                            color: Colors.blue[700],
+                            color: LegacyThemeColors.primary(
+                              context,
+                              Colors.blue[700]!,
+                            ),
                           ),
                         ),
                       ],
@@ -872,7 +947,7 @@ class DailyHoursScreenState extends State<DailyHoursScreen>
 
     return Card(
       elevation: 2,
-      color: Colors.amber[50],
+      color: LegacyThemeColors.panel(context, Colors.amber[50]!),
       shape: RoundedRectangleBorder(
         borderRadius: BorderRadius.circular(12),
         side: BorderSide(color: Colors.amber[200]!),
@@ -930,7 +1005,7 @@ class DailyHoursScreenState extends State<DailyHoursScreen>
                   '今日打卡工时',
                   style: TextStyle(
                     fontSize: 14,
-                    color: Colors.grey[600],
+                    color: LegacyThemeColors.muted(context, Colors.grey[600]!),
                     fontWeight: FontWeight.w500,
                   ),
                 ),
@@ -949,7 +1024,10 @@ class DailyHoursScreenState extends State<DailyHoursScreen>
                         style: TextStyle(
                           fontSize: 56,
                           fontWeight: FontWeight.bold,
-                          color: Colors.blue[700],
+                          color: LegacyThemeColors.primary(
+                            context,
+                            Colors.blue[700]!,
+                          ),
                           height: 1,
                         ),
                       ),
@@ -959,7 +1037,10 @@ class DailyHoursScreenState extends State<DailyHoursScreen>
                         style: TextStyle(
                           fontSize: 20,
                           fontWeight: FontWeight.w500,
-                          color: Colors.blue[600],
+                          color: LegacyThemeColors.primary(
+                            context,
+                            Colors.blue[600]!,
+                          ),
                         ),
                       ),
                     ],
@@ -974,7 +1055,10 @@ class DailyHoursScreenState extends State<DailyHoursScreen>
                     '已完成 ${WorkTimeCalculator.formatHours(hours / 8 * 100)}%',
                     style: TextStyle(
                       fontSize: 16,
-                      color: Colors.grey[600],
+                      color: LegacyThemeColors.muted(
+                        context,
+                        Colors.grey[600]!,
+                      ),
                       fontWeight: FontWeight.w500,
                     ),
                   ),
@@ -990,7 +1074,10 @@ class DailyHoursScreenState extends State<DailyHoursScreen>
           const SizedBox(height: 12),
           Card(
             elevation: 2,
-            color: Colors.blue[50],
+            color: LegacyThemeColors.primaryContainer(
+              context,
+              Colors.blue[50]!,
+            ),
             shape: RoundedRectangleBorder(
               borderRadius: BorderRadius.circular(12),
             ),
@@ -998,7 +1085,14 @@ class DailyHoursScreenState extends State<DailyHoursScreen>
               padding: const EdgeInsets.all(16),
               child: Row(
                 children: [
-                  Icon(Icons.edit_calendar, color: Colors.blue[700], size: 24),
+                  Icon(
+                    Icons.edit_calendar,
+                    color: LegacyThemeColors.primary(
+                      context,
+                      Colors.blue[700]!,
+                    ),
+                    size: 24,
+                  ),
                   const SizedBox(width: 12),
                   Expanded(
                     child: Column(
@@ -1008,7 +1102,10 @@ class DailyHoursScreenState extends State<DailyHoursScreen>
                           '自定义工时时间',
                           style: TextStyle(
                             fontSize: 12,
-                            color: Colors.blue[600],
+                            color: LegacyThemeColors.primary(
+                              context,
+                              Colors.blue[600]!,
+                            ),
                           ),
                         ),
                         const SizedBox(height: 4),
@@ -1017,7 +1114,10 @@ class DailyHoursScreenState extends State<DailyHoursScreen>
                           style: TextStyle(
                             fontSize: 18,
                             fontWeight: FontWeight.bold,
-                            color: Colors.blue[700],
+                            color: LegacyThemeColors.primary(
+                              context,
+                              Colors.blue[700]!,
+                            ),
                           ),
                         ),
                       ],
@@ -1061,9 +1161,12 @@ class DailyHoursScreenState extends State<DailyHoursScreen>
                     children: [
                       Icon(Icons.login, color: Colors.green[600], size: 20),
                       const SizedBox(height: 8),
-                      const Text(
+                      Text(
                         '上班打卡',
-                        style: TextStyle(fontSize: 12, color: Colors.grey),
+                        style: TextStyle(
+                          fontSize: 12,
+                          color: LegacyThemeColors.muted(context, Colors.grey),
+                        ),
                       ),
                       const SizedBox(height: 4),
                       Text(
@@ -1077,7 +1180,11 @@ class DailyHoursScreenState extends State<DailyHoursScreen>
                     ],
                   ),
                 ),
-                Container(width: 1, height: 50, color: Colors.grey[300]),
+                Container(
+                  width: 1,
+                  height: 50,
+                  color: LegacyThemeColors.border(context, Colors.grey[300]!),
+                ),
                 Expanded(
                   child: Column(
                     children: [
@@ -1085,13 +1192,19 @@ class DailyHoursScreenState extends State<DailyHoursScreen>
                         Icons.logout,
                         color: checkOut != null
                             ? Colors.orange[600]
-                            : Colors.grey[400],
+                            : LegacyThemeColors.border(
+                                context,
+                                Colors.grey[400]!,
+                              ),
                         size: 20,
                       ),
                       const SizedBox(height: 8),
-                      const Text(
+                      Text(
                         '下班打卡',
-                        style: TextStyle(fontSize: 12, color: Colors.grey),
+                        style: TextStyle(
+                          fontSize: 12,
+                          color: LegacyThemeColors.muted(context, Colors.grey),
+                        ),
                       ),
                       const SizedBox(height: 4),
                       Text(
@@ -1101,7 +1214,10 @@ class DailyHoursScreenState extends State<DailyHoursScreen>
                           fontWeight: FontWeight.bold,
                           color: checkOut != null
                               ? Colors.orange[700]
-                              : Colors.grey[400],
+                              : LegacyThemeColors.border(
+                                  context,
+                                  Colors.grey[400]!,
+                                ),
                         ),
                       ),
                     ],
@@ -1162,7 +1278,7 @@ class DailyHoursScreenState extends State<DailyHoursScreen>
             // 信息1: 实际打卡工时
             _buildEstimateRow(
               icon: Icons.fact_check,
-              iconColor: Colors.blue[700]!,
+              iconColor: LegacyThemeColors.primary(context, Colors.blue[700]!),
               label: '按照打卡时间',
               hours: actualHours,
               percentage: actualPercentageRaw,
@@ -1211,7 +1327,7 @@ class DailyHoursScreenState extends State<DailyHoursScreen>
                 style: TextStyle(
                   fontSize: 13,
                   fontWeight: FontWeight.w500,
-                  color: Colors.grey[700],
+                  color: LegacyThemeColors.muted(context, Colors.grey[700]!),
                 ),
                 maxLines: 1,
                 overflow: TextOverflow.ellipsis,
@@ -1281,7 +1397,11 @@ class DailyHoursScreenState extends State<DailyHoursScreen>
       children: [
         Row(
           children: [
-            Icon(Icons.assessment, color: Colors.blue[700], size: 20),
+            Icon(
+              Icons.assessment,
+              color: LegacyThemeColors.primary(context, Colors.blue[700]!),
+              size: 20,
+            ),
             const SizedBox(width: 8),
             const Text(
               '当日统计',
@@ -1300,9 +1420,12 @@ class DailyHoursScreenState extends State<DailyHoursScreen>
                 Row(
                   mainAxisAlignment: MainAxisAlignment.spaceBetween,
                   children: [
-                    const Text(
+                    Text(
                       '工时完成率',
-                      style: TextStyle(fontSize: 13, color: Colors.grey),
+                      style: TextStyle(
+                        fontSize: 13,
+                        color: LegacyThemeColors.muted(context, Colors.grey),
+                      ),
                     ),
                     Text(
                       '${WorkTimeCalculator.formatHours(completionRaw)}%',
@@ -1317,7 +1440,10 @@ class DailyHoursScreenState extends State<DailyHoursScreen>
                 const SizedBox(height: 12),
                 LinearProgressIndicator(
                   value: (completionRaw / 100).clamp(0.0, 1.0),
-                  backgroundColor: Colors.grey[200],
+                  backgroundColor: LegacyThemeColors.inset(
+                    context,
+                    Colors.grey[200]!,
+                  ),
                   valueColor: AlwaysStoppedAnimation<Color>(
                     getCompletionColor(),
                   ),
@@ -1338,7 +1464,14 @@ class DailyHoursScreenState extends State<DailyHoursScreen>
                         Colors.blue,
                       ),
                     ),
-                    Container(width: 1, height: 50, color: Colors.grey[300]),
+                    Container(
+                      width: 1,
+                      height: 50,
+                      color: LegacyThemeColors.border(
+                        context,
+                        Colors.grey[300]!,
+                      ),
+                    ),
                     Expanded(
                       child: _buildStatItem(
                         '上班时长',
@@ -1354,7 +1487,10 @@ class DailyHoursScreenState extends State<DailyHoursScreen>
                   Container(
                     padding: const EdgeInsets.all(8),
                     decoration: BoxDecoration(
-                      color: Colors.amber[50],
+                      color: LegacyThemeColors.panel(
+                        context,
+                        Colors.amber[50]!,
+                      ),
                       borderRadius: BorderRadius.circular(8),
                     ),
                     child: Row(
@@ -1381,19 +1517,32 @@ class DailyHoursScreenState extends State<DailyHoursScreen>
                   Container(
                     padding: const EdgeInsets.all(8),
                     decoration: BoxDecoration(
-                      color: Colors.blue[50],
+                      color: LegacyThemeColors.primaryContainer(
+                        context,
+                        Colors.blue[50]!,
+                      ),
                       borderRadius: BorderRadius.circular(8),
                     ),
                     child: Row(
                       children: [
-                        Icon(Icons.edit, size: 16, color: Colors.blue[700]),
+                        Icon(
+                          Icons.edit,
+                          size: 16,
+                          color: LegacyThemeColors.primary(
+                            context,
+                            Colors.blue[700]!,
+                          ),
+                        ),
                         const SizedBox(width: 8),
                         Expanded(
                           child: Text(
                             '自定义: ${_dayData?['customCheckIn'] ?? '09:00'} - ${_dayData?['customCheckOut'] ?? '18:00'}',
                             style: TextStyle(
                               fontSize: 12,
-                              color: Colors.blue[700],
+                              color: LegacyThemeColors.primary(
+                                context,
+                                Colors.blue[700]!,
+                              ),
                             ),
                           ),
                         ),
@@ -1420,7 +1569,13 @@ class DailyHoursScreenState extends State<DailyHoursScreen>
       children: [
         Icon(icon, color: color, size: 24),
         const SizedBox(height: 8),
-        Text(label, style: const TextStyle(fontSize: 11, color: Colors.grey)),
+        Text(
+          label,
+          style: TextStyle(
+            fontSize: 11,
+            color: LegacyThemeColors.muted(context, Colors.grey),
+          ),
+        ),
         const SizedBox(height: 4),
         Text(
           value,
@@ -1482,7 +1637,11 @@ class DailyHoursScreenState extends State<DailyHoursScreen>
       children: [
         Row(
           children: [
-            Icon(Icons.flag, color: Colors.blue[700], size: 20),
+            Icon(
+              Icons.flag,
+              color: LegacyThemeColors.primary(context, Colors.blue[700]!),
+              size: 20,
+            ),
             const SizedBox(width: 8),
             const Text(
               '目标进度',
@@ -1491,7 +1650,10 @@ class DailyHoursScreenState extends State<DailyHoursScreen>
             const SizedBox(width: 4),
             Text(
               '(长按置顶)',
-              style: TextStyle(fontSize: 11, color: Colors.grey[500]),
+              style: TextStyle(
+                fontSize: 11,
+                color: LegacyThemeColors.muted(context, Colors.grey[500]!),
+              ),
             ),
             const Spacer(),
             // 时间计算方式开关
@@ -1503,7 +1665,7 @@ class DailyHoursScreenState extends State<DailyHoursScreen>
                   style: TextStyle(
                     fontSize: 12,
                     color: _useCheckInTime
-                        ? Colors.blue[700]
+                        ? LegacyThemeColors.primary(context, Colors.blue[700]!)
                         : Colors.orange[700],
                     fontWeight: FontWeight.bold,
                   ),
@@ -1662,7 +1824,9 @@ class DailyHoursScreenState extends State<DailyHoursScreen>
         _togglePinnedTarget(target);
       },
       child: Card(
-        color: isBaseTarget && !isCompleted ? Colors.orange[50] : Colors.white,
+        color: isBaseTarget && !isCompleted
+            ? LegacyThemeColors.panel(context, Colors.orange[50]!)
+            : LegacyThemeColors.surface(context, Colors.white),
         shape: actualBorderColor() != null
             ? RoundedRectangleBorder(
                 borderRadius: BorderRadius.circular(4),
@@ -1741,7 +1905,13 @@ class DailyHoursScreenState extends State<DailyHoursScreen>
                   const Spacer(),
                   Text(
                     '${WorkTimeCalculator.formatHours(currentHours)} / ${WorkTimeCalculator.formatHours(targetHours)}h',
-                    style: TextStyle(fontSize: 12, color: Colors.grey[700]),
+                    style: TextStyle(
+                      fontSize: 12,
+                      color: LegacyThemeColors.muted(
+                        context,
+                        Colors.grey[700]!,
+                      ),
+                    ),
                   ),
                 ],
               ),
@@ -1774,7 +1944,10 @@ class DailyHoursScreenState extends State<DailyHoursScreen>
                   const SizedBox(height: 4),
                   LinearProgressIndicator(
                     value: progress.clamp(0.0, 1.0),
-                    backgroundColor: Colors.grey[200],
+                    backgroundColor: LegacyThemeColors.inset(
+                      context,
+                      Colors.grey[200]!,
+                    ),
                     valueColor: AlwaysStoppedAnimation<Color>(
                       getProgressColor(),
                     ),
@@ -2080,7 +2253,10 @@ class _EditDayDialogState extends State<_EditDayDialog> {
                   selected: isSelected,
                   backgroundColor: typeColor.withValues(alpha: 0.2),
                   selectedColor: typeColor,
-                  disabledColor: Colors.grey.withValues(alpha: 0.1),
+                  disabledColor: LegacyThemeColors.muted(
+                    context,
+                    Colors.grey,
+                  ).withValues(alpha: 0.1),
                   onSelected: isDisabled
                       ? null
                       : (selected) async {
@@ -2176,9 +2352,15 @@ class _EditDayDialogState extends State<_EditDayDialog> {
                     child: Column(
                       crossAxisAlignment: CrossAxisAlignment.start,
                       children: [
-                        const Text(
+                        Text(
                           '上班',
-                          style: TextStyle(fontSize: 12, color: Colors.grey),
+                          style: TextStyle(
+                            fontSize: 12,
+                            color: LegacyThemeColors.muted(
+                              context,
+                              Colors.grey,
+                            ),
+                          ),
                         ),
                         const SizedBox(height: 4),
                         TextField(
@@ -2208,9 +2390,15 @@ class _EditDayDialogState extends State<_EditDayDialog> {
                     child: Column(
                       crossAxisAlignment: CrossAxisAlignment.start,
                       children: [
-                        const Text(
+                        Text(
                           '下班',
-                          style: TextStyle(fontSize: 12, color: Colors.grey),
+                          style: TextStyle(
+                            fontSize: 12,
+                            color: LegacyThemeColors.muted(
+                              context,
+                              Colors.grey,
+                            ),
+                          ),
                         ),
                         const SizedBox(height: 4),
                         TextField(
@@ -2353,7 +2541,7 @@ class _CongratulationsDialogState extends State<_CongratulationsDialog>
               child: Container(
                 padding: const EdgeInsets.all(24),
                 decoration: BoxDecoration(
-                  color: Colors.white,
+                  color: LegacyThemeColors.surface(context, Colors.white),
                   borderRadius: BorderRadius.circular(20),
                   boxShadow: [
                     BoxShadow(
@@ -2399,13 +2587,25 @@ class _CongratulationsDialogState extends State<_CongratulationsDialog>
 
                     Text(
                       '你已经掌握了下拉刷新的操作',
-                      style: TextStyle(fontSize: 16, color: Colors.grey[700]),
+                      style: TextStyle(
+                        fontSize: 16,
+                        color: LegacyThemeColors.muted(
+                          context,
+                          Colors.grey[700]!,
+                        ),
+                      ),
                     ),
                     const SizedBox(height: 8),
 
                     Text(
                       '接下来了解更多实用功能吧',
-                      style: TextStyle(fontSize: 14, color: Colors.grey[500]),
+                      style: TextStyle(
+                        fontSize: 14,
+                        color: LegacyThemeColors.muted(
+                          context,
+                          Colors.grey[500]!,
+                        ),
+                      ),
                     ),
                     const SizedBox(height: 24),
 
@@ -2415,8 +2615,14 @@ class _CongratulationsDialogState extends State<_CongratulationsDialog>
                       child: ElevatedButton(
                         onPressed: widget.onContinue,
                         style: ElevatedButton.styleFrom(
-                          backgroundColor: Colors.blue,
-                          foregroundColor: Colors.white,
+                          backgroundColor: LegacyThemeColors.primary(
+                            context,
+                            Colors.blue,
+                          ),
+                          foregroundColor: LegacyThemeColors.onPrimary(
+                            context,
+                            Colors.white,
+                          ),
                           padding: const EdgeInsets.symmetric(vertical: 14),
                           shape: RoundedRectangleBorder(
                             borderRadius: BorderRadius.circular(12),
@@ -2435,7 +2641,12 @@ class _CongratulationsDialogState extends State<_CongratulationsDialog>
                       onPressed: () => Navigator.of(context).pop(),
                       child: Text(
                         '稍后再看',
-                        style: TextStyle(color: Colors.grey[500]),
+                        style: TextStyle(
+                          color: LegacyThemeColors.muted(
+                            context,
+                            Colors.grey[500]!,
+                          ),
+                        ),
                       ),
                     ),
                   ],

@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 
+import '../core/theme/legacy_theme_colors.dart';
 import '../core/theme/theme.dart';
 import '../services/work_log_submit_service.dart';
 import '../utils/project_name_matcher.dart';
@@ -105,9 +106,9 @@ class WorkLogProjectPickerDialog {
                   crossAxisAlignment: CrossAxisAlignment.start,
                   mainAxisSize: MainAxisSize.min,
                   children: [
-                    _nameRow('CSV 里写的', csvProjectName),
+                    _nameRow(context, 'CSV 里写的', csvProjectName),
                     if (matches.isEmpty)
-                      ..._withoutList(constants, currentId)
+                      ..._withoutList(context, constants, currentId)
                     else ...[
                       const SizedBox(height: 4),
                       Text(
@@ -117,7 +118,13 @@ class WorkLogProjectPickerDialog {
                             : 'BOSS 里没有与它同名的项目。'
                                   '已扫到 ${matches.length} 个项目，'
                                   '按名称接近程度排列，请选出正确的那个：',
-                        style: TextStyle(fontSize: 12, color: Colors.grey[700]),
+                        style: TextStyle(
+                          fontSize: 12,
+                          color: LegacyThemeColors.muted(
+                            context,
+                            Colors.grey[700]!,
+                          ),
+                        ),
                       ),
                       if (matches.length > searchThreshold)
                         _searchField(
@@ -132,7 +139,10 @@ class WorkLogProjectPickerDialog {
                             '没有名称含「$keyword」的项目',
                             style: TextStyle(
                               fontSize: 12,
-                              color: Colors.grey[600],
+                              color: LegacyThemeColors.muted(
+                                context,
+                                Colors.grey[600]!,
+                              ),
                             ),
                           ),
                         ),
@@ -140,6 +150,7 @@ class WorkLogProjectPickerDialog {
                       // 因此不预先替用户下结论式地标注「推荐」
                       ...visible.map(
                         (m) => _candidate(
+                          context: context,
                           match: m,
                           selected: selected?.id == m.project.id,
                           current: m.project.id == currentId,
@@ -151,6 +162,7 @@ class WorkLogProjectPickerDialog {
                       // 审核人填错会把日志提交给错误的审批人，必须先说清楚
                       if (currentId.isNotEmpty && selected?.id != currentId)
                         _warning(
+                          context,
                           '你选的不是当前这份配置所属的项目。'
                           '确认后会重新查询这个项目的审核人，'
                           '请在提交前核对。',
@@ -159,7 +171,13 @@ class WorkLogProjectPickerDialog {
                     const SizedBox(height: 8),
                     Text(
                       '确认后会记住 CSV 的「$csvProjectName」对应它，之后不再询问。',
-                      style: TextStyle(fontSize: 11, color: Colors.grey[600]),
+                      style: TextStyle(
+                        fontSize: 11,
+                        color: LegacyThemeColors.muted(
+                          context,
+                          Colors.grey[600]!,
+                        ),
+                      ),
                     ),
                   ],
                 ),
@@ -238,16 +256,18 @@ class WorkLogProjectPickerDialog {
 
   /// 一个都没扫到时的退路：把当前配置摆出来做单项确认，不比以前差。
   static List<Widget> _withoutList(
+    BuildContext context,
     Map<String, String> constants,
     String currentId,
   ) {
     return [
-      _nameRow('BOSS 里学到的', constants['projectName'] ?? ''),
+      _nameRow(context, 'BOSS 里学到的', constants['projectName'] ?? ''),
       const SizedBox(height: 10),
-      _idRow('项目 ID', currentId),
-      _idRow('审核人', _auditorLabel(constants)),
+      _idRow(context, '项目 ID', currentId),
+      _idRow(context, '审核人', _auditorLabel(constants)),
       const SizedBox(height: 12),
       _warning(
+        context,
         '没能扫到 BOSS 的项目清单，也没找到与 CSV 同名的项目，'
         '上面这个是自动选中的一条。\n'
         '如果你在 BOSS 做过多个项目，它可能不是你要的那个——'
@@ -297,6 +317,7 @@ class WorkLogProjectPickerDialog {
   /// 匹配档位用文字说明而不是打分：分数会被读成「有多大把握」，
   /// 而这件事本质上不是概率——是不是同一个项目只有用户知道。
   static Widget _candidate({
+    required BuildContext context,
     required ProjectMatch match,
     required bool selected,
     required bool current,
@@ -308,10 +329,14 @@ class WorkLogProjectPickerDialog {
         margin: const EdgeInsets.only(bottom: 6),
         padding: const EdgeInsets.all(10),
         decoration: BoxDecoration(
-          color: selected ? AppColors.infoLight : null,
+          color: selected
+              ? LegacyThemeColors.primaryContainer(context, AppColors.infoLight)
+              : null,
           borderRadius: BorderRadius.circular(8),
           border: Border.all(
-            color: selected ? AppColors.info : Colors.grey.shade300,
+            color: selected
+                ? LegacyThemeColors.primary(context, AppColors.info)
+                : LegacyThemeColors.border(context, Colors.grey.shade300),
           ),
         ),
         child: Row(
@@ -322,7 +347,9 @@ class WorkLogProjectPickerDialog {
                   ? Icons.radio_button_checked
                   : Icons.radio_button_unchecked,
               size: 18,
-              color: selected ? AppColors.info : Colors.grey,
+              color: selected
+                  ? LegacyThemeColors.primary(context, AppColors.info)
+                  : LegacyThemeColors.muted(context, Colors.grey),
             ),
             const SizedBox(width: 8),
             Expanded(
@@ -339,14 +366,20 @@ class WorkLogProjectPickerDialog {
                   const SizedBox(height: 2),
                   Text(
                     match.level.label,
-                    style: TextStyle(fontSize: 10, color: Colors.grey[600]),
+                    style: TextStyle(
+                      fontSize: 10,
+                      color: LegacyThemeColors.muted(
+                        context,
+                        Colors.grey[600]!,
+                      ),
+                    ),
                   ),
                   SelectableText(
                     match.project.id,
-                    style: const TextStyle(
+                    style: TextStyle(
                       fontSize: 10,
                       fontFamily: 'monospace',
-                      color: Colors.grey,
+                      color: LegacyThemeColors.muted(context, Colors.grey),
                     ),
                   ),
                   // 当前这份配置（含审核人）就是随它一起来的；
@@ -368,11 +401,11 @@ class WorkLogProjectPickerDialog {
     );
   }
 
-  static Widget _warning(String text) {
+  static Widget _warning(BuildContext context, String text) {
     return Container(
       padding: const EdgeInsets.all(10),
       decoration: BoxDecoration(
-        color: AppColors.warningLight,
+        color: LegacyThemeColors.panel(context, AppColors.warningLight),
         borderRadius: BorderRadius.circular(8),
         border: Border.all(color: AppColors.warning),
       ),
@@ -383,13 +416,19 @@ class WorkLogProjectPickerDialog {
     );
   }
 
-  static Widget _nameRow(String label, String value) {
+  static Widget _nameRow(BuildContext context, String label, String value) {
     return Padding(
       padding: const EdgeInsets.only(bottom: 6),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          Text(label, style: const TextStyle(fontSize: 11, color: Colors.grey)),
+          Text(
+            label,
+            style: TextStyle(
+              fontSize: 11,
+              color: LegacyThemeColors.muted(context, Colors.grey),
+            ),
+          ),
           Text(
             value.isEmpty ? '（空）' : value,
             style: const TextStyle(fontSize: 14, fontWeight: FontWeight.w600),
@@ -400,7 +439,7 @@ class WorkLogProjectPickerDialog {
   }
 
   /// ID 用等宽小字：它是拿来逐字核对的，不是拿来读的。
-  static Widget _idRow(String label, String value) {
+  static Widget _idRow(BuildContext context, String label, String value) {
     return Padding(
       padding: const EdgeInsets.only(bottom: 4),
       child: Row(
@@ -410,7 +449,10 @@ class WorkLogProjectPickerDialog {
             width: 64,
             child: Text(
               label,
-              style: const TextStyle(fontSize: 11, color: Colors.grey),
+              style: TextStyle(
+                fontSize: 11,
+                color: LegacyThemeColors.muted(context, Colors.grey),
+              ),
             ),
           ),
           Expanded(

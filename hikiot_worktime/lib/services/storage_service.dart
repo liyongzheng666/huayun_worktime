@@ -53,6 +53,28 @@ class StorageService {
   static const String _legacyEveningHour = 'evening_alarm_hour';
   static const String _legacyEveningMinute = 'evening_alarm_minute';
 
+  static const String _appSkinKey = 'ios_app_skin';
+
+  /// 主题单独保存，避免工时设置整份写入时覆盖外观选择。
+  Future<String?> loadAppSkinId() async {
+    final prefs = await SharedPreferences.getInstance();
+    final value = prefs.get(_appSkinKey);
+    return value is String ? value : null;
+  }
+
+  Future<void> saveAppSkinId(String id) async {
+    final prefs = await SharedPreferences.getInstance();
+    try {
+      if (!await prefs.setString(_appSkinKey, id)) {
+        throw StateError('主题保存失败');
+      }
+    } catch (_) {
+      // 插件先改内存缓存再写磁盘；失败时重新读取，避免下次加载误用失败值。
+      await prefs.reload();
+      rethrow;
+    }
+  }
+
   Future<void> saveBaseTarget(int target) async {
     final prefs = await SharedPreferences.getInstance();
     await prefs.setInt(StorageKeys.baseTarget, target);

@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 
+import '../core/theme/legacy_theme_colors.dart';
 import '../core/theme/theme.dart';
 import '../services/work_log_repository.dart';
 import '../utils/date_helper.dart';
@@ -126,7 +127,10 @@ class WorkLogConfirmDialog {
                       margin: const EdgeInsets.only(bottom: 10),
                       padding: const EdgeInsets.all(10),
                       decoration: BoxDecoration(
-                        color: AppColors.warningLight,
+                        color: LegacyThemeColors.panel(
+                          context,
+                          AppColors.warningLight,
+                        ),
                         borderRadius: BorderRadius.circular(8),
                         border: Border.all(color: AppColors.warning),
                       ),
@@ -145,13 +149,20 @@ class WorkLogConfirmDialog {
                       padding: const EdgeInsets.only(bottom: 10),
                       child: Text(
                         '未能确认当天是否已填报，本次将暂缓提交，请稍后重试。',
-                        style: TextStyle(fontSize: 11, color: Colors.grey[600]),
+                        style: TextStyle(
+                          fontSize: 11,
+                          color: LegacyThemeColors.muted(
+                            context,
+                            Colors.grey[600]!,
+                          ),
+                        ),
                       ),
                     ),
                   // 项目与审核人是这里最有后果的两项：填错项目会把工时记到
                   // 别的项目名下，填错审核人会把日志提交给错误的审批人。
                   // 两者都不是用户输入的，而是 APP 自动查来的，因此必须让他能核对。
                   _buildProjectRow(
+                    context: context,
                     csvName: entry.projectName,
                     bossName: constants['projectName'] ?? '',
                     projectId: constants['projectId'] ?? '',
@@ -163,6 +174,7 @@ class WorkLogConfirmDialog {
                         : null,
                   ),
                   _buildAuditorRow(
+                    context: context,
                     constants: constants,
                     onChange: canChangeAuditor
                         ? () => Navigator.pop(
@@ -171,18 +183,20 @@ class WorkLogConfirmDialog {
                           )
                         : null,
                   ),
-                  _confirmRow('标题', entry.title),
-                  _confirmRow('工作类型', entry.workType),
-                  _confirmRow('项目阶段', entry.stage),
-                  _confirmRow('阶段活动', entry.activity),
+                  _confirmRow(context, '标题', entry.title),
+                  _confirmRow(context, '工作类型', entry.workType),
+                  _confirmRow(context, '项目阶段', entry.stage),
+                  _confirmRow(context, '阶段活动', entry.activity),
                   if (canUseNow)
                     _buildSourceSwitch(
+                      context: context,
                       useCheckIn: useCheckIn,
                       punchText: punchText,
                       nowText: nowText,
                       onSwitch: switchSource,
                     ),
                   _buildHoursField(
+                    context: context,
                     controller: hoursController,
                     sourceText: sourceText,
                     sourceLabel: useCheckIn || !canUseNow ? '打卡工时' : '按当前时间',
@@ -191,6 +205,7 @@ class WorkLogConfirmDialog {
                     onChanged: () => setDialogState(() {}),
                   ),
                   _buildStepHint(
+                    context: context,
                     parsed: parsed,
                     // 手改过工时之后，参照时刻和输入框里的数已经对不上，
                     // 再给「几点」只会指向一个错的时间。
@@ -204,7 +219,7 @@ class WorkLogConfirmDialog {
                               : DateHelper.nowClock(now: now)),
                   ),
                   const Divider(),
-                  _confirmRow('工作内容', entry.content),
+                  _confirmRow(context, '工作内容', entry.content),
                 ],
               ),
             ),
@@ -252,6 +267,7 @@ class WorkLogConfirmDialog {
   /// 两个选项都把各自算出来的小时数写在标签上，切换前就能看清差多少，
   /// 不用切过去才知道。
   static Widget _buildSourceSwitch({
+    required BuildContext context,
     required bool useCheckIn,
     required String punchText,
     required String nowText,
@@ -262,9 +278,12 @@ class WorkLogConfirmDialog {
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          const Text(
+          Text(
             '工时来源',
-            style: TextStyle(fontSize: 11, color: Colors.grey),
+            style: TextStyle(
+              fontSize: 11,
+              color: LegacyThemeColors.muted(context, Colors.grey),
+            ),
           ),
           const SizedBox(height: 4),
           // Wrap 而非 Row：两个按钮带上小时数之后不算短，
@@ -274,11 +293,13 @@ class WorkLogConfirmDialog {
             runSpacing: 6,
             children: [
               _sourceChip(
+                context: context,
                 label: punchText.isEmpty ? '打卡（无数据）' : '打卡 $punchText h',
                 selected: useCheckIn,
                 onTap: () => onSwitch(true),
               ),
               _sourceChip(
+                context: context,
                 label: nowText.isEmpty ? '当前时间（算不出）' : '当前时间 $nowText h',
                 selected: !useCheckIn,
                 onTap: () => onSwitch(false),
@@ -291,6 +312,7 @@ class WorkLogConfirmDialog {
   }
 
   static Widget _sourceChip({
+    required BuildContext context,
     required String label,
     required bool selected,
     required VoidCallback onTap,
@@ -301,10 +323,14 @@ class WorkLogConfirmDialog {
       child: Container(
         padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
         decoration: BoxDecoration(
-          color: selected ? AppColors.infoLight : null,
+          color: selected
+              ? LegacyThemeColors.primaryContainer(context, AppColors.infoLight)
+              : null,
           borderRadius: BorderRadius.circular(16),
           border: Border.all(
-            color: selected ? AppColors.info : Colors.grey.shade300,
+            color: selected
+                ? LegacyThemeColors.primary(context, AppColors.info)
+                : LegacyThemeColors.border(context, Colors.grey.shade300),
             width: selected ? 1.5 : 1,
           ),
         ),
@@ -316,7 +342,9 @@ class WorkLogConfirmDialog {
                   ? Icons.radio_button_checked
                   : Icons.radio_button_unchecked,
               size: 14,
-              color: selected ? AppColors.info : Colors.grey,
+              color: selected
+                  ? LegacyThemeColors.primary(context, AppColors.info)
+                  : LegacyThemeColors.muted(context, Colors.grey),
             ),
             const SizedBox(width: 4),
             Text(
@@ -324,7 +352,9 @@ class WorkLogConfirmDialog {
               style: TextStyle(
                 fontSize: 12,
                 fontWeight: selected ? FontWeight.w600 : null,
-                color: selected ? AppColors.infoDark : Colors.grey[700],
+                color: selected
+                    ? LegacyThemeColors.primary(context, AppColors.infoDark)
+                    : LegacyThemeColors.muted(context, Colors.grey[700]!),
               ),
             ),
           ],
@@ -338,6 +368,7 @@ class WorkLogConfirmDialog {
   /// 来源值作为默认值和参照同时显示：改过之后仍能看到原始值是多少，
   /// 否则用户改完就无从判断自己偏离了多少。
   static Widget _buildHoursField({
+    required BuildContext context,
     required TextEditingController controller,
     required String sourceText,
     required String sourceLabel,
@@ -359,7 +390,13 @@ class WorkLogConfirmDialog {
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          const Text('工时', style: TextStyle(fontSize: 11, color: Colors.grey)),
+          Text(
+            '工时',
+            style: TextStyle(
+              fontSize: 11,
+              color: LegacyThemeColors.muted(context, Colors.grey),
+            ),
+          ),
           TextField(
             controller: controller,
             autofocus: false,
@@ -371,7 +408,9 @@ class WorkLogConfirmDialog {
               helperText: parsed == null ? null : helper,
               helperStyle: TextStyle(
                 fontSize: 10,
-                color: edited ? AppColors.warningDark : Colors.grey[600],
+                color: edited
+                    ? AppColors.warningDark
+                    : LegacyThemeColors.muted(context, Colors.grey[600]!),
               ),
               // 非法时说清楚合法范围，而不是只说「错了」
               errorText: parsed == null ? '请填 0 到 24 之间的数字' : null,
@@ -393,6 +432,7 @@ class WorkLogConfirmDialog {
   /// [onChange] 非空时右侧给出「改选」。发现绑错了却只能眼看着提交，
   /// 或者跑去手填一串 `PROJECT_xxxxxxxx`，都不该是这里的唯一出路。
   static Widget _buildProjectRow({
+    required BuildContext context,
     required String csvName,
     required String bossName,
     String projectId = '',
@@ -409,9 +449,12 @@ class WorkLogConfirmDialog {
         children: [
           Row(
             children: [
-              const Text(
+              Text(
                 '项目',
-                style: TextStyle(fontSize: 11, color: Colors.grey),
+                style: TextStyle(
+                  fontSize: 11,
+                  color: LegacyThemeColors.muted(context, Colors.grey),
+                ),
               ),
               const Spacer(),
               if (onChange != null)
@@ -437,7 +480,10 @@ class WorkLogConfirmDialog {
           if (differs)
             Text(
               'CSV 里写的是「$csvName」，已按 BOSS 的名称提交',
-              style: TextStyle(fontSize: 10, color: Colors.grey[600]),
+              style: TextStyle(
+                fontSize: 10,
+                color: LegacyThemeColors.muted(context, Colors.grey[600]!),
+              ),
             ),
           // 没有 BOSS 项目名时，上面显示的其实是 CSV 的写法，**没有任何东西
           // 证明它和 PROJECTID 指向同一个项目**。这里必须说破：以前不说，
@@ -464,6 +510,7 @@ class WorkLogConfirmDialog {
   /// **只有 ID 没有姓名时要说破**：显示成空白会让人以为是渲染问题，
   /// 而这里的空白恰恰意味着「没法用肉眼核对是不是对的人」。
   static Widget _buildAuditorRow({
+    required BuildContext context,
     required Map<String, String> constants,
     VoidCallback? onChange,
   }) {
@@ -477,9 +524,12 @@ class WorkLogConfirmDialog {
         children: [
           Row(
             children: [
-              const Text(
+              Text(
                 '审核人',
-                style: TextStyle(fontSize: 11, color: Colors.grey),
+                style: TextStyle(
+                  fontSize: 11,
+                  color: LegacyThemeColors.muted(context, Colors.grey),
+                ),
               ),
               const Spacer(),
               if (onChange != null)
@@ -530,6 +580,7 @@ class WorkLogConfirmDialog {
   /// 下班打卡时刻，按当前时间算时就是此刻。给错了，「打卡到几点」会指向
   /// 一个用户照着做反而更错的时间。
   static Widget _buildStepHint({
+    required BuildContext context,
     required double? parsed,
     required String? baseClock,
   }) {
@@ -543,7 +594,10 @@ class WorkLogConfirmDialog {
         padding: const EdgeInsets.only(top: 2, bottom: 8),
         child: Text(
           '工时已是 0.1 小时的整数倍，不用再等',
-          style: TextStyle(fontSize: 11, color: Colors.grey[600]),
+          style: TextStyle(
+            fontSize: 11,
+            color: LegacyThemeColors.muted(context, Colors.grey[600]!),
+          ),
         ),
       );
     }
@@ -562,9 +616,11 @@ class WorkLogConfirmDialog {
       margin: const EdgeInsets.only(top: 2, bottom: 8),
       padding: const EdgeInsets.all(10),
       decoration: BoxDecoration(
-        color: AppColors.infoLight,
+        color: LegacyThemeColors.primaryContainer(context, AppColors.infoLight),
         borderRadius: BorderRadius.circular(8),
-        border: Border.all(color: AppColors.info),
+        border: Border.all(
+          color: LegacyThemeColors.primary(context, AppColors.info),
+        ),
       ),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
@@ -573,7 +629,7 @@ class WorkLogConfirmDialog {
             '💡 再待 $needMinutes 分钟可凑满 $target 小时',
             style: TextStyle(
               fontSize: 12,
-              color: AppColors.infoDark,
+              color: LegacyThemeColors.primary(context, AppColors.infoDark),
               fontWeight: FontWeight.w600,
             ),
           ),
@@ -583,7 +639,10 @@ class WorkLogConfirmDialog {
               padding: const EdgeInsets.only(top: 4),
               child: Text(
                 '打卡到 $targetClock 后下拉刷新本页，再提交',
-                style: TextStyle(fontSize: 11, color: AppColors.infoDark),
+                style: TextStyle(
+                  fontSize: 11,
+                  color: LegacyThemeColors.primary(context, AppColors.infoDark),
+                ),
               ),
             ),
         ],
@@ -591,13 +650,19 @@ class WorkLogConfirmDialog {
     );
   }
 
-  static Widget _confirmRow(String label, String value) {
+  static Widget _confirmRow(BuildContext context, String label, String value) {
     return Padding(
       padding: const EdgeInsets.only(bottom: 6),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          Text(label, style: const TextStyle(fontSize: 11, color: Colors.grey)),
+          Text(
+            label,
+            style: TextStyle(
+              fontSize: 11,
+              color: LegacyThemeColors.muted(context, Colors.grey),
+            ),
+          ),
           Text(
             value.isEmpty ? '（空）' : value,
             style: const TextStyle(fontSize: 13),

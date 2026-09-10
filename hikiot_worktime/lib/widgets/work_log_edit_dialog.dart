@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 
+import '../core/theme/legacy_theme_colors.dart';
 import '../utils/work_log_edit_script.dart';
 import '../utils/work_time_calculator.dart';
 
@@ -92,7 +93,10 @@ class _WorkLogEditDialogBodyState extends State<_WorkLogEditDialogBody> {
             if (record.projectName.isNotEmpty) ...[
               Text(
                 record.projectName,
-                style: TextStyle(fontSize: 12, color: Colors.grey[600]),
+                style: TextStyle(
+                  fontSize: 12,
+                  color: LegacyThemeColors.muted(context, Colors.grey[600]!),
+                ),
               ),
               const SizedBox(height: 12),
             ],
@@ -131,7 +135,10 @@ class _WorkLogEditDialogBodyState extends State<_WorkLogEditDialogBody> {
             const SizedBox(height: 8),
             Text(
               '保存会修改 BOSS 中原来的记录，不会新增日志。',
-              style: TextStyle(fontSize: 11, color: Colors.grey[600]),
+              style: TextStyle(
+                fontSize: 11,
+                color: LegacyThemeColors.muted(context, Colors.grey[600]!),
+              ),
             ),
           ],
         ),

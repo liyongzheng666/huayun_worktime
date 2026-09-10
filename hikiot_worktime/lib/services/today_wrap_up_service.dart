@@ -34,6 +34,7 @@ class TodayWrapUpService {
     return TodayWrapUpData(
       date: date,
       hasEntry: entries.containsKey(DateHelper.formatDate(date)),
+      entry: entries[DateHelper.formatDate(date)],
       cachedBossHours: cache[DateHelper.formatDate(date)],
       cachedAt: cachedAt,
     );
@@ -66,6 +67,7 @@ class TodayWrapUpService {
     return TodayWrapUpData(
       date: date,
       hasEntry: local.hasEntry,
+      entry: local.entry,
       bossStatus: confirmed
           ? hours > 0
                 ? TodayBossStatus.submitted

@@ -3,6 +3,7 @@ import 'dart:async';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:intl/intl.dart';
+import '../core/theme/legacy_theme_colors.dart';
 import '../core/constants/constants.dart';
 import '../core/theme/theme.dart';
 import '../services/hikiot_api_client.dart';
@@ -701,7 +702,13 @@ class MonthlyCalendarScreenState extends State<MonthlyCalendarScreen> {
             Text(
               isTokenExpired ? '您的登录凭证已过期，请重新登录以继续使用' : _error ?? '未知错误',
               textAlign: TextAlign.center,
-              style: TextStyle(fontSize: 14, color: AppColors.textSecondary),
+              style: TextStyle(
+                fontSize: 14,
+                color: LegacyThemeColors.muted(
+                  context,
+                  AppColors.textSecondary,
+                ),
+              ),
             ),
             const SizedBox(height: 8),
             if (!isTokenExpired)
@@ -720,8 +727,14 @@ class MonthlyCalendarScreenState extends State<MonthlyCalendarScreen> {
                   icon: const Icon(Icons.login),
                   label: const Text('重新登录'),
                   style: ElevatedButton.styleFrom(
-                    backgroundColor: AppColors.primary,
-                    foregroundColor: AppColors.onPrimary,
+                    backgroundColor: LegacyThemeColors.primary(
+                      context,
+                      AppColors.primary,
+                    ),
+                    foregroundColor: LegacyThemeColors.onPrimary(
+                      context,
+                      AppColors.onPrimary,
+                    ),
                     padding: const EdgeInsets.symmetric(vertical: 14),
                     shape: RoundedRectangleBorder(
                       borderRadius: BorderRadius.circular(10),
@@ -771,7 +784,10 @@ class MonthlyCalendarScreenState extends State<MonthlyCalendarScreen> {
     return Scaffold(
       appBar: AppBar(
         title: const Text('月度统计'),
-        backgroundColor: Theme.of(context).colorScheme.inversePrimary,
+        backgroundColor: LegacyThemeColors.surface(
+          context,
+          Theme.of(context).colorScheme.inversePrimary,
+        ),
       ),
       body: _isLoading
           ? const Center(child: CircularProgressIndicator())
@@ -827,7 +843,10 @@ class MonthlyCalendarScreenState extends State<MonthlyCalendarScreen> {
                     _teamName ?? '未知',
                     style: TextStyle(
                       fontSize: 14,
-                      color: AppColors.textSecondary,
+                      color: LegacyThemeColors.muted(
+                        context,
+                        AppColors.textSecondary,
+                      ),
                     ),
                   ),
                 ],
@@ -962,7 +981,10 @@ class MonthlyCalendarScreenState extends State<MonthlyCalendarScreen> {
                           day,
                           style: TextStyle(
                             fontWeight: FontWeight.bold,
-                            color: AppColors.textSecondary,
+                            color: LegacyThemeColors.muted(
+                              context,
+                              AppColors.textSecondary,
+                            ),
                           ),
                         ),
                       ),
@@ -1018,7 +1040,7 @@ class MonthlyCalendarScreenState extends State<MonthlyCalendarScreen> {
             Container(
               padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
               decoration: BoxDecoration(
-                color: AppColors.warningLight,
+                color: LegacyThemeColors.panel(context, AppColors.warningLight),
                 borderRadius: BorderRadius.circular(8),
                 border: Border.all(
                   color: AppColors.warning.withValues(alpha: 0.5),
@@ -1087,7 +1109,7 @@ class MonthlyCalendarScreenState extends State<MonthlyCalendarScreen> {
         break;
       case '非工作日':
       default:
-        bgColor = Colors.grey.shade200;
+        bgColor = LegacyThemeColors.inset(context, Colors.grey.shade200);
         break;
     }
 
@@ -1103,7 +1125,7 @@ class MonthlyCalendarScreenState extends State<MonthlyCalendarScreen> {
 
     // 文字颜色 - 非工作日用深色文字，其他用白色
     final textColor = (dayType == AppConstants.typeRestDay || opacity < 0.5)
-        ? Colors.grey.shade800
+        ? LegacyThemeColors.text(context, Colors.grey.shade800)
         : Colors.white;
 
     return Container(
@@ -1198,7 +1220,7 @@ class MonthlyCalendarScreenState extends State<MonthlyCalendarScreen> {
     // 浅灰底的非工作日用中灰，否则近白的横条在浅底上等于隐形。
     final consistentColor = textColor == Colors.white
         ? const Color(0xFFEDEDED)
-        : Colors.grey.shade500;
+        : LegacyThemeColors.muted(context, Colors.grey.shade500);
 
     final Color barColor;
     if (mismatch) {
@@ -1262,17 +1284,24 @@ class MonthlyCalendarScreenState extends State<MonthlyCalendarScreen> {
       return Container(
         padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
         decoration: BoxDecoration(
-          color: Colors.grey.shade100,
+          color: LegacyThemeColors.surface(context, Colors.grey.shade100),
           borderRadius: BorderRadius.circular(8),
         ),
         child: Row(
           children: [
-            Icon(Icons.layers_outlined, size: 16, color: Colors.grey[600]),
+            Icon(
+              Icons.layers_outlined,
+              size: 16,
+              color: LegacyThemeColors.muted(context, Colors.grey[600]!),
+            ),
             const SizedBox(width: 8),
             Expanded(
               child: Text(
                 'BOSS 工时未同步，点「全量更新工时」可一并同步',
-                style: TextStyle(fontSize: 11, color: Colors.grey[700]),
+                style: TextStyle(
+                  fontSize: 11,
+                  color: LegacyThemeColors.muted(context, Colors.grey[700]!),
+                ),
               ),
             ),
           ],
@@ -1283,7 +1312,7 @@ class MonthlyCalendarScreenState extends State<MonthlyCalendarScreen> {
     return Container(
       padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
       decoration: BoxDecoration(
-        color: Colors.grey.shade100,
+        color: LegacyThemeColors.surface(context, Colors.grey.shade100),
         borderRadius: BorderRadius.circular(8),
       ),
       child: Column(
@@ -1293,7 +1322,7 @@ class MonthlyCalendarScreenState extends State<MonthlyCalendarScreen> {
             '数字为打卡工时，下方细条为 BOSS 填报状态（点某日看具体数值）',
             style: TextStyle(
               fontSize: 11,
-              color: Colors.grey[800],
+              color: LegacyThemeColors.text(context, Colors.grey[800]!),
               fontWeight: FontWeight.w600,
             ),
           ),
@@ -1302,11 +1331,21 @@ class MonthlyCalendarScreenState extends State<MonthlyCalendarScreen> {
             spacing: 14,
             runSpacing: 6,
             children: [
-              _legendItem(_legendBar(Colors.grey.shade400), '已填报'),
+              _legendItem(
+                _legendBar(
+                  LegacyThemeColors.border(context, Colors.grey.shade400),
+                ),
+                '已填报',
+              ),
               _legendItem(_legendBar(_missingColor), '已过期未填报'),
               _legendItem(_legendBar(_mismatchColor), '与打卡差超 0.1 小时'),
               _legendItem(
-                _legendBar(Colors.grey.shade800.withValues(alpha: 0.25)),
+                _legendBar(
+                  LegacyThemeColors.text(
+                    context,
+                    Colors.grey.shade800,
+                  ).withValues(alpha: 0.25),
+                ),
                 '今天/未来未填',
               ),
             ],
@@ -1333,7 +1372,13 @@ class MonthlyCalendarScreenState extends State<MonthlyCalendarScreen> {
       children: [
         SizedBox(width: 16, child: Center(child: sample)),
         const SizedBox(width: 5),
-        Text(label, style: TextStyle(fontSize: 10, color: Colors.grey[700])),
+        Text(
+          label,
+          style: TextStyle(
+            fontSize: 10,
+            color: LegacyThemeColors.muted(context, Colors.grey[700]!),
+          ),
+        ),
       ],
     );
   }
@@ -1355,10 +1400,14 @@ class MonthlyCalendarScreenState extends State<MonthlyCalendarScreen> {
       child: Container(
         padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
         decoration: BoxDecoration(
-          color: consistent ? Colors.grey[100] : AppColors.warningLight,
+          color: consistent
+              ? LegacyThemeColors.surface(context, Colors.grey[100]!)
+              : LegacyThemeColors.panel(context, AppColors.warningLight),
           borderRadius: BorderRadius.circular(8),
           border: Border.all(
-            color: consistent ? Colors.grey[300]! : AppColors.warning,
+            color: consistent
+                ? LegacyThemeColors.border(context, Colors.grey[300]!)
+                : AppColors.warning,
           ),
         ),
         child: Row(
@@ -1378,7 +1427,9 @@ class MonthlyCalendarScreenState extends State<MonthlyCalendarScreen> {
                           '${WorkTimeCalculator.formatHours((punchHours - bossHours).abs())}h',
                 style: TextStyle(
                   fontSize: 12,
-                  color: consistent ? Colors.grey[700] : AppColors.warningDark,
+                  color: consistent
+                      ? LegacyThemeColors.muted(context, Colors.grey[700]!)
+                      : AppColors.warningDark,
                   fontWeight: consistent ? FontWeight.normal : FontWeight.w600,
                 ),
               ),
@@ -1422,9 +1473,17 @@ class MonthlyCalendarScreenState extends State<MonthlyCalendarScreen> {
                       Container(
                         padding: const EdgeInsets.all(12),
                         decoration: BoxDecoration(
-                          color: Colors.grey[100],
+                          color: LegacyThemeColors.surface(
+                            context,
+                            Colors.grey[100]!,
+                          ),
                           borderRadius: BorderRadius.circular(8),
-                          border: Border.all(color: Colors.grey[300]!),
+                          border: Border.all(
+                            color: LegacyThemeColors.border(
+                              context,
+                              Colors.grey[300]!,
+                            ),
+                          ),
                         ),
                         child: Row(
                           mainAxisAlignment: MainAxisAlignment.spaceAround,
@@ -1437,11 +1496,14 @@ class MonthlyCalendarScreenState extends State<MonthlyCalendarScreen> {
                                   size: 18,
                                 ),
                                 const SizedBox(height: 4),
-                                const Text(
+                                Text(
                                   '上班',
                                   style: TextStyle(
                                     fontSize: 11,
-                                    color: Colors.grey,
+                                    color: LegacyThemeColors.muted(
+                                      context,
+                                      Colors.grey,
+                                    ),
                                   ),
                                 ),
                                 Text(
@@ -1451,7 +1513,10 @@ class MonthlyCalendarScreenState extends State<MonthlyCalendarScreen> {
                                     fontWeight: FontWeight.bold,
                                     color: checkIn != null
                                         ? Colors.green[700]
-                                        : Colors.grey,
+                                        : LegacyThemeColors.muted(
+                                            context,
+                                            Colors.grey,
+                                          ),
                                   ),
                                 ),
                               ],
@@ -1459,7 +1524,10 @@ class MonthlyCalendarScreenState extends State<MonthlyCalendarScreen> {
                             Container(
                               width: 1,
                               height: 40,
-                              color: Colors.grey[300],
+                              color: LegacyThemeColors.border(
+                                context,
+                                Colors.grey[300]!,
+                              ),
                             ),
                             Column(
                               children: [
@@ -1469,11 +1537,14 @@ class MonthlyCalendarScreenState extends State<MonthlyCalendarScreen> {
                                   size: 18,
                                 ),
                                 const SizedBox(height: 4),
-                                const Text(
+                                Text(
                                   '下班',
                                   style: TextStyle(
                                     fontSize: 11,
-                                    color: Colors.grey,
+                                    color: LegacyThemeColors.muted(
+                                      context,
+                                      Colors.grey,
+                                    ),
                                   ),
                                 ),
                                 Text(
@@ -1483,7 +1554,10 @@ class MonthlyCalendarScreenState extends State<MonthlyCalendarScreen> {
                                     fontWeight: FontWeight.bold,
                                     color: checkOut != null
                                         ? Colors.orange[700]
-                                        : Colors.grey,
+                                        : LegacyThemeColors.muted(
+                                            context,
+                                            Colors.grey,
+                                          ),
                                   ),
                                 ),
                               ],
@@ -1491,7 +1565,10 @@ class MonthlyCalendarScreenState extends State<MonthlyCalendarScreen> {
                             Container(
                               width: 1,
                               height: 40,
-                              color: Colors.grey[300],
+                              color: LegacyThemeColors.border(
+                                context,
+                                Colors.grey[300]!,
+                              ),
                             ),
                             Column(
                               children: [
@@ -1501,11 +1578,14 @@ class MonthlyCalendarScreenState extends State<MonthlyCalendarScreen> {
                                   size: 18,
                                 ),
                                 const SizedBox(height: 4),
-                                const Text(
+                                Text(
                                   '工时',
                                   style: TextStyle(
                                     fontSize: 11,
-                                    color: Colors.grey,
+                                    color: LegacyThemeColors.muted(
+                                      context,
+                                      Colors.grey,
+                                    ),
                                   ),
                                 ),
                                 Text(
@@ -1570,7 +1650,10 @@ class MonthlyCalendarScreenState extends State<MonthlyCalendarScreen> {
                             typeColor = Colors.blue;
                             break;
                           default:
-                            typeColor = Colors.grey;
+                            typeColor = LegacyThemeColors.muted(
+                              context,
+                              Colors.grey,
+                            );
                             break;
                         }
 
@@ -1579,16 +1662,30 @@ class MonthlyCalendarScreenState extends State<MonthlyCalendarScreen> {
                             type,
                             style: TextStyle(
                               color: isDisabled
-                                  ? Colors.grey.withValues(alpha: 0.5)
-                                  : (isSelected ? Colors.white : Colors.black),
+                                  ? LegacyThemeColors.muted(
+                                      context,
+                                      Colors.grey,
+                                    ).withValues(alpha: 0.5)
+                                  : (isSelected
+                                        ? Colors.white
+                                        : LegacyThemeColors.text(
+                                            context,
+                                            Colors.black,
+                                          )),
                             ),
                           ),
                           selected: isSelected,
                           backgroundColor: isDisabled
-                              ? Colors.grey.withValues(alpha: 0.1)
+                              ? LegacyThemeColors.muted(
+                                  context,
+                                  Colors.grey,
+                                ).withValues(alpha: 0.1)
                               : typeColor.withValues(alpha: 0.3),
                           selectedColor: typeColor,
-                          disabledColor: Colors.grey.withValues(alpha: 0.1),
+                          disabledColor: LegacyThemeColors.muted(
+                            context,
+                            Colors.grey,
+                          ).withValues(alpha: 0.1),
                           onSelected: isDisabled
                               ? null
                               : (selected) {
@@ -1722,9 +1819,12 @@ class MonthlyCalendarScreenState extends State<MonthlyCalendarScreen> {
                         },
                       ),
                       const SizedBox(height: 8),
-                      const Text(
+                      Text(
                         '支持格式: 0850, 850, 08:50, 08-50',
-                        style: TextStyle(fontSize: 12, color: Colors.grey),
+                        style: TextStyle(
+                          fontSize: 12,
+                          color: LegacyThemeColors.muted(context, Colors.grey),
+                        ),
                       ),
                     ],
                   ],
@@ -1784,7 +1884,7 @@ class MonthlyCalendarScreenState extends State<MonthlyCalendarScreen> {
     return Container(
       padding: const EdgeInsets.all(10),
       decoration: BoxDecoration(
-        color: Colors.amber[50],
+        color: LegacyThemeColors.panel(context, Colors.amber[50]!),
         borderRadius: BorderRadius.circular(8),
         border: Border.all(color: Colors.amber[200]!),
       ),
@@ -2126,7 +2226,12 @@ class MonthlyCalendarScreenState extends State<MonthlyCalendarScreen> {
                   customDayHoursAll,
                   Colors.blue,
                 ),
-                _buildTypeChip('休息', restDayCountAll, 0.0, Colors.grey),
+                _buildTypeChip(
+                  '休息',
+                  restDayCountAll,
+                  0.0,
+                  LegacyThemeColors.muted(context, Colors.grey),
+                ),
               ],
             ),
 
@@ -2174,7 +2279,7 @@ class MonthlyCalendarScreenState extends State<MonthlyCalendarScreen> {
                   child: Icon(
                     Icons.help_outline,
                     size: 16,
-                    color: Colors.grey[600],
+                    color: LegacyThemeColors.muted(context, Colors.grey[600]!),
                   ),
                 ),
               ],
@@ -2196,7 +2301,7 @@ class MonthlyCalendarScreenState extends State<MonthlyCalendarScreen> {
                 _buildStatColumn(
                   '总休息日',
                   '$totalRestDays天/$totalRestDaysAll天',
-                  Colors.grey,
+                  LegacyThemeColors.muted(context, Colors.grey),
                 ),
               ],
             ),
@@ -2259,7 +2364,10 @@ class MonthlyCalendarScreenState extends State<MonthlyCalendarScreen> {
                 padding: const EdgeInsets.only(top: 8),
                 child: Text(
                   '达成$_baseTarget%目标，今日需 ${WorkTimeCalculator.formatHours(totalWorkDays * 8.0 * _baseTarget / 100)}h，截至昨日需 ${WorkTimeCalculator.formatHours(totalWorkDaysExcludingToday * 8.0 * _baseTarget / 100)}h',
-                  style: TextStyle(fontSize: 11, color: Colors.grey[600]),
+                  style: TextStyle(
+                    fontSize: 11,
+                    color: LegacyThemeColors.muted(context, Colors.grey[600]!),
+                  ),
                   textAlign: TextAlign.center,
                 ),
               ),
@@ -2291,7 +2399,9 @@ class MonthlyCalendarScreenState extends State<MonthlyCalendarScreen> {
 
     return Expanded(
       child: Card(
-        color: percentage >= _baseTarget ? Colors.green[50] : Colors.orange[50],
+        color: percentage >= _baseTarget
+            ? LegacyThemeColors.panel(context, Colors.green[50]!)
+            : LegacyThemeColors.panel(context, Colors.orange[50]!),
         child: Padding(
           padding: const EdgeInsets.all(12),
           child: Column(
@@ -2318,7 +2428,10 @@ class MonthlyCalendarScreenState extends State<MonthlyCalendarScreen> {
                 const SizedBox(height: 4),
                 Text(
                   subtitle,
-                  style: TextStyle(fontSize: 10, color: Colors.grey[600]),
+                  style: TextStyle(
+                    fontSize: 10,
+                    color: LegacyThemeColors.muted(context, Colors.grey[600]!),
+                  ),
                 ),
               ],
               const SizedBox(height: 8),
@@ -2458,7 +2571,10 @@ class MonthlyCalendarScreenState extends State<MonthlyCalendarScreen> {
             Flexible(
               child: Text(
                 '(长按置顶)',
-                style: TextStyle(fontSize: 11, color: Colors.grey[500]),
+                style: TextStyle(
+                  fontSize: 11,
+                  color: LegacyThemeColors.muted(context, Colors.grey[500]!),
+                ),
                 maxLines: 1,
                 overflow: TextOverflow.ellipsis,
               ),
@@ -2470,7 +2586,10 @@ class MonthlyCalendarScreenState extends State<MonthlyCalendarScreen> {
               children: [
                 Text(
                   '含今日',
-                  style: TextStyle(fontSize: 12, color: Colors.grey[600]),
+                  style: TextStyle(
+                    fontSize: 12,
+                    color: LegacyThemeColors.muted(context, Colors.grey[600]!),
+                  ),
                 ),
                 Transform.scale(
                   scale: 0.8,
@@ -2653,7 +2772,9 @@ class MonthlyCalendarScreenState extends State<MonthlyCalendarScreen> {
         _togglePinnedTarget(target);
       },
       child: Card(
-        color: isBaseTarget && !isCompleted ? Colors.orange[50] : Colors.white,
+        color: isBaseTarget && !isCompleted
+            ? LegacyThemeColors.panel(context, Colors.orange[50]!)
+            : LegacyThemeColors.surface(context, Colors.white),
         shape: actualBorderColor() != null
             ? RoundedRectangleBorder(
                 borderRadius: BorderRadius.circular(4),
@@ -2744,7 +2865,13 @@ class MonthlyCalendarScreenState extends State<MonthlyCalendarScreen> {
                     ),
                   Text(
                     '${WorkTimeCalculator.formatHours(currentHours)} / ${WorkTimeCalculator.formatHours(targetHours)}h',
-                    style: TextStyle(fontSize: 12, color: Colors.grey[700]),
+                    style: TextStyle(
+                      fontSize: 12,
+                      color: LegacyThemeColors.muted(
+                        context,
+                        Colors.grey[700]!,
+                      ),
+                    ),
                   ),
                 ],
               ),
@@ -2780,7 +2907,10 @@ class MonthlyCalendarScreenState extends State<MonthlyCalendarScreen> {
                   const SizedBox(height: 4),
                   LinearProgressIndicator(
                     value: progress.clamp(0.0, 1.0),
-                    backgroundColor: Colors.grey[200],
+                    backgroundColor: LegacyThemeColors.inset(
+                      context,
+                      Colors.grey[200]!,
+                    ),
                     valueColor: AlwaysStoppedAnimation<Color>(
                       getProgressColor(),
                     ),
@@ -2821,7 +2951,10 @@ class MonthlyCalendarScreenState extends State<MonthlyCalendarScreen> {
                   const SizedBox(height: 4),
                   LinearProgressIndicator(
                     value: avgProgress.clamp(0.0, 1.0),
-                    backgroundColor: Colors.grey[200],
+                    backgroundColor: LegacyThemeColors.inset(
+                      context,
+                      Colors.grey[200]!,
+                    ),
                     valueColor: AlwaysStoppedAnimation<Color>(
                       getAvgProgressColor(),
                     ),
@@ -2837,7 +2970,10 @@ class MonthlyCalendarScreenState extends State<MonthlyCalendarScreen> {
                 remainingDays > 0
                     ? '还需 ${WorkTimeCalculator.formatHours(gapHours)}h，每天需上 ${WorkTimeCalculator.formatHours(dailyNeed)}h'
                     : '还需 ${WorkTimeCalculator.formatHours(gapHours)}h (本月已无工作日)',
-                style: TextStyle(fontSize: 11, color: Colors.grey[600]),
+                style: TextStyle(
+                  fontSize: 11,
+                  color: LegacyThemeColors.muted(context, Colors.grey[600]!),
+                ),
               ),
             ],
           ),
@@ -2866,7 +3002,13 @@ class MonthlyCalendarScreenState extends State<MonthlyCalendarScreen> {
   Widget _buildStatColumn(String label, String value, Color color) {
     return Column(
       children: [
-        Text(label, style: TextStyle(fontSize: 12, color: Colors.grey[600])),
+        Text(
+          label,
+          style: TextStyle(
+            fontSize: 12,
+            color: LegacyThemeColors.muted(context, Colors.grey[600]!),
+          ),
+        ),
         const SizedBox(height: 4),
         Text(
           value,
@@ -2885,7 +3027,13 @@ class MonthlyCalendarScreenState extends State<MonthlyCalendarScreen> {
   Widget _buildStatItem(String label, String value, String unit, Color color) {
     return Column(
       children: [
-        Text(label, style: TextStyle(fontSize: 12, color: Colors.grey[600])),
+        Text(
+          label,
+          style: TextStyle(
+            fontSize: 12,
+            color: LegacyThemeColors.muted(context, Colors.grey[600]!),
+          ),
+        ),
         const SizedBox(height: 8),
         // 这些统计项并排放在 spaceAround 的行里，各自宽度有限，
         // 字体放大时数值会顶出去，整体缩放比裁切好
@@ -2908,7 +3056,10 @@ class MonthlyCalendarScreenState extends State<MonthlyCalendarScreen> {
                 padding: const EdgeInsets.only(bottom: 2),
                 child: Text(
                   unit,
-                  style: TextStyle(fontSize: 12, color: Colors.grey[600]),
+                  style: TextStyle(
+                    fontSize: 12,
+                    color: LegacyThemeColors.muted(context, Colors.grey[600]!),
+                  ),
                 ),
               ),
             ],
