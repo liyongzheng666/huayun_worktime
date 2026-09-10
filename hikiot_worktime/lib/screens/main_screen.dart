@@ -10,6 +10,7 @@ import 'work_log_screen.dart';
 import '../utils/startup_refresh_coordinator.dart';
 import '../widgets/home_button.dart';
 import '../widgets/app_update_dialog.dart';
+import '../models/today_wrap_up.dart';
 
 /// 主框架页面 - 包含底部导航栏
 class MainScreen extends StatefulWidget {
@@ -117,6 +118,13 @@ class _MainScreenState extends State<MainScreen> with WidgetsBindingObserver {
     }
   }
 
+  /// 今日卡片直达原有导入、登录和提交确认流程，不绕过核对环节。
+  Future<void> _openWrapUpTask(TodayWrapUpAction action, DateTime date) async {
+    if (!mounted) return;
+    setState(() => _currentIndex = 2);
+    await _workLogKey.currentState?.handleWrapUpAction(date, action);
+  }
+
   @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
@@ -125,7 +133,11 @@ class _MainScreenState extends State<MainScreen> with WidgetsBindingObserver {
       body: IndexedStack(
         index: _currentIndex,
         children: [
-          DailyHoursScreen(key: _dailyKey, autoLoad: false),
+          DailyHoursScreen(
+            key: _dailyKey,
+            autoLoad: false,
+            onWrapUpAction: _openWrapUpTask,
+          ),
           MonthlyCalendarScreen(
             key: _monthlyKey,
             token: widget.token,

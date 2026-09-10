@@ -1,9 +1,15 @@
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:intl/intl.dart';
 import 'package:intl/date_symbol_data_local.dart';
 import '../core/constants/constants.dart';
 import '../services/daily_attendance_repository.dart';
+import '../services/platform_capabilities.dart';
+import '../services/today_wrap_up_service.dart';
+import '../models/today_wrap_up.dart';
+import '../widgets/today_wrap_up_card.dart';
 import '../services/storage_service.dart';
 import '../services/token_expired_service.dart';
 import '../utils/work_time_calculator.dart';
@@ -20,8 +26,20 @@ import 'photo_preview_screen.dart';
 
 class DailyHoursScreen extends StatefulWidget {
   final bool autoLoad;
+  final DailyAttendanceRepository? dailyRepository;
+  final TodayWrapUpService? todayWrapUpService;
+  final DateTime Function()? wrapUpClock;
+  final Future<void> Function(TodayWrapUpAction action, DateTime date)?
+  onWrapUpAction;
 
-  const DailyHoursScreen({super.key, this.autoLoad = true});
+  const DailyHoursScreen({
+    super.key,
+    this.autoLoad = true,
+    this.dailyRepository,
+    this.todayWrapUpService,
+    this.wrapUpClock,
+    this.onWrapUpAction,
+  });
 
   @override
   DailyHoursScreenState createState() => DailyHoursScreenState();
@@ -31,6 +49,19 @@ class DailyHoursScreenState extends State<DailyHoursScreen>
     with WidgetsBindingObserver {
   final StorageService _storage = StorageService();
   late final DailyAttendanceRepository _dailyRepository;
+  late final TodayWrapUpService _wrapUpService;
+  TodayWrapUpData? _wrapUpData;
+  bool _wrapUpLoading = false;
+  bool _wrapUpError = false;
+  bool _wrapUpActionRunning = false;
+  bool _attendanceFailed = false;
+  int _dailyLoadSeq = 0;
+  int _wrapUpLoadSeq = 0;
+  Timer? _wrapUpExpiryTimer;
+
+  DateTime get _wrapUpNow => widget.wrapUpClock?.call() ?? DateTime.now();
+  bool _isWrapUpToday(DateTime date) =>
+      DateHelper.isWorkToday(date, now: _wrapUpNow);
   DateTime _selectedDate = DateHelper.getWorkDate();
   Map<String, dynamic>? _dayData;
   Map<String, dynamic>? _attendanceData;
@@ -48,7 +79,9 @@ class DailyHoursScreenState extends State<DailyHoursScreen>
   @override
   void initState() {
     super.initState();
-    _dailyRepository = DailyAttendanceRepository(storage: _storage);
+    _dailyRepository =
+        widget.dailyRepository ?? DailyAttendanceRepository(storage: _storage);
+    _wrapUpService = widget.todayWrapUpService ?? TodayWrapUpService();
     WidgetsBinding.instance.addObserver(this);
     initializeDateFormatting('zh_CN', null);
     _loadPinnedTarget();
@@ -60,6 +93,7 @@ class DailyHoursScreenState extends State<DailyHoursScreen>
 
   @override
   void dispose() {
+    _wrapUpExpiryTimer?.cancel();
     WidgetsBinding.instance.removeObserver(this);
     super.dispose();
   }
@@ -156,11 +190,16 @@ class DailyHoursScreenState extends State<DailyHoursScreen>
 
   /// 加载每日数据
   Future<void> _loadDailyData() async {
+    final date = _selectedDate;
+    final seq = ++_dailyLoadSeq;
+    ++_wrapUpLoadSeq;
+    _wrapUpExpiryTimer?.cancel();
+    _scheduleWrapUpExpiry();
     setState(() => _isLoading = true);
 
     try {
-      final result = await _dailyRepository.load(_selectedDate);
-      if (!mounted) return;
+      final result = await _dailyRepository.load(date);
+      if (!mounted || seq != _dailyLoadSeq) return;
 
       _pinnedTarget = result.pinnedTarget;
       _baseTarget = result.baseTarget;
@@ -169,6 +208,7 @@ class DailyHoursScreenState extends State<DailyHoursScreen>
       _holidayPlan = result.holidayPlan;
       _dayData = result.dayData.isEmpty ? null : result.dayData;
       _attendanceData = result.attendanceData;
+      _attendanceFailed = result.attendanceData == null;
 
       if (result.status == DailyAttendanceLoadStatus.missingToken) {
         await TokenExpiredService.handleTokenExpired(context);
@@ -181,6 +221,8 @@ class DailyHoursScreenState extends State<DailyHoursScreen>
         _completeOnboarding();
       }
     } catch (e) {
+      if (!mounted || seq != _dailyLoadSeq) return;
+      _attendanceFailed = true;
       if (mounted && TokenExpiredService.isTokenExpiredError(e)) {
         await TokenExpiredService.handleTokenExpired(context);
       } else if (mounted) {
@@ -193,9 +235,90 @@ class DailyHoursScreenState extends State<DailyHoursScreen>
         );
       }
     } finally {
-      if (mounted) {
+      if (mounted && seq == _dailyLoadSeq) {
         setState(() => _isLoading = false);
+        if (PlatformCapabilities.supportsTodayWrapUp && _isWrapUpToday(date)) {
+          unawaited(_refreshWrapUp(date));
+        }
       }
+    }
+  }
+
+  /// 先展示本地素材，再单独核对当天 BOSS；不让网页查询阻塞工时页面。
+  Future<void> _refreshWrapUp(DateTime date) async {
+    final seq = ++_wrapUpLoadSeq;
+    bool isCurrent() =>
+        mounted &&
+        seq == _wrapUpLoadSeq &&
+        DateHelper.isSameDay(date, _selectedDate) &&
+        _isWrapUpToday(date);
+    if (!isCurrent()) return;
+    setState(() {
+      _wrapUpLoading = true;
+      _wrapUpError = false;
+    });
+    try {
+      final cached = await _wrapUpService.loadCached(date);
+      if (!isCurrent()) return;
+      setState(() => _wrapUpData = cached);
+      final current = await _wrapUpService.load(date);
+      if (!isCurrent()) return;
+      setState(() => _wrapUpData = current);
+      _scheduleWrapUpExpiry();
+    } catch (_) {
+      if (isCurrent()) {
+        setState(() {
+          _wrapUpData = null;
+          _wrapUpError = true;
+        });
+      }
+    } finally {
+      if (isCurrent()) setState(() => _wrapUpLoading = false);
+    }
+  }
+
+  /// 到期后主动显示待确认；跨午夜隐藏昨日卡片，保留用户正在查看的日期。
+  void _scheduleWrapUpExpiry() {
+    _wrapUpExpiryTimer?.cancel();
+    if (!mounted ||
+        !PlatformCapabilities.supportsTodayWrapUp ||
+        !_isWrapUpToday(_selectedDate)) {
+      return;
+    }
+    final now = _wrapUpNow;
+    var deadline = DateTime(now.year, now.month, now.day + 1);
+    final checkedAt = _wrapUpData?.checkedAt;
+    if (checkedAt != null) {
+      final expiry = checkedAt.add(TodayWrapUpData.freshness);
+      if (expiry.isAfter(now) && expiry.isBefore(deadline)) deadline = expiry;
+    }
+    _wrapUpExpiryTimer = Timer(deadline.difference(now), () {
+      if (!mounted) return;
+      setState(() {});
+      _scheduleWrapUpExpiry();
+    });
+  }
+
+  Future<void> _handleWrapUpAction(TodayWrapUpAction action) async {
+    if (_wrapUpActionRunning || _wrapUpLoading) return;
+    final date = _selectedDate;
+    if (!_isWrapUpToday(date)) return;
+    setState(() => _wrapUpActionRunning = true);
+    try {
+      switch (action) {
+        case TodayWrapUpAction.refresh:
+          await _loadDailyData();
+        case TodayWrapUpAction.checkAttendance:
+          await _showEditDialog();
+        case TodayWrapUpAction.importCsv:
+        case TodayWrapUpAction.loginBoss:
+        case TodayWrapUpAction.reviewLog:
+        case TodayWrapUpAction.viewLog:
+          await widget.onWrapUpAction?.call(action, date);
+          if (mounted) await _loadDailyData();
+      }
+    } finally {
+      if (mounted) setState(() => _wrapUpActionRunning = false);
     }
   }
 
@@ -459,6 +582,52 @@ class DailyHoursScreenState extends State<DailyHoursScreen>
                     child: Column(
                       crossAxisAlignment: CrossAxisAlignment.start,
                       children: [
+                        if (PlatformCapabilities.supportsTodayWrapUp &&
+                            _isWrapUpToday(_selectedDate)) ...[
+                          if (_wrapUpData != null &&
+                              DateHelper.isSameDay(
+                                _wrapUpData!.date,
+                                _selectedDate,
+                              ))
+                            TodayWrapUpCard(
+                              summary: TodayWrapUpSummary.compose(
+                                date: _selectedDate,
+                                data: _wrapUpData!,
+                                attendanceData: _attendanceData,
+                                dayType: type,
+                                effectiveHours: hours,
+                                attendanceFailed: _attendanceFailed,
+                                now: _wrapUpNow,
+                              ),
+                              isRefreshing:
+                                  _wrapUpLoading || _wrapUpActionRunning,
+                              onAction: _handleWrapUpAction,
+                              onRefresh: () => _loadDailyData(),
+                            )
+                          else
+                            Card(
+                              child: Padding(
+                                padding: const EdgeInsets.all(20),
+                                child: Column(
+                                  crossAxisAlignment: CrossAxisAlignment.start,
+                                  children: [
+                                    Text(
+                                      _wrapUpError
+                                          ? '☕ 今日状态暂时没查清楚'
+                                          : '☕ 正在整理今日状态…',
+                                    ),
+                                    if (_wrapUpError)
+                                      TextButton(
+                                        onPressed: () =>
+                                            _refreshWrapUp(_selectedDate),
+                                        child: const Text('再试一次'),
+                                      ),
+                                  ],
+                                ),
+                              ),
+                            ),
+                          const SizedBox(height: 16),
+                        ],
                         _buildDateSelector(),
                         const SizedBox(height: 12),
                         _buildTypeWarning(type),
@@ -771,29 +940,29 @@ class DailyHoursScreenState extends State<DailyHoursScreen>
                 FittedBox(
                   fit: BoxFit.scaleDown,
                   child: Row(
-                  mainAxisAlignment: MainAxisAlignment.center,
-                  crossAxisAlignment: CrossAxisAlignment.baseline,
-                  textBaseline: TextBaseline.alphabetic,
-                  children: [
-                    Text(
-                      WorkTimeCalculator.formatHours(hours),
-                      style: TextStyle(
-                        fontSize: 56,
-                        fontWeight: FontWeight.bold,
-                        color: Colors.blue[700],
-                        height: 1,
+                    mainAxisAlignment: MainAxisAlignment.center,
+                    crossAxisAlignment: CrossAxisAlignment.baseline,
+                    textBaseline: TextBaseline.alphabetic,
+                    children: [
+                      Text(
+                        WorkTimeCalculator.formatHours(hours),
+                        style: TextStyle(
+                          fontSize: 56,
+                          fontWeight: FontWeight.bold,
+                          color: Colors.blue[700],
+                          height: 1,
+                        ),
                       ),
-                    ),
-                    const SizedBox(width: 8),
-                    Text(
-                      '小时',
-                      style: TextStyle(
-                        fontSize: 20,
-                        fontWeight: FontWeight.w500,
-                        color: Colors.blue[600],
+                      const SizedBox(width: 8),
+                      Text(
+                        '小时',
+                        style: TextStyle(
+                          fontSize: 20,
+                          fontWeight: FontWeight.w500,
+                          color: Colors.blue[600],
+                        ),
                       ),
-                    ),
-                  ],
+                    ],
                   ),
                 ),
                 // 只有非加班、非休息日才显示工时百分比

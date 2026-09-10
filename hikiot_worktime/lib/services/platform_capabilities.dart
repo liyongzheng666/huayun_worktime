@@ -13,6 +13,10 @@ class PlatformCapabilities {
   /// 测试注入点：非 null 时覆盖真实平台判断。
   static PlatformCapabilitiesOverride? debugOverride;
 
+  /// 今日收尾先在 iOS 试用，Android 保持现有首页。
+  static bool get supportsTodayWrapUp =>
+      debugOverride?.supportsTodayWrapUp ?? Platform.isIOS;
+
   /// 是否支持精确闹钟唤醒后台联网。
   ///
   /// Android 通过 AlarmManager 可以在指定时刻唤起后台 isolate 执行任意代码；
@@ -40,18 +44,22 @@ class PlatformCapabilitiesOverride {
   const PlatformCapabilitiesOverride({
     required this.supportsExactBackgroundAlarm,
     required this.needsVendorKeepAliveGuide,
+    this.supportsTodayWrapUp = false,
   });
 
   /// 模拟 Android：具备全部后台闹钟能力。
   const PlatformCapabilitiesOverride.android()
     : supportsExactBackgroundAlarm = true,
-      needsVendorKeepAliveGuide = true;
+      needsVendorKeepAliveGuide = true,
+      supportsTodayWrapUp = false;
 
   /// 模拟 iOS：只能推固定文案的本地通知。
   const PlatformCapabilitiesOverride.ios()
     : supportsExactBackgroundAlarm = false,
-      needsVendorKeepAliveGuide = false;
+      needsVendorKeepAliveGuide = false,
+      supportsTodayWrapUp = true;
 
   final bool supportsExactBackgroundAlarm;
   final bool needsVendorKeepAliveGuide;
+  final bool supportsTodayWrapUp;
 }

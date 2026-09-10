@@ -15,6 +15,7 @@ void main() {
       expect(PlatformCapabilities.supportsLiveReminderContent, isTrue);
       expect(PlatformCapabilities.needsExactAlarmPermission, isTrue);
       expect(PlatformCapabilities.needsVendorKeepAliveGuide, isTrue);
+      expect(PlatformCapabilities.supportsTodayWrapUp, isFalse);
     });
 
     test('iOS 无后台闹钟能力，提醒只能推固定文案且不需要保活引导', () {
@@ -25,6 +26,7 @@ void main() {
       expect(PlatformCapabilities.supportsLiveReminderContent, isFalse);
       expect(PlatformCapabilities.needsExactAlarmPermission, isFalse);
       expect(PlatformCapabilities.needsVendorKeepAliveGuide, isFalse);
+      expect(PlatformCapabilities.supportsTodayWrapUp, isTrue);
     });
   });
 }

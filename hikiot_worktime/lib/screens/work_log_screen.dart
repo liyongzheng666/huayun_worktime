@@ -20,6 +20,7 @@ import '../services/boss_session_runner.dart';
 import '../services/boss_login_coordinator.dart';
 import '../services/boss_hours_auto_refresh_service.dart';
 import '../services/work_log_submit_service.dart';
+import '../models/today_wrap_up.dart';
 import '../widgets/boss_constants_dialog.dart';
 import '../widgets/work_log_auditor_picker_dialog.dart';
 import '../widgets/work_log_project_picker_dialog.dart';
@@ -73,6 +74,42 @@ class WorkLogScreenState extends State<WorkLogScreen> {
   /// 供外部（主框架切换 tab 时）触发刷新。
   Future<void> refreshData() => _reload();
 
+  /// 从今日卡片进入对应日期，复用既有互斥、登录与提交确认。
+  Future<void> handleWrapUpAction(
+    DateTime date,
+    TodayWrapUpAction action,
+  ) async {
+    if (_submitting || _editingSubmitted) return;
+    setState(() => _selectedDate = date);
+    final expectedLoad = _loadSeq + 1;
+    await _reload();
+    if (!mounted ||
+        expectedLoad != _loadSeq ||
+        _loading ||
+        _submitting ||
+        _editingSubmitted ||
+        !DateHelper.isSameDay(_selectedDate, date)) {
+      return;
+    }
+    switch (action) {
+      case TodayWrapUpAction.importCsv:
+        await _importCsv();
+      case TodayWrapUpAction.loginBoss:
+        await _loginBossFromConfig();
+      case TodayWrapUpAction.reviewLog:
+        await _submitLog();
+      case TodayWrapUpAction.viewLog:
+        if (_submittedObjectId != null) {
+          await _editSubmittedLog();
+        } else {
+          await _openReportSystem();
+        }
+      case TodayWrapUpAction.refresh:
+      case TodayWrapUpAction.checkAttendance:
+        break;
+    }
+  }
+
   /// 缓存过期时静默刷新所选日期所在月；失败不提示、不覆盖旧数据。
   Future<void> refreshBossHoursSilently({DateTime? date}) async {
     final target = date ?? _selectedDate;
@@ -89,6 +126,11 @@ class WorkLogScreenState extends State<WorkLogScreen> {
 
     // 固定本次要加载的日期：等待期间用户可能又翻了一页
     final date = _selectedDate;
+    if (_draft?.date != DateHelper.formatDate(date)) {
+      _draft = null;
+      _submittedObjectId = null;
+      _submittedRecord = null;
+    }
     final draft = await _repository.loadDraft(date);
     final (sourceName, importedAt) = await _repository.loadMeta();
     final all = await _repository.loadAll();
@@ -211,6 +253,7 @@ class WorkLogScreenState extends State<WorkLogScreen> {
   /// 没道理让他看着网页跳进跳出。这里走后台无头会话，只在真的没登录时
   /// 才引导去网页登录一次。
   Future<void> _submitLog() async {
+    if (_loading) return;
     if (_submitting) {
       _showMessage('正在提交中，请稍候');
       return;
@@ -235,6 +278,7 @@ class WorkLogScreenState extends State<WorkLogScreen> {
 
   /// 读取并编辑 App 创建过的那条 BOSS 日志。
   Future<void> _editSubmittedLog() async {
+    if (_loading) return;
     final objectId = _submittedObjectId;
     if (objectId == null || _editingSubmitted || _submitting) return;
 
@@ -674,7 +718,7 @@ class WorkLogScreenState extends State<WorkLogScreen> {
     final canSubmit = _draft?.hasEntry == true;
     final date = _selectedDate;
     final canEdit = _submittedObjectId != null;
-    final busy = _submitting || _editingSubmitted;
+    final busy = _loading || _submitting || _editingSubmitted;
 
     return SafeArea(
       top: false,
