@@ -11,25 +11,44 @@ class BossLoginScript {
   static String build({required String userName, required String password}) {
     return '''
       (function() {
+        function findLoginWindow(win) {
+          try {
+            if (win.document.getElementById('txtUserName') &&
+                typeof win.InforCenter_Platform_Login_LoginCheck === 'function') {
+              return win;
+            }
+            for (var i = 0; i < win.frames.length; i++) {
+              var found = findLoginWindow(win.frames[i]);
+              if (found) return found;
+            }
+          } catch (e) {}
+          return null;
+        }
+        var target = findLoginWindow(window);
+        if (!target) return JSON.stringify({ ok: false, reason: 'notReady' });
+        return (function(window, document) {
+        // 导航可能使 evaluateJavascript 的返回丢失；重试探测不能重复提交密码。
+        if (window.__bossNativeLogin && window.__bossNativeLogin.requested) {
+          return JSON.stringify({ ok: true, started: true });
+        }
         var USER_NAME = ${jsonEncode(userName)};
         var PASSWORD = ${jsonEncode(password)};
         var user = document.getElementById('txtUserName');
         var password = document.getElementById('txtPassword');
 
         if (!user || !password ||
-            typeof window.InforCenter_Platform_Login_LoginCheck !== 'function') {
+            typeof window.InforCenter_Platform_Login_LoginCheck !== 'function' ||
+            !window.jQuery || !window.HoteamUI || !window.HoteamUI.CallAjax) {
           return JSON.stringify({ ok: false, reason: 'notReady' });
         }
 
         try {
-          // 触发页面原有的 blur 处理：它会同步调用 GetLoginUser，并自动绑定
-          // UserID、组织、语言、主题等登录所需数据。直接只赋 value 会漏掉这些。
-          user.focus();
+          // WKWebView 隐藏页面不保证 focus/blur 的原生时序。只执行网页绑定的
+          // blur 处理一次，避免移动焦点时再次 GetLoginUser 并清空刚填的密码。
           user.value = USER_NAME;
           user.dispatchEvent(new Event('input', { bubbles: true }));
           user.dispatchEvent(new Event('change', { bubbles: true }));
-          if (window.jQuery) window.jQuery(user).trigger('blur');
-          else user.blur();
+          window.jQuery(user).triggerHandler('blur');
 
           if (!window.LoginUserData) {
             return JSON.stringify({
@@ -48,7 +67,6 @@ class BossLoginScript {
             });
           }
 
-          password.focus();
           password.value = PASSWORD;
           password.dispatchEvent(new Event('input', { bubbles: true }));
           password.dispatchEvent(new Event('change', { bubbles: true }));
@@ -61,9 +79,50 @@ class BossLoginScript {
             if (window.jQuery) window.jQuery(autoLogin).removeAttr('checked');
           }
 
+          // 仅记录固定的阶段/错误码；不把网页异常、响应或会话参数带回 Dart。
+          var state = window.__bossNativeLogin = { phase: 'authenticating' };
+          function markFailure(name, reason) {
+            var original = window[name];
+            if (typeof original !== 'function') return;
+            window[name] = function() {
+              state.reason = reason;
+              return original.apply(this, arguments);
+            };
+          }
+          markFailure('InforCenter_Platform_Login_PasswordError', 'passwordRejected');
+          markFailure('InforCenter_Platform_Login_LoginFailCountExceeded', 'accountLocked');
+          markFailure('InforCenter_Platform_Login_MultiLogin', 'requiresWeb');
+          var ajax = window.HoteamUI.CallAjax;
+          var originalAsync = ajax.AsyncCall;
+          ajax.AsyncCall = function(options) {
+            if (options && options.method === 'TryLogin') {
+              state.requested = true;
+              var callback = options.callback;
+              var errorCallback = options.errorCallback;
+              options.callback = function(result) {
+                if (!result || !result.LoginID) {
+                  state.reason = state.reason || 'authenticationFailed';
+                }
+                var returned = callback.apply(this, arguments);
+                var current = window.HoteamUI.Security.LoginPara;
+                if (result && result.LoginID && current &&
+                    current.LoginID === result.LoginID) state.phase = 'businessSession';
+                return returned;
+              };
+              options.errorCallback = function() {
+                state.reason = state.reason || 'authenticationFailed';
+                if (errorCallback) return errorCallback.apply(this, arguments);
+              };
+            }
+            return originalAsync.apply(this, arguments);
+          };
           window.InforCenter_Platform_Login_LoginCheck();
+          // 当前 BOSS LoginCheck 在返回前已同步读取并加密密码。
           PASSWORD = '';
           password.value = '';
+          if (!state.requested) {
+            state.reason = state.reason || 'requiresWeb';
+          }
           return JSON.stringify({ ok: true, started: true });
         } catch (e) {
           PASSWORD = '';
@@ -71,9 +130,10 @@ class BossLoginScript {
           return JSON.stringify({
             ok: false,
             reason: 'pageError',
-            message: String(e)
+            message: 'BOSS 登录页处理失败，请重试或使用网页登录'
           });
         }
+        })(target, target.document);
       })();
     ''';
   }

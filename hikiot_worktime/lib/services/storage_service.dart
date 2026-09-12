@@ -592,7 +592,7 @@ class StorageService {
     await prefs.setString(StorageKeys.workLogObjectIds, jsonEncode(all));
   }
 
-  /// 仅在工时缓存成功落盘后通知；页面监听时只重新读取本地数据。
+  /// 工时或确认证明变化后通知；页面监听时只重新读取本地数据。
   static final _bossHoursChanges = _BossHoursChanges();
   static ChangeNotifier get bossHoursChanges => _bossHoursChanges;
   static int _bossHoursRevision = 0;
@@ -624,6 +624,16 @@ class StorageService {
     if (DateTime.tryParse(date) == null) return Future<void>.value();
     return _queueBossWrite(() async {
       _bossDayRevisions[date] = ++_bossHoursRevision;
+      final prefs = await SharedPreferences.getInstance();
+      final wasConfirmed = await hasBossHoursForDate(date);
+      await prefs.remove(StorageKeys.bossHoursDateConfirmedAtKey(date));
+      await prefs.remove(
+        StorageKeys.bossHoursProofVersionKey(date.substring(0, 7)),
+      );
+      await prefs.remove(
+        StorageKeys.bossHoursRefreshedAtKey(date.substring(0, 7)),
+      );
+      if (wasConfirmed) _bossHoursChanges.changed();
     });
   }
 
@@ -632,6 +642,7 @@ class StorageService {
     String date,
     double hours, {
     int? expectedRevision,
+    DateTime? refreshedAt,
   }) {
     final parsed = DateTime.tryParse(date);
     if (parsed == null || !hours.isFinite || hours < 0) {
@@ -646,6 +657,11 @@ class StorageService {
       final all = await loadBossHours(monthKey);
       all[date] = hours;
       await _writeBossHours(monthKey, all);
+      final prefs = await SharedPreferences.getInstance();
+      await prefs.setString(
+        StorageKeys.bossHoursDateConfirmedAtKey(date),
+        (refreshedAt ?? DateTime.now()).toIso8601String(),
+      );
       _bossDayRevisions[date] = ++_bossHoursRevision;
       _bossHoursChanges.changed();
     });
@@ -660,11 +676,14 @@ class StorageService {
   }) => _queueBossWrite(() async {
     final merged = Map<String, double>.from(hours);
     var completeMonth = true;
+    final protectedDates = <String>{};
     final previous = await loadBossHours(monthKey);
     if (expectedRevision != null) {
       for (final entry in _bossDayRevisions.entries) {
         if (entry.key.startsWith('$monthKey-') &&
             entry.value > expectedRevision) {
+          protectedDates.add(entry.key);
+          if (!await hasBossHoursForDate(entry.key)) completeMonth = false;
           if (previous.containsKey(entry.key)) {
             merged[entry.key] = previous[entry.key]!;
           } else {
@@ -676,18 +695,30 @@ class StorageService {
     }
     await _writeBossHours(monthKey, merged);
     final prefs = await SharedPreferences.getInstance();
+    final confirmedAt = (refreshedAt ?? DateTime.now()).toIso8601String();
+    final month = DateTime.parse('$monthKey-01');
+    final days = DateTime(month.year, month.month + 1, 0).day;
+    for (var day = 1; day <= days; day++) {
+      final date = '$monthKey-${day.toString().padLeft(2, '0')}';
+      if (!protectedDates.contains(date)) {
+        await prefs.setString(
+          StorageKeys.bossHoursDateConfirmedAtKey(date),
+          confirmedAt,
+        );
+      }
+    }
     if (completeMonth) {
       await prefs.setString(
         StorageKeys.bossHoursRefreshedAtKey(monthKey),
-        (refreshedAt ?? DateTime.now()).toIso8601String(),
+        confirmedAt,
       );
+      await prefs.setInt(StorageKeys.bossHoursProofVersionKey(monthKey), 2);
     } else {
       // 有日期在请求期间变化且尚未取得合计，旧月份回包不能把这个孔洞当成 0。
       await prefs.remove(StorageKeys.bossHoursRefreshedAtKey(monthKey));
+      await prefs.remove(StorageKeys.bossHoursProofVersionKey(monthKey));
     }
     final revision = ++_bossHoursRevision;
-    final month = DateTime.parse('$monthKey-01');
-    final days = DateTime(month.year, month.month + 1, 0).day;
     // 月份回包处理过的日期统一抬升版本，阻止更早的请求再次回写。
     for (var day = 1; day <= days; day++) {
       _bossDayRevisions['$monthKey-${day.toString().padLeft(2, '0')}'] =
@@ -707,10 +738,31 @@ class StorageService {
     );
   }
 
-  Future<bool> hasBossHoursForDate(String date) async {
-    final monthKey = date.substring(0, 7);
-    if (await hasBossHoursSynced(monthKey)) return true;
-    return (await loadBossHours(monthKey)).containsKey(date);
+  /// 曾由严格校验后的结果确认过；不保证仍在当前状态的有效期内。
+  Future<bool> hasBossHoursForDate(String date) async =>
+      await _loadBossHoursDateConfirmedAt(date) != null;
+
+  Future<DateTime?> _loadBossHoursDateConfirmedAt(String date) async {
+    if (date.length != 10 || DateTime.tryParse(date) == null) return null;
+    final prefs = await SharedPreferences.getInstance();
+    if (!prefs.containsKey(StorageKeys.bossHoursKey(date.substring(0, 7)))) {
+      return null;
+    }
+    return DateTime.tryParse(
+      prefs.getString(StorageKeys.bossHoursDateConfirmedAtKey(date)) ?? '',
+    );
+  }
+
+  /// 过期、旧版及未来时间的缓存均只能参考，不能判定已交或待补交。
+  Future<bool> hasFreshBossHoursForDate(
+    String date, {
+    DateTime? now,
+    Duration maxAge = const Duration(minutes: 15),
+  }) async {
+    final confirmedAt = await _loadBossHoursDateConfirmedAt(date);
+    if (confirmedAt == null) return false;
+    final age = (now ?? DateTime.now()).difference(confirmedAt);
+    return !age.isNegative && age < maxAge;
   }
 
   Future<DateTime?> loadBossHoursRefreshedAt(String monthKey) async {
@@ -727,7 +779,8 @@ class StorageService {
   /// 会让没同步过的月份整片误报成欠账。
   Future<bool> hasBossHoursSynced(String monthKey) async {
     final prefs = await SharedPreferences.getInstance();
-    return prefs.containsKey(StorageKeys.bossHoursKey(monthKey)) &&
+    return prefs.getInt(StorageKeys.bossHoursProofVersionKey(monthKey)) == 2 &&
+        prefs.containsKey(StorageKeys.bossHoursKey(monthKey)) &&
         await loadBossHoursRefreshedAt(monthKey) != null;
   }
 

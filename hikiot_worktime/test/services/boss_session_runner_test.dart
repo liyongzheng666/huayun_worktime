@@ -57,6 +57,56 @@ void main() {
     expect(actionCalled, isTrue);
     expect(platform.view.disposed, isTrue);
   });
+  test('Cookie 已恢复同一账号时直接成功，不重复输入密码', () async {
+    platform.controller.authenticated = true;
+    platform.controller.alreadySignedIn = true;
+    final result = await BossSessionRunner.login(
+      userName: 'test-user',
+      password: 'unused-password',
+      timeout: const Duration(milliseconds: 100),
+    );
+    expect(result.ok, isTrue);
+    expect(platform.controller.startCalls, 0);
+    expect(platform.view.disposed, isTrue);
+  });
+
+  test('Cookie 属于其他账号时不会把该账号冒认为本次登录成功', () async {
+    platform.controller.authenticated = true;
+    platform.controller.userCode = 'other-user';
+    final result = await BossSessionRunner.login(
+      userName: 'test-user',
+      password: 'test-password',
+    );
+    expect(result.ok, isFalse);
+    expect(result.message, contains('其他账号'));
+    expect(platform.controller.startCalls, 0);
+    expect(platform.view.disposed, isTrue);
+  });
+
+  test('服务端确定密码拒绝时立即返回原因并释放隐藏页面', () async {
+    platform.controller.failureReason = 'passwordRejected';
+    final result = await BossSessionRunner.login(
+      userName: 'test-user',
+      password: 'wrong-password',
+    );
+    expect(result.ok, isFalse);
+    expect(result.message, contains('密码不正确'));
+    expect(result.message, isNot(contains('wrong-password')));
+    expect(platform.view.disposed, isTrue);
+  });
+
+  test('加载接近上限仍给认证完整预算，且密码只提交一次', () async {
+    platform.controller.pageDelay = const Duration(milliseconds: 700);
+    platform.controller.authDelay = const Duration(milliseconds: 650);
+    final result = await BossSessionRunner.login(
+      userName: 'test-user',
+      password: 'test-password',
+      timeout: const Duration(milliseconds: 1200),
+    );
+    expect(result.ok, isTrue);
+    expect(platform.controller.startCalls, 1);
+    expect(platform.view.disposed, isTrue);
+  });
 }
 
 class _SessionPlatform extends InAppWebViewPlatform {
@@ -91,6 +141,13 @@ class _SessionController extends PlatformInAppWebViewController {
       );
 
   bool authenticated = false;
+  bool alreadySignedIn = false;
+  String userCode = 'test-user';
+  String? failureReason;
+  Duration pageDelay = Duration.zero;
+  Duration authDelay = Duration.zero;
+  int startCalls = 0;
+  bool delayApplied = false;
   final firstProbe = Completer<void>();
 
   @override
@@ -99,17 +156,29 @@ class _SessionController extends PlatformInAppWebViewController {
     ContentWorld? contentWorld,
   }) async {
     if (source.contains('InforCenter_Platform_Login_LoginCheck')) {
+      startCalls++;
+      if (pageDelay > Duration.zero && !delayApplied) {
+        delayApplied = true;
+        await Future<void>.delayed(pageDelay);
+      }
+      if (alreadySignedIn) return '{"ok":false,"reason":"notReady"}';
+      if (authDelay > Duration.zero) {
+        Future<void>.delayed(authDelay, () => authenticated = true);
+      }
       return '{"ok":true,"started":true}';
     }
     // 用户名解析和 TryLogin 请求先有 UserID，异步成功回调后才有 LoginID。
     final para = {
       'UserID': 'USERINFO_test',
+      'UserCode': userCode,
       if (authenticated) 'LoginID': 'test-session',
     };
     final result = runJavaScript('''
       const document = { getElementById: () => ${!authenticated} ? {} : null };
       const window = {
+        document,
         frames: [],
+        __bossNativeLogin: ${jsonEncode({'phase': startCalls > 0 ? 'authenticating' : 'pageLoading', if (failureReason != null) 'reason': failureReason})},
         HoteamUI: { Security: { LoginPara: ${jsonEncode(para)} } },
         ${WorkLogRequestCapture.storeName}: [{body: ${jsonEncode(jsonEncode({'para': para}))}}]
       };

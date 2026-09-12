@@ -1,3 +1,5 @@
+import 'dart:convert';
+import 'package:hikiot_worktime/core/constants/constants.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:hikiot_worktime/services/storage_service.dart';
 import 'package:hikiot_worktime/services/work_log_repository.dart';
@@ -143,6 +145,39 @@ void main() {
   });
 
   group('周条概览 loadWeek', () {
+    test('旧缓存保留工时参考，但零工时和正数都不确认提交状态', () async {
+      SharedPreferences.setMockInitialValues({
+        StorageKeys.bossHoursKey('2026-09'): jsonEncode({
+          '2026-09-07': 0,
+          '2026-09-08': 8,
+        }),
+        StorageKeys.bossHoursRefreshedAtKey('2026-09'): DateTime.now()
+            .toIso8601String(),
+      });
+      final week = await buildRepository().loadWeek(DateTime(2026, 9, 7));
+      expect(week[0].bossHours, 0);
+      expect(week[1].bossHours, 8);
+      expect(week.every((day) => !day.bossSynced && !day.isSubmitted), isTrue);
+    });
+
+    test('过期已填报缓存不冒充当前已提交，重新查询后恢复', () async {
+      final storage = StorageService();
+      await storage.saveBossHours(
+        '2026-09',
+        {'2026-09-07': 8},
+        refreshedAt: DateTime.now().subtract(const Duration(minutes: 16)),
+      );
+      final repo = WorkLogRepository(storage: storage);
+      final oldWeek = await repo.loadWeek(DateTime(2026, 9, 7));
+      expect(oldWeek.first.bossHours, 8);
+      expect(oldWeek.first.bossSynced, isFalse);
+      expect(oldWeek.first.isSubmitted, isFalse);
+      await storage.saveBossHoursForDate('2026-09-07', 8);
+      final refreshed = await repo.loadWeek(DateTime(2026, 9, 7));
+      expect(refreshed.first.isSubmitted, isTrue);
+      expect(refreshed[1].bossSynced, isFalse);
+    });
+
     /// 2026-08-08 是星期六，所在周为 8/3(一) ~ 8/9(日)
     final saturday = DateTime(2026, 8, 8);
 

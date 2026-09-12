@@ -30,9 +30,17 @@ class WorkLogBossHours {
   /// 同一份解析，避免两个入口对“今日是否已提交”作出不同判断。
   static const String pickUsedPreamble = '''
       function pickUsed(data) {
-        if (!data || data.length < 2) return null;
-        var used = parseFloat(data[1]);
-        return isNaN(used) ? null : used;
+        // 服务有时在 d 中继续包 JSON 字符串，不能把字符串的第二个字符当工时。
+        for (var depth = 0; typeof data === 'string' && depth < 6; depth++) {
+          try { data = JSON.parse(data); } catch (e) { return null; }
+        }
+        if (Object.prototype.toString.call(data) !== '[object Array]' ||
+            data.length !== 3) return null;
+        var raw = data[1];
+        if (typeof raw !== 'number' && typeof raw !== 'string') return null;
+        if (typeof raw === 'string' && raw.trim() === '') return null;
+        var used = Number(raw);
+        return isFinite(used) && used >= 0 ? used : null;
       }
   ''';
 
@@ -77,12 +85,12 @@ class WorkLogBossHours {
 
           var used = pickUsed(res.data);
           if (used === null) { failed.push(dateStr); continue; }
-          // 只记有填报的天，0 不入表——月历页据此区分「未填」与「填了 0」
+          // 只记正工时；仅全部日期成功时，缺席键才能代表已确认的0。
           if (used > 0) hours[dateStr] = used;
         }
 
         return JSON.stringify({
-          ok: true,
+          ok: failed.length === 0,
           month: MONTH_KEY,
           days: daysInMonth,
           filled: Object.keys(hours).length,
@@ -137,7 +145,8 @@ class WorkLogBossHours {
       final decoded = jsonDecode(raw);
       if (decoded is! Map || decoded['ok'] != true) return null;
       final used = decoded['used'];
-      return used is num ? used.toDouble() : double.tryParse('$used');
+      final parsed = used is num ? used.toDouble() : double.tryParse('$used');
+      return parsed != null && parsed.isFinite && parsed >= 0 ? parsed : null;
     } catch (e) {
       return null;
     }
@@ -155,16 +164,21 @@ class WorkLogBossHours {
     try {
       final decoded = jsonDecode(raw);
       if (decoded is! Map || decoded['ok'] != true) return null;
+      final failed = decoded['failed'];
+      if (failed != null && (failed is! List || failed.isNotEmpty)) return null;
       final hours = decoded['hours'];
       if (hours is! Map) return null;
 
       final result = <String, double>{};
-      hours.forEach((key, value) {
+      for (final entry in hours.entries) {
+        final key = entry.key;
+        final value = entry.value;
         final parsed = value is num
             ? value.toDouble()
             : double.tryParse('$value');
-        if (parsed != null) result['$key'] = parsed;
-      });
+        if (parsed == null || !parsed.isFinite || parsed < 0) return null;
+        result['$key'] = parsed;
+      }
       return result;
     } catch (_) {
       return null;

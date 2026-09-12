@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:collection';
 import 'dart:convert';
 
@@ -101,39 +102,70 @@ class BossSessionRunner {
     HeadlessInAppWebView? headless;
     try {
       headless = _createHeadless();
-      await headless.run();
-
-      final deadline = DateTime.now().add(timeout);
+      var deadline = DateTime.now().add(timeout);
+      await headless.run().timeout(timeout);
+      var started = false;
+      var phase = 'pageLoading';
       while (DateTime.now().isBefore(deadline)) {
         final controller = headless.webViewController;
         if (controller != null) {
           try {
-            final raw = await controller.evaluateJavascript(
-              source: BossLoginScript.build(
-                userName: userName,
-                password: password,
-              ),
-            );
-            final start = BossLoginScript.parse(raw?.toString());
-            if (start.status == BossLoginStartStatus.failed) {
-              return BossLoginResult(ok: false, message: start.message);
+            // Cookie 可能已自动恢复，先探测同一账号的真实会话，再考虑填登录框。
+            final probe = await controller
+                .evaluateJavascript(
+                  source: BossSessionScript.buildReadyProbe(
+                    captureStoreName: WorkLogRequestCapture.storeName,
+                    expectedUserName: userName.trim(),
+                  ),
+                )
+                .timeout(deadline.difference(DateTime.now()));
+            final decoded = jsonDecode(probe?.toString() ?? '{}');
+            if (decoded is Map) {
+              if (decoded['ready'] == true) {
+                return const BossLoginResult(ok: true);
+              }
+              phase = '${decoded['phase'] ?? phase}';
+              final error = _loginError(decoded['reason']);
+              if (error != null) {
+                return BossLoginResult(ok: false, message: error);
+              }
             }
-            if (start.status == BossLoginStartStatus.started) break;
+            if (!started && DateTime.now().isBefore(deadline)) {
+              final raw = await controller
+                  .evaluateJavascript(
+                    source: BossLoginScript.build(
+                      userName: userName,
+                      password: password,
+                    ),
+                  )
+                  .timeout(deadline.difference(DateTime.now()));
+              final start = BossLoginScript.parse(raw?.toString());
+              if (start.status == BossLoginStartStatus.failed) {
+                return BossLoginResult(ok: false, message: start.message);
+              }
+              if (start.status == BossLoginStartStatus.started) {
+                started = true;
+                phase = 'authenticating';
+                // 首页资源慢不应吃掉整个认证预算；登录动作始终只发起一次。
+                deadline = DateTime.now().add(timeout);
+              }
+            }
+          } on TimeoutException {
+            break;
           } catch (_) {
-            // 登录页脚本仍在加载，继续等待。
+            // 页面导航期间控制器可能暂不可用，继续等待；不输出包含密码的异常。
           }
         }
         await Future.delayed(const Duration(milliseconds: 500));
       }
-
-      final remaining = deadline.difference(DateTime.now());
-      if (remaining.isNegative) {
-        return const BossLoginResult(ok: false, message: '等待 BOSS 登录页超时');
-      }
-      final controller = await _awaitSession(headless, remaining);
-      if (controller != null) return const BossLoginResult(ok: true);
-
-      return const BossLoginResult(ok: false, message: '登录未成功，请核对账号、密码或网络状态');
+      return BossLoginResult(
+        ok: false,
+        message: phase == 'businessSession'
+            ? '账号已验证，但 BOSS 业务页面尚未就绪，请稍后重试'
+            : started
+            ? 'BOSS 账号认证超时，请检查网络后重试'
+            : 'BOSS 登录页加载超时，请检查网络后重试',
+      );
     } catch (_) {
       // 登录异常里可能夹带 evaluateJavascript 源码；源码含本次密码，绝不打印。
       debugPrint('[BOSS 后台登录] 执行失败（详细异常已省略）');
@@ -142,6 +174,16 @@ class BossSessionRunner {
       await headless?.dispose();
     }
   }
+
+  // 网页只回传固定错误码，避免显示包含请求参数的服务端异常。
+  static String? _loginError(Object? reason) => switch (reason) {
+    'passwordRejected' => 'BOSS 密码不正确，请核对后重试',
+    'accountLocked' => 'BOSS 登录错误次数过多，请稍后重试或联系管理员',
+    'requiresWeb' => 'BOSS 需要额外确认，请使用“网页登录”完成',
+    'differentUser' => 'BOSS 当前登录了其他账号，请使用“网页登录”切换账号',
+    'authenticationFailed' => 'BOSS 未完成认证，请核对账号密码或稍后重试',
+    _ => null,
+  };
 
   static HeadlessInAppWebView _createHeadless() {
     return HeadlessInAppWebView(

@@ -118,6 +118,14 @@ class StorageKeys {
   static String bossHoursRefreshedAtKey(String monthKey) =>
       '${bossHoursRefreshedAtPrefix}_$monthKey';
 
+  /// 仅由严格校验成功的完整月查询写入。
+  static String bossHoursProofVersionKey(String monthKey) =>
+      'boss_hours_proof_version_$monthKey';
+
+  /// v2 单日确认时间；旧版本工时仅保留作参考，不作为当前状态。
+  static String bossHoursDateConfirmedAtKey(String date) =>
+      'boss_hours_v2_confirmed_at_$date';
+
   // ============ 引导相关 ============
   /// 新手引导完成标记
   static const String onboardingCompleted = 'onboarding_completed';

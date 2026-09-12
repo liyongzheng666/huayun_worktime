@@ -68,14 +68,14 @@ class WorkLogDaySummary {
 
   /// 该日是否已确认 BOSS 工时（单日查询或完整月份同步）。
   ///
-  /// 没同步过时 [bossHours] 恒为 null，但那只代表**不知道**，
+  /// 未确认或已过期的 [bossHours] 仅供参考，当前状态为**不知道**，
   /// 不能据此判定未提交——否则从没同步过的月份会整片标成欠账。
   final bool bossSynced;
 
   bool get hasHours => hours != null && hours! > 0;
 
   /// 是否确实已提交到 BOSS。
-  bool get isSubmitted => bossHours != null && bossHours! > 0;
+  bool get isSubmitted => bossSynced && bossHours != null && bossHours! > 0;
 }
 
 /// 导入结果
@@ -156,6 +156,8 @@ class WorkLogRepository {
   ///
   /// 一周可能横跨两个月，因此按需读取涉及到的每个月。
   Future<List<WorkLogDaySummary>> loadWeek(DateTime anyDayInWeek) async {
+    final revision = StorageService.bossHoursRevision;
+    final now = DateTime.now();
     final monday = DateTime(
       anyDayInWeek.year,
       anyDayInWeek.month,
@@ -202,9 +204,26 @@ class WorkLogRepository {
           hasEntry: entries.containsKey(dateStr),
           hours: (data?[dateStr]?['hours'] as num?)?.toDouble(),
           bossHours: boss[dateStr],
-          bossSynced: await _storage.hasBossHoursForDate(dateStr),
+          bossSynced: await _storage.hasFreshBossHoursForDate(
+            dateStr,
+            now: now,
+          ),
         ),
       );
+    }
+    // 工时和确认证明分步读取；期间有写入时不能把旧金额配上新证明。
+    if (revision != StorageService.bossHoursRevision) {
+      return [
+        for (final day in result)
+          WorkLogDaySummary(
+            date: day.date,
+            dateStr: day.dateStr,
+            hasEntry: day.hasEntry,
+            hours: day.hours,
+            bossHours: day.bossHours,
+            bossSynced: false,
+          ),
+      ];
     }
     return result;
   }

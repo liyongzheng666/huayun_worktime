@@ -411,8 +411,9 @@ class MonthlyCalendarScreenState extends State<MonthlyCalendarScreen> {
   /// 但那是实现约束，没理由让用户看着页面跳进跳出。
   ///
   /// 只有在完全取不到会话（没登录 / 登录态过期）时，才引导去网页登录。
-  Future<void> _syncBossHours({bool allowLogin = true}) async {
-    final monthKey = DateFormat('yyyy-MM').format(_selectedMonth);
+  Future<void> _syncBossHours({bool allowLogin = true, DateTime? month}) async {
+    final targetMonth = month ?? _selectedMonth;
+    final monthKey = DateFormat('yyyy-MM').format(targetMonth);
 
     if (mounted) {
       ScaffoldMessenger.of(context).showSnackBar(
@@ -423,24 +424,25 @@ class MonthlyCalendarScreenState extends State<MonthlyCalendarScreen> {
       );
     }
 
+    final revision = StorageService.bossHoursRevision;
     final result = await BossSessionRunner.run<Map<String, double>>((
       controller,
     ) async {
       final raw = await controller.evaluateJavascript(
         source: WorkLogBossHours.buildFetchMonthScript(
-          year: _selectedMonth.year,
-          month: _selectedMonth.month,
+          year: targetMonth.year,
+          month: targetMonth.month,
           captureStoreName: WorkLogRequestCapture.storeName,
         ),
       );
-      return WorkLogBossHours.parseResult(raw?.toString());
+      return WorkLogBossHours.parseSuccessfulResult(raw?.toString());
     }, timeout: const Duration(seconds: 25));
 
     if (!mounted) return;
 
     if (result.status == BossSessionStatus.noSession) {
       if (allowLogin && await _promptBossLogin() && mounted) {
-        await _syncBossHours(allowLogin: false);
+        await _syncBossHours(allowLogin: false, month: targetMonth);
       } else if (!allowLogin && mounted) {
         ScaffoldMessenger.of(
           context,
@@ -451,23 +453,27 @@ class MonthlyCalendarScreenState extends State<MonthlyCalendarScreen> {
 
     final hours = result.value;
     if (!result.isOk || hours == null) {
-      ScaffoldMessenger.of(
-        context,
-      ).showSnackBar(const SnackBar(content: Text('BOSS 工时同步失败，海康打卡工时已更新')));
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('未能完整确认 BOSS 工时，已保留原记录，请稍后重试')),
+      );
       return;
     }
 
     // 逐日查询，整月一条都没有属正常（比如新月份），不当作失败
-    await _storage.saveBossHours(monthKey, hours);
+    await _storage.saveBossHours(monthKey, hours, expectedRevision: revision);
+    final savedHours = await _storage.loadBossHours(monthKey);
     if (!mounted) return;
 
-    setState(() => _bossHours = hours);
+    // 查询期间切月或提交时，以对应月份的最终合并缓存为准。
+    if (DateFormat('yyyy-MM').format(_selectedMonth) == monthKey) {
+      setState(() => _bossHours = savedHours);
+    }
     ScaffoldMessenger.of(context).showSnackBar(
       SnackBar(
         content: Text(
-          hours.isEmpty
+          savedHours.isEmpty
               ? '$monthKey 在 BOSS 中没有填报记录'
-              : '已同步 $monthKey：${hours.length} 天有填报记录',
+              : '已同步 $monthKey：${savedHours.length} 天有填报记录',
         ),
         backgroundColor: AppColors.success,
       ),

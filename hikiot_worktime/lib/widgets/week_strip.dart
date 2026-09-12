@@ -329,6 +329,17 @@ class WeekStripState extends State<WeekStrip> {
         filled: true,
       );
     }
+    if (!summary.bossSynced && isPast && summary.hasHours) {
+      return Semantics(
+        label: '填报状态待确认',
+        child: _dot(
+          fill: isSelected
+              ? LegacyThemeColors.onPrimary(context, Colors.white)
+              : LegacyThemeColors.muted(context, Colors.grey.shade500),
+          filled: false,
+        ),
+      );
+    }
     if (summary.hasEntry) {
       return _dot(
         fill: isSelected
@@ -371,7 +382,7 @@ class WeekStripState extends State<WeekStrip> {
   /// 此时提交状态根本无从判断，摆着一套颜色说明只会让人以为是准的。
   Widget _buildLegend() {
     final days = _cache[DateHelper.formatDate(_mondayOf(widget.selectedDate))];
-    final synced = days == null || days.any((d) => d.bossSynced);
+    final synced = days != null && days.any((d) => d.bossSynced);
 
     if (!synced) {
       return Padding(
@@ -386,7 +397,7 @@ class WeekStripState extends State<WeekStrip> {
             const SizedBox(width: 4),
             Expanded(
               child: Text(
-                '本月未同步 BOSS，提交状态未知（可在月度页「全量更新工时」同步）',
+                '提交状态未知，请登录 BOSS 或刷新后确认；旧记录不会直接标为待补交。',
                 style: TextStyle(
                   fontSize: 10,
                   color: LegacyThemeColors.muted(context, Colors.grey[600]!),
@@ -413,6 +424,14 @@ class WeekStripState extends State<WeekStrip> {
             '已提交',
           ),
           _legendItem(_dot(fill: _overdueColor, filled: true), '待补交'),
+          if (days.any((d) => !d.bossSynced && d.hasHours && _isPast(d.date)))
+            _legendItem(
+              _dot(
+                fill: LegacyThemeColors.muted(context, Colors.grey.shade500),
+                filled: false,
+              ),
+              '待确认',
+            ),
           _legendItem(
             _dot(
               fill: LegacyThemeColors.primary(context, Colors.blue.shade700),

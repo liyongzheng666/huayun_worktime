@@ -881,6 +881,7 @@ class _WorkReportWebViewScreenState extends State<WorkReportWebViewScreen> {
     _notify('正在同步 $monthKey 的 BOSS 工时，约需数十秒…');
 
     try {
+      final revision = StorageService.bossHoursRevision;
       final result = await controller.evaluateJavascript(
         source: WorkLogBossHours.buildFetchMonthScript(
           year: date.year,
@@ -889,14 +890,18 @@ class _WorkReportWebViewScreenState extends State<WorkReportWebViewScreen> {
         ),
       );
 
-      final hours = WorkLogBossHours.parseResult(result?.toString());
-      if (hours.isEmpty) {
+      final hours = WorkLogBossHours.parseSuccessfulResult(result?.toString());
+      if (hours == null) {
         if (!mounted) return false;
-        _notify('未取到任何 BOSS 工时，请确认已登录并在页面上操作过一次');
+        _notify('未能完整确认 BOSS 工时，已保留原记录，请稍后重试');
         return false;
       }
 
-      await StorageService().saveBossHours(monthKey, hours);
+      await StorageService().saveBossHours(
+        monthKey,
+        hours,
+        expectedRevision: revision,
+      );
       if (!mounted) return false;
       _notify('已同步 $monthKey：${hours.length} 天有填报记录');
       return true;

@@ -81,7 +81,10 @@ class BossHoursAutoRefreshService {
         final cacheAge = refreshedAt == null
             ? null
             : now.difference(refreshedAt);
-        if (cacheAge != null && !cacheAge.isNegative && cacheAge < maxAge) {
+        if (await _storage.hasBossHoursSynced(monthKey) &&
+            cacheAge != null &&
+            !cacheAge.isNegative &&
+            cacheAge < maxAge) {
           return BossHoursAutoRefreshResult(
             status: BossHoursAutoRefreshStatus.fresh,
             hours: cached,

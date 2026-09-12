@@ -1,3 +1,5 @@
+import 'dart:convert';
+
 /// BOSS 网页会话脚本的公共片段
 ///
 /// **为什么要单独抽这个类**：找会话上下文（`findPara`）和「克隆 para → 换
@@ -26,28 +28,73 @@ class BossSessionScript {
   /// GetLoginUser 在验证密码前就设置 UserID；TryLogin 是异步请求，只有成功
   /// 回调才设置 LoginID。仅凭 UserID 会误判成功，提前关闭 WebView 可中断认证。
   /// LoginID 只在页面内比对，返回值不包含任何凭据。
-  static String buildReadyProbe({required String captureStoreName}) {
+  static String buildReadyProbe({
+    required String captureStoreName,
+    String? expectedUserName,
+  }) {
     return '''
       (function() {
         ${sessionPreamble(captureStoreName: captureStoreName)}
-        var security = window.HoteamUI && window.HoteamUI.Security;
-        var current = security && security.LoginPara;
-        // 自动恢复会先把旧 Cookie 放入 LoginPara；仍停在登录表单时不可复用。
-        if (!current || !current.UserID || !current.LoginID ||
-            document.getElementById('txtUserName')) {
-          return JSON.stringify({ ready: false });
-        }
+        var expectedUserName = ${jsonEncode(expectedUserName)};
         var store = bossCaptured();
-        for (var i = store.length - 1; i >= 0; i--) {
+        var result = { ready: false, phase: 'pageLoading' };
+        function hasVisibleLoginForm(win) {
+          var node = win.document.getElementById('txtUserName');
+          var container = win.document.getElementById('PageContainer');
+          var pageName = container && container.getAttribute('pagepagename');
+          var loginPage = (win.AppSets && win.AppSets.LoginPage) || 'Login';
+          // 二维码登录也会隐藏账号框；只有页面确实已切到业务页才忽略残留框。
+          if (pageName === loginPage || pageName === 'MobileLogin') return true;
+          while (node) {
+            var style = win.getComputedStyle ? win.getComputedStyle(node) : node.style;
+            if (node.hidden || (style &&
+                (style.display === 'none' || style.visibility === 'hidden'))) {
+              return !pageName;
+            }
+            node = node.parentElement;
+          }
+          return !!win.document.getElementById('txtUserName');
+        }
+        function walk(win) {
           try {
-            var para = JSON.parse(store[i].body).para;
-            if (para && para.UserID === current.UserID &&
-                para.LoginID === current.LoginID) {
-              return JSON.stringify({ ready: true });
+            var state = win.__bossNativeLogin;
+            if (state) {
+              result.phase = state.phase;
+              if (state.reason) {
+                result.reason = state.reason;
+                return;
+              }
+            }
+            var security = win.HoteamUI && win.HoteamUI.Security;
+            var current = security && security.LoginPara;
+            // GetLoginUser 会提前产生 UserID；失效 Cookie 也会留下旧 LoginID。
+            // 登录表单仍可见时必须等真实认证回调完成，不能当成有效会话。
+            var authenticated = state && state.phase === 'businessSession';
+            if (current && current.UserID && current.LoginID &&
+                (!hasVisibleLoginForm(win) || authenticated)) {
+              for (var i = store.length - 1; i >= 0; i--) {
+                try {
+                  var para = JSON.parse(store[i].body).para;
+                  if (para && para.UserID === current.UserID &&
+                      para.LoginID === current.LoginID) {
+                    if (expectedUserName !== null &&
+                        String(current.UserCode || '').trim() !== expectedUserName) {
+                      result.reason = 'differentUser';
+                    } else {
+                      result.ready = true;
+                    }
+                    return;
+                  }
+                } catch (e) {}
+              }
+            }
+            for (var j = 0; j < win.frames.length && !result.ready; j++) {
+              walk(win.frames[j]);
             }
           } catch (e) {}
         }
-        return JSON.stringify({ ready: false });
+        walk(window);
+        return JSON.stringify(result);
       })();
     ''';
   }

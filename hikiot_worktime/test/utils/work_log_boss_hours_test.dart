@@ -1,8 +1,86 @@
+import 'dart:convert';
+
 import 'package:flutter_test/flutter_test.dart';
 import 'package:hikiot_worktime/utils/boss_session_script.dart';
 import 'package:hikiot_worktime/utils/work_log_boss_hours.dart';
 
+import '../support/javascript_runner.dart';
+
 void main() {
+  group('真实工时响应解析回归', () {
+    test('JSON字符串包装的三元组取第二项，不得按字符取成零', () {
+      final values = [
+        [0, 8.5, 0],
+        jsonEncode([0, 8.5, 0]),
+        jsonEncode(jsonEncode([0, 8.5, 0])),
+      ];
+      final actual = runJavaScript('''
+        ${WorkLogBossHours.pickUsedPreamble}
+        console.log(JSON.stringify(${jsonEncode(values)}.map(pickUsed)));
+      ''');
+      expect(actual, [8.5, 8.5, 8.5]);
+    });
+
+    test('错误形状和非完整数值均不能解析成已填零工时', () {
+      final values = [
+        '10',
+        {'0': 8, '1': 0, 'length': 3},
+        [8, '', 8],
+        [8, '0错误', 8],
+        [8, -1, 9],
+        [8, 'Infinity', 0],
+        [8, null, 8],
+        [8, 0],
+      ];
+      final actual = runJavaScript('''
+        ${WorkLogBossHours.pickUsedPreamble}
+        console.log(JSON.stringify(${jsonEncode(values)}.map(pickUsed)));
+      ''');
+      expect(actual, List.filled(values.length, null));
+    });
+
+    test('整月任一天查询失败不能宣布整月成功', () {
+      final script = WorkLogBossHours.buildFetchMonthScript(
+        year: 2026,
+        month: 9,
+        captureStoreName: '__store',
+      );
+      final actual = runJavaScript('''
+        var window = {frames:[],__store:[{body:JSON.stringify({para:{UserID:'test',LoginID:'test'}})}]};
+        class XMLHttpRequest {
+          open() {} setRequestHeader() {}
+          send(raw) {
+            var date=JSON.parse(JSON.parse(raw).content).para.SelectDate;
+            this.status=date==='2026-09-10'?500:200;
+            this.responseText=JSON.stringify({d:JSON.stringify({d:[8,8,0]})});
+          }
+        }
+        var answer = $script
+        console.log(answer);
+      ''');
+      expect(actual['ok'], isFalse);
+      expect(actual['failed'], ['2026-09-10']);
+      expect(
+        WorkLogBossHours.parseSuccessfulResult(jsonEncode(actual)),
+        isNull,
+      );
+    });
+
+    test('旧脚本即使ok为真也必须拒绝带失败日期的部分结果', () {
+      expect(
+        WorkLogBossHours.parseSuccessfulResult(
+          '{"ok":true,"failed":["2026-09-10"],"hours":{}}',
+        ),
+        isNull,
+      );
+      expect(
+        WorkLogBossHours.parseSuccessfulResult(
+          '{"ok":true,"failed":[],"hours":{"2026-09-10":"bad"}}',
+        ),
+        isNull,
+      );
+    });
+  });
   group('parseSingleDay', () {
     test('取出已填工时', () {
       expect(WorkLogBossHours.parseSingleDay('{"ok":true,"used":10.3}'), 10.3);

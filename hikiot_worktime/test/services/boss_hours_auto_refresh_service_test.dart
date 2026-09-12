@@ -1,3 +1,5 @@
+import 'dart:convert';
+import 'package:hikiot_worktime/core/constants/constants.dart';
 import 'dart:async';
 
 import 'package:flutter_test/flutter_test.dart';
@@ -26,6 +28,32 @@ void main() {
 
   setUp(() {
     SharedPreferences.setMockInitialValues({});
+  });
+
+  test('旧版新鲜空月时间戳不能跳过严格重查', () async {
+    SharedPreferences.setMockInitialValues({
+      StorageKeys.bossHoursKey('2026-09'): jsonEncode({}),
+      StorageKeys.bossHoursRefreshedAtKey('2026-09'): now.toIso8601String(),
+    });
+    var loadCount = 0;
+    final storage = StorageService();
+    final service = BossHoursAutoRefreshService(
+      storage: storage,
+      now: () => now,
+      loadMonth: (_) async {
+        loadCount++;
+        return {'2026-09-03': 8};
+      },
+    );
+    expect(
+      (await service.refreshIfStale(month)).status,
+      BossHoursAutoRefreshStatus.updated,
+    );
+    expect(loadCount, 1);
+    expect(
+      await storage.hasFreshBossHoursForDate('2026-09-03', now: now),
+      isTrue,
+    );
   });
 
   test('15 分钟内的缓存直接使用，不启动隐藏 WebView', () async {
