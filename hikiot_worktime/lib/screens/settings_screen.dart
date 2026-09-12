@@ -235,11 +235,14 @@ class _SettingsScreenState extends State<SettingsScreen> {
                         title: const Text('外观与主题'),
                         subtitle: Text(AppThemeController.shared.current.name),
                         trailing: const Icon(Icons.chevron_right),
-                        onTap: () => Navigator.of(context).push(
-                          MaterialPageRoute<void>(
-                            builder: (_) => const ThemeSelectionScreen(),
-                          ),
-                        ),
+                        onTap: () {
+                          unawaited(HapticUtils.lightImpact());
+                          Navigator.of(context).push(
+                            MaterialPageRoute<void>(
+                              builder: (_) => const ThemeSelectionScreen(),
+                            ),
+                          );
+                        },
                       ),
                     ),
                     const SizedBox(height: 24),

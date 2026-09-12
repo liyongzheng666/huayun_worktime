@@ -22,11 +22,7 @@ class WorkLogHours {
 ///
 /// 页面只消费这个对象，不直接拼装 CSV 与考勤两份数据。
 class WorkLogDraft {
-  const WorkLogDraft({
-    required this.date,
-    required this.hours,
-    this.entry,
-  });
+  const WorkLogDraft({required this.date, required this.hours, this.entry});
 
   /// yyyy-MM-dd
   final String date;
@@ -70,7 +66,7 @@ class WorkLogDaySummary {
   /// BOSS 里已填报的工时。
   final double? bossHours;
 
-  /// 该日所属月份是否同步过 BOSS 工时。
+  /// 该日是否已确认 BOSS 工时（单日查询或完整月份同步）。
   ///
   /// 没同步过时 [bossHours] 恒为 null，但那只代表**不知道**，
   /// 不能据此判定未提交——否则从没同步过的月份会整片标成欠账。
@@ -171,12 +167,10 @@ class WorkLogRepository {
 
     // BOSS 已填报工时按月存放，与月历页共用同一份缓存
     final bossCache = <String, Map<String, double>>{};
-    final bossSyncedCache = <String, bool>{};
     Future<Map<String, double>> bossData(DateTime date) async {
       final monthKey = DateHelper.formatMonth(date);
       if (bossCache.containsKey(monthKey)) return bossCache[monthKey]!;
 
-      bossSyncedCache[monthKey] = await _storage.hasBossHoursSynced(monthKey);
       final loaded = await _storage.loadBossHours(monthKey);
       bossCache[monthKey] = loaded;
       return loaded;
@@ -208,7 +202,7 @@ class WorkLogRepository {
           hasEntry: entries.containsKey(dateStr),
           hours: (data?[dateStr]?['hours'] as num?)?.toDouble(),
           bossHours: boss[dateStr],
-          bossSynced: bossSyncedCache[DateHelper.formatMonth(date)] ?? false,
+          bossSynced: await _storage.hasBossHoursForDate(dateStr),
         ),
       );
     }

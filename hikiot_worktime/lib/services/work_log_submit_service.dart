@@ -643,10 +643,13 @@ class WorkLogSubmitService {
         if (objectId != null) {
           await _storage.saveWorkLogObjectId(entry.date, objectId);
         }
-        final hours = result.existingHours;
-        if (hours != null) {
-          await _storage.saveBossHoursForDate(entry.date, hours);
-        }
+      }
+      if (result.status == WorkLogSubmitStatus.submitted ||
+          result.status == WorkLogSubmitStatus.alreadySubmitted) {
+        await refreshReportedHoursAfterSave(
+          entry.date,
+          confirmedHours: result.existingHours,
+        );
       }
       return result;
     } on ArgumentError catch (e) {
@@ -659,6 +662,33 @@ class WorkLogSubmitService {
         status: WorkLogSubmitStatus.deferred,
         message: '提交结果无法确认：$e',
       );
+    }
+  }
+
+  /// 保存确认后复用当前网页查询该日总填报工时，前台/后台提交共用此路径。
+  /// 更新失败不改变已经确认的提交结果，也不把“没查到”写成0。
+  Future<void> refreshReportedHoursAfterSave(
+    String date, {
+    double? confirmedHours,
+  }) async {
+    try {
+      await _storage.markBossHoursDateChanged(date);
+      if (confirmedHours != null &&
+          confirmedHours.isFinite &&
+          confirmedHours > 0) {
+        await _storage.saveBossHoursForDate(date, confirmedHours);
+      }
+      final revision = StorageService.bossHoursRevision;
+      final hours = await queryExistingHours(date);
+      // 刚保存成功却读到0属于尚未确认，保留已有记录等待后续单日刷新。
+      if (hours == null || !hours.isFinite || hours <= 0) return;
+      await _storage.saveBossHoursForDate(
+        date,
+        hours,
+        expectedRevision: revision,
+      );
+    } catch (_) {
+      // 页面稍后仍可刷新；不要把查询失败包装成提交失败而诱导重复提交。
     }
   }
 
@@ -767,9 +797,9 @@ class WorkLogSubmitService {
     );
     if (result.status == WorkLogUpdateStatus.updated) {
       final date = record.date;
-      final hours = result.hours;
-      if (date.isNotEmpty && hours != null) {
-        await _storage.saveBossHoursForDate(date, hours);
+      if (date.isNotEmpty) {
+        // 编辑返回的是单条记录时长，日期总填报工时必须重新查询。
+        await refreshReportedHoursAfterSave(date);
       }
     }
     return result;

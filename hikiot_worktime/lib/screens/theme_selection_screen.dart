@@ -1,7 +1,10 @@
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 
 import '../core/theme/app_skin.dart';
 import '../services/app_theme_controller.dart';
+import '../utils/haptic_utils.dart';
 
 class ThemeSelectionScreen extends StatelessWidget {
   const ThemeSelectionScreen({super.key, this.controller});
@@ -51,6 +54,8 @@ class ThemeSelectionScreen extends StatelessWidget {
                             skin: skin,
                             selected: themes.current.id == skin.id,
                             onTap: () async {
+                              if (themes.current.id == skin.id) return;
+                              unawaited(HapticUtils.selectionClick());
                               final saved = await themes.select(skin.id);
                               if (!saved && context.mounted) {
                                 ScaffoldMessenger.of(context).showSnackBar(

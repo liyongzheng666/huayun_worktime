@@ -52,6 +52,150 @@ void main() {
     });
   });
 
+  group('BOSS 日期缓存一致性', () {
+    setUp(() => SharedPreferences.setMockInitialValues({}));
+
+    test('单日 0 明确确认该日，但不会伪造整月已同步', () async {
+      final storage = StorageService();
+      await storage.saveBossHoursForDate('2026-09-12', 0);
+      expect(await storage.hasBossHoursForDate('2026-09-12'), isTrue);
+      expect(await storage.hasBossHoursForDate('2026-09-11'), isFalse);
+      expect(await storage.hasBossHoursSynced('2026-09'), isFalse);
+      expect((await storage.loadBossHours('2026-09'))['2026-09-12'], 0);
+    });
+
+    test('标记服务端变化不造确认或通知，并阻止之前的未知日期回包落盘', () async {
+      final storage = StorageService();
+      final revision = StorageService.bossHoursRevision;
+      var notifications = 0;
+      void listener() => notifications++;
+      StorageService.bossHoursChanges.addListener(listener);
+      try {
+        await storage.markBossHoursDateChanged('2026-09-12');
+        expect(StorageService.bossHoursRevision, greaterThan(revision));
+        expect(await storage.hasBossHoursForDate('2026-09-12'), isFalse);
+        await storage.saveBossHoursForDate(
+          '2026-09-12',
+          0,
+          expectedRevision: revision,
+        );
+        expect(await storage.hasBossHoursForDate('2026-09-12'), isFalse);
+        expect(await storage.hasBossHoursSynced('2026-09'), isFalse);
+        expect(await storage.loadBossHours('2026-09'), isEmpty);
+        expect(notifications, 0);
+      } finally {
+        StorageService.bossHoursChanges.removeListener(listener);
+      }
+    });
+
+    test('标记服务端变化保留旧缓存，只有新一代查询可以更新它', () async {
+      final storage = StorageService();
+      await storage.saveBossHoursForDate('2026-09-12', 8);
+      final oldRevision = StorageService.bossHoursRevision;
+      await storage.markBossHoursDateChanged('2026-09-12');
+      expect((await storage.loadBossHours('2026-09'))['2026-09-12'], 8);
+      await storage.saveBossHoursForDate(
+        '2026-09-12',
+        0,
+        expectedRevision: oldRevision,
+      );
+      expect((await storage.loadBossHours('2026-09'))['2026-09-12'], 8);
+      await storage.saveBossHoursForDate(
+        '2026-09-12',
+        10,
+        expectedRevision: StorageService.bossHoursRevision,
+      );
+      expect((await storage.loadBossHours('2026-09'))['2026-09-12'], 10);
+    });
+
+    test('不同实例同月并发保存两天不丢写', () async {
+      await Future.wait([
+        StorageService().saveBossHoursForDate('2026-09-11', 8),
+        StorageService().saveBossHoursForDate('2026-09-12', 9),
+      ]);
+      expect(await StorageService().loadBossHours('2026-09'), {
+        '2026-09-11': 8,
+        '2026-09-12': 9,
+      });
+    });
+
+    test('旧月份回包保留期间更新的单日，也允许更新其余日期', () async {
+      final storage = StorageService();
+      final revision = StorageService.bossHoursRevision;
+      await storage.saveBossHoursForDate('2026-09-12', 8);
+      await storage.saveBossHours('2026-09', {
+        '2026-09-12': 0,
+        '2026-09-11': 7,
+      }, expectedRevision: revision);
+      expect(await storage.loadBossHours('2026-09'), {
+        '2026-09-12': 8,
+        '2026-09-11': 7,
+      });
+    });
+
+    test('旧月份回包不恢复新月份查询已确认不存在的日期', () async {
+      final storage = StorageService();
+      final revision = StorageService.bossHoursRevision;
+      await storage.saveBossHours('2026-09', {});
+      await storage.saveBossHours('2026-09', {
+        '2026-09-12': 8,
+      }, expectedRevision: revision);
+      expect(await storage.loadBossHours('2026-09'), isEmpty);
+    });
+
+    test('未知日变化后旧月份回包不造零确认，新一代完整查询可恢复', () async {
+      final storage = StorageService();
+      await storage.saveBossHours('2026-09', {'2026-09-11': 7});
+      final oldRevision = StorageService.bossHoursRevision;
+      await storage.markBossHoursDateChanged('2026-09-12');
+      await storage.saveBossHours('2026-09', {
+        '2026-09-11': 8,
+        '2026-09-12': 0,
+      }, expectedRevision: oldRevision);
+      expect(await storage.loadBossHours('2026-09'), {'2026-09-11': 8});
+      expect(await storage.hasBossHoursForDate('2026-09-11'), isTrue);
+      expect(await storage.hasBossHoursForDate('2026-09-12'), isFalse);
+      expect(await storage.hasBossHoursSynced('2026-09'), isFalse);
+      expect(await storage.loadBossHoursRefreshedAt('2026-09'), isNull);
+
+      final newRevision = StorageService.bossHoursRevision;
+      final refreshedAt = DateTime(2026, 9, 12, 18);
+      await storage.saveBossHours(
+        '2026-09',
+        {'2026-09-11': 8, '2026-09-12': 10},
+        expectedRevision: newRevision,
+        refreshedAt: refreshedAt,
+      );
+      expect((await storage.loadBossHours('2026-09'))['2026-09-12'], 10);
+      expect(await storage.hasBossHoursForDate('2026-09-12'), isTrue);
+      expect(await storage.hasBossHoursSynced('2026-09'), isTrue);
+      expect(await storage.loadBossHoursRefreshedAt('2026-09'), refreshedAt);
+    });
+
+    test('旧单日回包不覆盖新确认，通知只在有效落盘后触发', () async {
+      final storage = StorageService();
+      final revision = StorageService.bossHoursRevision;
+      var count = 0;
+      void listener() {
+        count++;
+      }
+
+      StorageService.bossHoursChanges.addListener(listener);
+      try {
+        await storage.saveBossHoursForDate('2026-09-12', 8);
+        await storage.saveBossHoursForDate(
+          '2026-09-12',
+          0,
+          expectedRevision: revision,
+        );
+        expect((await storage.loadBossHours('2026-09'))['2026-09-12'], 8);
+        expect(count, 1);
+      } finally {
+        StorageService.bossHoursChanges.removeListener(listener);
+      }
+    });
+  });
+
   group('StorageService BOSS 登录用户名', () {
     setUp(() {
       SharedPreferences.setMockInitialValues({});

@@ -35,16 +35,22 @@ import 'work_report_webview_screen.dart';
 /// 职责：展示某一天的填报素材（CSV 内容 + 实际打卡工时），并提供一键复制。
 /// 解析、存储、工时合并全部在 [WorkLogRepository]，本页只做展示与交互。
 class WorkLogScreen extends StatefulWidget {
-  const WorkLogScreen({super.key});
+  const WorkLogScreen({super.key, this.repository, this.bossAutoRefresh});
+  final WorkLogRepository? repository;
+  final BossHoursAutoRefreshService? bossAutoRefresh;
 
   @override
   State<WorkLogScreen> createState() => WorkLogScreenState();
 }
 
 class WorkLogScreenState extends State<WorkLogScreen> {
-  final WorkLogRepository _repository = WorkLogRepository();
-  final BossHoursAutoRefreshService _bossAutoRefresh =
-      BossHoursAutoRefreshService.shared;
+  late final WorkLogRepository _repository;
+  late final BossHoursAutoRefreshService _bossAutoRefresh;
+  double? _reportedHours;
+  bool _bossRefreshing = false;
+  bool _bossUnavailable = false;
+  int _bossReadSeq = 0;
+  int _bossQuerySeq = 0;
   final GlobalKey<WeekStripState> _weekStripKey = GlobalKey();
 
   DateTime _selectedDate = DateHelper.getWorkDate();
@@ -69,6 +75,10 @@ class WorkLogScreenState extends State<WorkLogScreen> {
   @override
   void initState() {
     super.initState();
+    _repository = widget.repository ?? WorkLogRepository();
+    _bossAutoRefresh =
+        widget.bossAutoRefresh ?? BossHoursAutoRefreshService.shared;
+    StorageService.bossHoursChanges.addListener(_onBossHoursChanged);
     _reload();
   }
 
@@ -111,17 +121,81 @@ class WorkLogScreenState extends State<WorkLogScreen> {
     }
   }
 
-  /// 缓存过期时静默刷新所选日期所在月；失败不提示、不覆盖旧数据。
-  Future<void> refreshBossHoursSilently({DateTime? date}) async {
-    final target = date ?? _selectedDate;
-    final monthKey = DateHelper.formatMonth(target);
-    final result = await _bossAutoRefresh.refreshIfStale(target);
-    if (!mounted || result.status != BossHoursAutoRefreshStatus.updated) return;
-    if (DateHelper.formatMonth(_selectedDate) != monthKey) return;
-    _weekStripKey.currentState?.refresh();
+  @override
+  void dispose() {
+    StorageService.bossHoursChanges.removeListener(_onBossHoursChanged);
+    super.dispose();
   }
 
-  Future<void> _reload() async {
+  /// 缓存通知只复读本地，避免“刷新→通知→再次请求”的循环。
+  void _onBossHoursChanged() {
+    if (!mounted) return;
+    _weekStripKey.currentState?.refresh();
+    unawaited(_readReportedHours());
+  }
+
+  Future<void> _readReportedHours() async {
+    final seq = ++_bossReadSeq;
+    final date = _selectedDate;
+    final key = DateHelper.formatDate(date);
+    try {
+      final storage = StorageService();
+      final hours = await storage.loadBossHours(DateHelper.formatMonth(date));
+      final known = await storage.hasBossHoursForDate(key);
+      if (!mounted ||
+          seq != _bossReadSeq ||
+          !DateHelper.isSameDay(date, _selectedDate)) {
+        return;
+      }
+      setState(() => _reportedHours = known ? hours[key] ?? 0 : null);
+    } catch (_) {
+      if (mounted &&
+          seq == _bossReadSeq &&
+          DateHelper.isSameDay(date, _selectedDate)) {
+        setState(() => _bossUnavailable = true);
+      }
+    }
+  }
+
+  /// 每次进入/回前台核对所选日期，单日刷新不受月缓存15分钟限制。
+  Future<void> refreshBossHoursSilently({
+    DateTime? date,
+    bool force = false,
+  }) async {
+    final target = date ?? _selectedDate;
+    final seq = ++_bossQuerySeq;
+    if (mounted && DateHelper.isSameDay(target, _selectedDate)) {
+      setState(() {
+        _bossRefreshing = true;
+        _bossUnavailable = false;
+      });
+    }
+    var available = false;
+    try {
+      final result = await _bossAutoRefresh.refreshDate(target, force: force);
+      available = result.isOk && result.value != null;
+      if (!mounted ||
+          seq != _bossQuerySeq ||
+          !DateHelper.isSameDay(target, _selectedDate)) {
+        return;
+      }
+      await _readReportedHours();
+      _weekStripKey.currentState?.refresh();
+    } catch (_) {
+      available = false;
+    } finally {
+      if (mounted &&
+          seq == _bossQuerySeq &&
+          DateHelper.isSameDay(target, _selectedDate)) {
+        setState(() {
+          _bossRefreshing = false;
+          _bossUnavailable = !available;
+        });
+      }
+    }
+  }
+
+  Future<void> _reload({bool forceBoss = false}) async {
     final seq = ++_loadSeq;
     setState(() => _loading = true);
 
@@ -129,6 +203,8 @@ class WorkLogScreenState extends State<WorkLogScreen> {
     final date = _selectedDate;
     if (_draft?.date != DateHelper.formatDate(date)) {
       _draft = null;
+      _reportedHours = null;
+      _bossUnavailable = false;
       _submittedObjectId = null;
       _submittedRecord = null;
     }
@@ -155,7 +231,8 @@ class WorkLogScreenState extends State<WorkLogScreen> {
       _submittedObjectId = submittedObjectId;
       _loading = false;
     });
-    unawaited(refreshBossHoursSilently(date: date));
+    unawaited(_readReportedHours());
+    unawaited(refreshBossHoursSilently(date: date, force: forceBoss));
   }
 
   /// 周条选中某一天。
@@ -354,6 +431,12 @@ class WorkLogScreenState extends State<WorkLogScreen> {
           });
           _weekStripKey.currentState?.refresh();
           _showMessage('修改成功，已重新读取原日志确认');
+          unawaited(
+            refreshBossHoursSilently(
+              date: DateTime.parse(record.date),
+              force: true,
+            ),
+          );
           return;
         case WorkLogUpdateStatus.deferred:
           _showMessage(result.message ?? '网络通信不稳定，本次已暂缓修改');
@@ -583,7 +666,7 @@ class WorkLogScreenState extends State<WorkLogScreen> {
       switch (outcome.status) {
         case WorkLogSubmitStatus.submitted:
           _showMessage(outcome.message ?? '提交成功');
-          await _reload();
+          await _reload(forceBoss: true);
           return;
         case WorkLogSubmitStatus.alreadySubmitted:
           final hours = outcome.existingHours;
@@ -593,7 +676,7 @@ class WorkLogScreenState extends State<WorkLogScreen> {
                 : '${draft.date} 已在 BOSS 填报 '
                       '${WorkTimeCalculator.formatHours(hours)} 小时，本次未重复提交',
           );
-          await _reload();
+          await _reload(forceBoss: true);
           return;
         case WorkLogSubmitStatus.deferred:
           _showMessage(outcome.message ?? '网络通信不稳定，本次已暂缓提交');
@@ -719,6 +802,7 @@ class WorkLogScreenState extends State<WorkLogScreen> {
     final canSubmit = _draft?.hasEntry == true;
     final date = _selectedDate;
     final canEdit = _submittedObjectId != null;
+    final canViewReported = !canEdit && (_reportedHours ?? 0) > 0;
     final busy = _loading || _submitting || _editingSubmitted;
 
     return SafeArea(
@@ -737,7 +821,7 @@ class WorkLogScreenState extends State<WorkLogScreen> {
           mainAxisSize: MainAxisSize.min,
           children: [
             // 不能提交时说明原因，而不是只把按钮置灰让人猜
-            if (!canSubmit)
+            if (!canSubmit && !canEdit && !canViewReported)
               Padding(
                 padding: const EdgeInsets.only(bottom: 8),
                 child: Text(
@@ -768,9 +852,20 @@ class WorkLogScreenState extends State<WorkLogScreen> {
                     onPressed: busy
                         ? null
                         : canEdit
-                        ? _editSubmittedLog
+                        ? () {
+                            unawaited(HapticUtils.lightImpact());
+                            _editSubmittedLog();
+                          }
+                        : canViewReported
+                        ? () {
+                            unawaited(HapticUtils.lightImpact());
+                            _openReportSystem();
+                          }
                         : canSubmit
-                        ? _submitLog
+                        ? () {
+                            unawaited(HapticUtils.lightImpact());
+                            _submitLog();
+                          }
                         : null,
                     style: FilledButton.styleFrom(
                       minimumSize: const Size(0, 52),
@@ -785,7 +880,13 @@ class WorkLogScreenState extends State<WorkLogScreen> {
                             height: 18,
                             child: CircularProgressIndicator(strokeWidth: 2),
                           )
-                        : Icon(canEdit ? Icons.edit_note : Icons.rocket_launch),
+                        : Icon(
+                            canEdit
+                                ? Icons.edit_note
+                                : canViewReported
+                                ? Icons.open_in_browser
+                                : Icons.rocket_launch,
+                          ),
                     label: Text(
                       _submitting
                           ? '提交中…'
@@ -793,6 +894,8 @@ class WorkLogScreenState extends State<WorkLogScreen> {
                           ? '保存修改中…'
                           : canEdit
                           ? '编辑 ${date.month}月${date.day}日 已提交日志'
+                          : canViewReported
+                          ? '已填报 · 打开 BOSS 查看'
                           : '提交 ${date.month}月${date.day}日 日志',
                       maxLines: 1,
                       overflow: TextOverflow.ellipsis,
@@ -1000,6 +1103,39 @@ class WorkLogScreenState extends State<WorkLogScreen> {
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
+          Wrap(
+            crossAxisAlignment: WrapCrossAlignment.center,
+            spacing: 8,
+            children: [
+              Text(
+                _bossUnavailable || _bossRefreshing ? '上次已填报' : 'BOSS 已填报',
+                style: Theme.of(context).textTheme.labelLarge,
+              ),
+              Text(
+                _reportedHours == null
+                    ? '待确认'
+                    : '${WorkTimeCalculator.formatHours(_reportedHours!)} 小时',
+                key: const ValueKey('reported-boss-hours'),
+                style: TextStyle(
+                  fontWeight: FontWeight.w600,
+                  color: Theme.of(context).colorScheme.primary,
+                ),
+              ),
+              if (_bossRefreshing)
+                const SizedBox.square(
+                  dimension: 12,
+                  child: CircularProgressIndicator(strokeWidth: 1.5),
+                ),
+            ],
+          ),
+          if (_bossUnavailable)
+            Text(
+              '本次未能更新，保留上次记录；可登录 BOSS 后重试。',
+              style: Theme.of(context).textTheme.bodySmall,
+            ),
+          const SizedBox(height: 12),
+          Text('打卡工时', style: Theme.of(context).textTheme.labelMedium),
+          const SizedBox(height: 4),
           // 大号数字容易在字体放大时溢出，整体缩放而不是裁切
           FittedBox(
             fit: BoxFit.scaleDown,

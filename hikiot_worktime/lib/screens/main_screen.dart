@@ -12,6 +12,7 @@ import '../widgets/home_button.dart';
 import '../widgets/app_update_dialog.dart';
 import '../models/today_wrap_up.dart';
 import '../services/platform_capabilities.dart';
+import '../utils/haptic_utils.dart';
 
 /// 主框架页面 - 包含底部导航栏
 class MainScreen extends StatefulWidget {
@@ -56,10 +57,12 @@ class _MainScreenState extends State<MainScreen> with WidgetsBindingObserver {
   }
 
   Future<void> _refreshVisibleBossData() async {
+    unawaited(
+      _workLogKey.currentState?.refreshBossHoursSilently() ??
+          Future<void>.value(),
+    );
     if (_currentIndex == 1) {
       await _monthlyKey.currentState?.refreshBossHoursSilently();
-    } else if (_currentIndex == 2) {
-      await _workLogKey.currentState?.refreshBossHoursSilently();
     }
   }
 
@@ -96,6 +99,9 @@ class _MainScreenState extends State<MainScreen> with WidgetsBindingObserver {
   }
 
   Future<void> _onTabTap(int index) async {
+    if (index != _currentIndex && PlatformCapabilities.supportsTodayWrapUp) {
+      unawaited(HapticUtils.selectionClick());
+    }
     setState(() {
       _currentIndex = index;
     });

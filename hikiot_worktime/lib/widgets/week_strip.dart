@@ -13,7 +13,7 @@ import '../utils/work_time_calculator.dart';
 ///
 /// 每天显示两行信息：
 /// - 打卡工时（本地缓存里没有时显示 `--`，表示未同步而非零工时）
-/// - 状态圆点：实心＝CSV 里有这天的日志，空心＝有工时但没写，无＝什么都没有
+/// - 状态圆点：表示 BOSS 已填报、确认未填报或尚未确认，不能拿 CSV 素材充当提交状态。
 class WeekStrip extends StatefulWidget {
   const WeekStrip({
     super.key,
@@ -46,6 +46,7 @@ class WeekStripState extends State<WeekStrip> {
   late DateTime _baseMonday;
 
   final Map<String, List<WorkLogDaySummary>> _cache = {};
+  int _cacheRevision = 0;
 
   @override
   void initState() {
@@ -91,13 +92,15 @@ class WeekStripState extends State<WeekStrip> {
     final key = DateHelper.formatDate(monday);
     if (_cache.containsKey(key)) return;
 
+    final revision = _cacheRevision;
     final days = await widget.loadWeek(monday);
-    if (!mounted) return;
+    if (!mounted || revision != _cacheRevision) return;
     setState(() => _cache[key] = days);
   }
 
   /// 刷新已缓存的周，供外部在数据变化后调用。
   void refresh() {
+    _cacheRevision++;
     _cache.clear();
     _ensureLoaded(_mondayOf(widget.selectedDate));
   }

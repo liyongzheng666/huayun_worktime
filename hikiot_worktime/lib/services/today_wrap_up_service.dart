@@ -1,9 +1,9 @@
 import '../models/today_wrap_up.dart';
 import '../utils/date_helper.dart';
 import 'boss_session_runner.dart';
+import 'boss_hours_auto_refresh_service.dart';
 import 'storage_service.dart';
 import 'work_log_repository.dart';
-import 'work_log_submit_service.dart';
 
 typedef TodayBossHoursLoader =
     Future<BossSessionResult<double>> Function(String date);
@@ -14,10 +14,14 @@ class TodayWrapUpService {
     StorageService? storage,
     WorkLogRepository? repository,
     TodayBossHoursLoader? loadBossHours,
+    BossHoursAutoRefreshService? bossHoursRefresh,
     DateTime Function()? now,
   }) : _storage = storage ?? StorageService(),
        _repository = repository ?? WorkLogRepository(storage: storage),
-       _loadBossHours = loadBossHours ?? _queryToday,
+       _loadBossHours =
+           loadBossHours ??
+           ((date) => (bossHoursRefresh ?? BossHoursAutoRefreshService.shared)
+               .refreshDate(DateTime.parse(date))),
        _now = now ?? DateTime.now;
 
   final StorageService _storage;
@@ -81,10 +85,4 @@ class TodayWrapUpService {
       cachedAt: local.cachedAt,
     );
   }
-
-  static Future<BossSessionResult<double>> _queryToday(String date) =>
-      BossSessionRunner.run<double>(
-        (controller) =>
-            WorkLogSubmitService(controller).queryExistingHours(date),
-      );
 }

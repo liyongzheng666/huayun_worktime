@@ -18,8 +18,7 @@ void main() {
   WorkLogRepository buildRepository({WorkHoursLoader? loadWorkHours}) {
     return WorkLogRepository(
       storage: StorageService(),
-      loadWorkHours:
-          loadWorkHours ?? (_) async => const WorkLogHours(),
+      loadWorkHours: loadWorkHours ?? (_) async => const WorkLogHours(),
     );
   }
 
@@ -53,9 +52,7 @@ void main() {
       final repository = buildRepository();
       await repository.importFromCsv(csv);
 
-      await repository.importFromCsv(
-        '$header\n2026-09-01,新项目,测试,无,无,新标题,新内容',
-      );
+      await repository.importFromCsv('$header\n2026-09-01,新项目,测试,无,无,新标题,新内容');
 
       expect(await repository.loadEntry('2026-08-04'), isNull);
       expect((await repository.loadEntry('2026-09-01'))?.title, '新标题');
@@ -100,8 +97,11 @@ void main() {
   group('填报素材合并', () {
     test('CSV 条目与当日实际工时合并为一份草稿', () async {
       final repository = buildRepository(
-        loadWorkHours: (_) async =>
-            const WorkLogHours(hours: 8.55, checkIn: '08:47', checkOut: '18:22'),
+        loadWorkHours: (_) async => const WorkLogHours(
+          hours: 8.55,
+          checkIn: '08:47',
+          checkOut: '18:22',
+        ),
       );
       await repository.importFromCsv(csv);
 
@@ -261,6 +261,17 @@ void main() {
       expect(week.every((d) => d.bossHours == null), isTrue);
     });
 
+    test('只查询单日时，周条不会把其他未知日期误报未提交', () async {
+      final storage = StorageService();
+      await storage.saveBossHoursForDate('2026-08-04', 0);
+      final week = await WorkLogRepository(storage: storage).loadWeek(saturday);
+      final byDate = {for (final day in week) day.dateStr: day};
+      expect(byDate['2026-08-04']!.bossSynced, isTrue);
+      expect(byDate['2026-08-04']!.bossHours, 0);
+      expect(byDate['2026-08-06']!.bossSynced, isFalse);
+      expect(byDate['2026-08-06']!.bossHours, isNull);
+    });
+
     test('同步过的月份即使当天没填，也算已同步', () async {
       final storage = StorageService();
       await storage.saveBossHours('2026-08', {'2026-08-04': 8.0});
@@ -307,10 +318,7 @@ void main() {
     test('打卡时刻取自 attendanceData 的 checkInTime/checkOutTime', () {
       final hours = WorkLogRepository.workHoursFrom(
         dayData: const {'hours': 8.55, 'type': '工作日'},
-        attendanceData: const {
-          'checkInTime': '08:30',
-          'checkOutTime': '18:03',
-        },
+        attendanceData: const {'checkInTime': '08:30', 'checkOutTime': '18:03'},
       );
 
       expect(hours.hours, 8.55);
@@ -322,11 +330,7 @@ void main() {
       // 就算有人把值写进 dayData，也不该被当成打卡时刻：
       // 真实链路里 _applyAttendance 只往 dayData 写 type/hours/跨天打卡
       final hours = WorkLogRepository.workHoursFrom(
-        dayData: const {
-          'hours': 8.0,
-          'checkIn': '不该被读到',
-          'checkOut': '不该被读到',
-        },
+        dayData: const {'hours': 8.0, 'checkIn': '不该被读到', 'checkOut': '不该被读到'},
       );
 
       expect(hours.checkIn, isNull);

@@ -1,3 +1,4 @@
+import 'package:flutter/foundation.dart';
 import 'package:flutter/services.dart';
 
 import '../services/storage_service.dart';
@@ -63,8 +64,9 @@ class HapticUtils {
   /// 选择反馈 - 用于选择器、下拉选择
   static Future<void> selectionClick() async {
     if (_mode == HapticMode.off) return;
-    if (_mode == HapticMode.basic) {
-      // 基础模式跳过细微的选择震动
+    if (_mode == HapticMode.basic &&
+        defaultTargetPlatform != TargetPlatform.iOS) {
+      // 保留转子马达的简化策略；iOS 的基础模式仍提供轻量选择反馈。
       return;
     }
     await HapticFeedback.selectionClick();

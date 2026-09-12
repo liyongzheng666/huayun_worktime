@@ -1,8 +1,13 @@
 import 'dart:convert';
 
+import 'package:flutter/foundation.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
 import '../core/constants/constants.dart';
+
+class _BossHoursChanges extends ChangeNotifier {
+  void changed() => notifyListeners();
+}
 
 class ReminderSettings {
   const ReminderSettings({
@@ -587,35 +592,109 @@ class StorageService {
     await prefs.setString(StorageKeys.workLogObjectIds, jsonEncode(all));
   }
 
-  /// 更新某一天的 BOSS 已填工时，同时保留同月其他日期。
-  Future<void> saveBossHoursForDate(String date, double hours) async {
-    final parsed = DateTime.tryParse(date);
-    if (parsed == null) return;
-    final monthKey =
-        '${parsed.year.toString().padLeft(4, '0')}-'
-        '${parsed.month.toString().padLeft(2, '0')}';
-    final all = await loadBossHours(monthKey);
-    if (hours > 0) {
-      all[date] = hours;
-    } else {
-      all.remove(date);
-    }
-    await _writeBossHours(monthKey, all);
+  /// 仅在工时缓存成功落盘后通知；页面监听时只重新读取本地数据。
+  static final _bossHoursChanges = _BossHoursChanges();
+  static ChangeNotifier get bossHoursChanges => _bossHoursChanges;
+  static int _bossHoursRevision = 0;
+  static final Map<String, int> _bossDayRevisions = {};
+  static Future<void>? _bossWriteTail;
+
+  /// 网络请求开始前捕获，回写时防止旧请求覆盖期间更新的日期。
+  static int get bossHoursRevision => _bossHoursRevision;
+
+  Future<void> _queueBossWrite(Future<void> Function() write) {
+    final future = (_bossWriteTail ?? Future<void>.value()).then(
+      (_) => write(),
+    );
+    // 后续写入不受前一次失败阻塞，原始 future 仍向调用者报告异常。
+    final tail = future.then<void>(
+      (_) {},
+      onError: (Object error, StackTrace stackTrace) {},
+    );
+    _bossWriteTail = tail;
+    tail.then((_) {
+      // 空闲后释放已完成 Future，避免下一次操作沿用旧调用 Zone。
+      if (identical(_bossWriteTail, tail)) _bossWriteTail = null;
+    });
+    return future;
   }
 
-  /// 保存 BOSS 某月已填工时（日期 → 工时）。
+  /// 服务端日志已变化，但尚未取得当日合计；仅阻止旧请求回写，不伪造工时。
+  Future<void> markBossHoursDateChanged(String date) {
+    if (DateTime.tryParse(date) == null) return Future<void>.value();
+    return _queueBossWrite(() async {
+      _bossDayRevisions[date] = ++_bossHoursRevision;
+    });
+  }
+
+  /// 更新某一天的 BOSS 已填工时，同时保留同月其他日期；0 也是已确认结果。
+  Future<void> saveBossHoursForDate(
+    String date,
+    double hours, {
+    int? expectedRevision,
+  }) {
+    final parsed = DateTime.tryParse(date);
+    if (parsed == null || !hours.isFinite || hours < 0) {
+      return Future<void>.value();
+    }
+    final monthKey = date.substring(0, 7);
+    return _queueBossWrite(() async {
+      if (expectedRevision != null &&
+          (_bossDayRevisions[date] ?? 0) > expectedRevision) {
+        return;
+      }
+      final all = await loadBossHours(monthKey);
+      all[date] = hours;
+      await _writeBossHours(monthKey, all);
+      _bossDayRevisions[date] = ++_bossHoursRevision;
+      _bossHoursChanges.changed();
+    });
+  }
+
+  /// 保存完整月份结果，保留请求开始后已更新的日期。
   Future<void> saveBossHours(
     String monthKey,
     Map<String, double> hours, {
     DateTime? refreshedAt,
-  }) async {
-    await _writeBossHours(monthKey, hours);
+    int? expectedRevision,
+  }) => _queueBossWrite(() async {
+    final merged = Map<String, double>.from(hours);
+    var completeMonth = true;
+    final previous = await loadBossHours(monthKey);
+    if (expectedRevision != null) {
+      for (final entry in _bossDayRevisions.entries) {
+        if (entry.key.startsWith('$monthKey-') &&
+            entry.value > expectedRevision) {
+          if (previous.containsKey(entry.key)) {
+            merged[entry.key] = previous[entry.key]!;
+          } else {
+            merged.remove(entry.key);
+            completeMonth = false;
+          }
+        }
+      }
+    }
+    await _writeBossHours(monthKey, merged);
     final prefs = await SharedPreferences.getInstance();
-    await prefs.setString(
-      StorageKeys.bossHoursRefreshedAtKey(monthKey),
-      (refreshedAt ?? DateTime.now()).toIso8601String(),
-    );
-  }
+    if (completeMonth) {
+      await prefs.setString(
+        StorageKeys.bossHoursRefreshedAtKey(monthKey),
+        (refreshedAt ?? DateTime.now()).toIso8601String(),
+      );
+    } else {
+      // 有日期在请求期间变化且尚未取得合计，旧月份回包不能把这个孔洞当成 0。
+      await prefs.remove(StorageKeys.bossHoursRefreshedAtKey(monthKey));
+    }
+    final revision = ++_bossHoursRevision;
+    final month = DateTime.parse('$monthKey-01');
+    final days = DateTime(month.year, month.month + 1, 0).day;
+    // 月份回包处理过的日期统一抬升版本，阻止更早的请求再次回写。
+    for (var day = 1; day <= days; day++) {
+      _bossDayRevisions['$monthKey-${day.toString().padLeft(2, '0')}'] =
+          revision;
+    }
+    _bossHoursChanges.changed();
+  });
 
   Future<void> _writeBossHours(
     String monthKey,
@@ -626,6 +705,12 @@ class StorageService {
       StorageKeys.bossHoursKey(monthKey),
       jsonEncode(hours),
     );
+  }
+
+  Future<bool> hasBossHoursForDate(String date) async {
+    final monthKey = date.substring(0, 7);
+    if (await hasBossHoursSynced(monthKey)) return true;
+    return (await loadBossHours(monthKey)).containsKey(date);
   }
 
   Future<DateTime?> loadBossHoursRefreshedAt(String monthKey) async {
@@ -642,7 +727,8 @@ class StorageService {
   /// 会让没同步过的月份整片误报成欠账。
   Future<bool> hasBossHoursSynced(String monthKey) async {
     final prefs = await SharedPreferences.getInstance();
-    return prefs.containsKey(StorageKeys.bossHoursKey(monthKey));
+    return prefs.containsKey(StorageKeys.bossHoursKey(monthKey)) &&
+        await loadBossHoursRefreshedAt(monthKey) != null;
   }
 
   Future<Map<String, double>> loadBossHours(String monthKey) async {

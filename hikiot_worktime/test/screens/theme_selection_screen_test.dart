@@ -1,9 +1,14 @@
+import 'dart:async';
+
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:hikiot_worktime/core/theme/app_skin.dart';
 import 'package:hikiot_worktime/screens/theme_selection_screen.dart';
 import 'package:hikiot_worktime/services/app_theme_controller.dart';
 import 'package:hikiot_worktime/services/storage_service.dart';
+import 'package:hikiot_worktime/utils/haptic_utils.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 
 class _Storage extends StorageService {
   String? savedId;
@@ -21,7 +26,7 @@ Widget _app(AppThemeController controller, {double scale = 1}) =>
     AnimatedBuilder(
       animation: controller,
       builder: (_, _) => MaterialApp(
-        theme: controller.themeData,
+        theme: controller.themeData.copyWith(platform: TargetPlatform.iOS),
         builder: (context, child) => MediaQuery(
           data: MediaQuery.of(
             context,
@@ -33,6 +38,60 @@ Widget _app(AppThemeController controller, {double scale = 1}) =>
     );
 
 void main() {
+  final haptics = <MethodCall>[];
+  Completer<void>? hapticGate;
+
+  setUp(() async {
+    SharedPreferences.setMockInitialValues({});
+    await HapticUtils.setMode(HapticMode.advanced);
+    haptics.clear();
+    hapticGate = null;
+    TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
+        .setMockMethodCallHandler(SystemChannels.platform, (call) async {
+          if (call.method == 'HapticFeedback.vibrate') {
+            haptics.add(call);
+            await hapticGate?.future;
+          }
+          return null;
+        });
+  });
+
+  tearDown(() {
+    TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
+        .setMockMethodCallHandler(SystemChannels.platform, null);
+  });
+
+  testWidgets('选择主题反馈一次，当前主题无反馈且不等待触觉保存', (tester) async {
+    final storage = _Storage();
+    final controller = AppThemeController(storage: storage);
+    hapticGate = Completer<void>();
+    await tester.pumpWidget(_app(controller));
+    final tile = find.byKey(const ValueKey('skin-forest'));
+    await tester.tap(tile);
+    await tester.pumpAndSettle();
+    expect(controller.current.id, 'forest');
+    expect(storage.savedId, 'forest');
+    expect(haptics.single.method, 'HapticFeedback.vibrate');
+    expect(haptics.single.arguments, 'HapticFeedbackType.selectionClick');
+    await tester.tap(tile);
+    await tester.pumpAndSettle();
+    expect(haptics, hasLength(1));
+    hapticGate!.complete();
+    await tester.pump();
+  });
+
+  testWidgets('关闭震动时仍可保存主题', (tester) async {
+    await HapticUtils.setMode(HapticMode.off);
+    final storage = _Storage();
+    final controller = AppThemeController(storage: storage);
+    await tester.pumpWidget(_app(controller));
+    await tester.tap(find.byKey(const ValueKey('skin-forest')));
+    await tester.pumpAndSettle();
+    expect(controller.current.id, 'forest');
+    expect(storage.savedId, 'forest');
+    expect(haptics, isEmpty);
+  });
+
   testWidgets('八种主题都可选择并保存，包括真实石墨深色', (tester) async {
     final storage = _Storage();
     final controller = AppThemeController(storage: storage);

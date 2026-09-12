@@ -3,6 +3,7 @@ import 'dart:async';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:hikiot_worktime/models/today_wrap_up.dart';
 import 'package:hikiot_worktime/services/boss_session_runner.dart';
+import 'package:hikiot_worktime/services/boss_hours_auto_refresh_service.dart';
 import 'package:hikiot_worktime/services/storage_service.dart';
 import 'package:hikiot_worktime/services/today_wrap_up_service.dart';
 import 'package:hikiot_worktime/services/work_log_repository.dart';
@@ -69,6 +70,29 @@ void main() {
     expect(submitted.bossStatus, TodayBossStatus.submitted);
     expect(queried, ['2026-09-15', '2026-09-15']);
     expect(await storage.loadBossHours('2026-09'), isEmpty);
+  });
+
+  test('默认共享刷新路径把今日查询结果同步给日志页缓存且不伪造全月确认', () async {
+    final refresh = BossHoursAutoRefreshService(
+      storage: storage,
+      loadDay: (_) async => const BossSessionResult(BossSessionStatus.ok, 6.5),
+    );
+    final service = TodayWrapUpService(
+      storage: storage,
+      now: () => now,
+      bossHoursRefresh: refresh,
+    );
+    expect((await service.load(now)).bossHours, 6.5);
+    expect((await storage.loadBossHours('2026-09'))['2026-09-15'], 6.5);
+    expect(await storage.hasBossHoursSynced('2026-09'), isFalse);
+    final week = await WorkLogRepository(storage: storage).loadWeek(now);
+    final day = week.singleWhere((d) => d.dateStr == '2026-09-15');
+    expect(day.bossHours, 6.5);
+    expect(day.bossSynced, isTrue);
+    expect(
+      week.where((d) => d.dateStr != '2026-09-15').every((d) => !d.bossSynced),
+      isTrue,
+    );
   });
 
   test('同日并发合并一次，后续刷新发新请求', () async {

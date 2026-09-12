@@ -1,8 +1,13 @@
+import 'dart:async';
+
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:hikiot_worktime/models/today_wrap_up.dart';
+import 'package:hikiot_worktime/utils/haptic_utils.dart';
 import 'package:hikiot_worktime/utils/work_log_csv_parser.dart';
 import 'package:hikiot_worktime/widgets/ios_workbench.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 
 const _summary = TodayWrapUpSummary(
   title: '今天辛苦啦',
@@ -35,6 +40,7 @@ Future<void> _pump(
   VoidCallback? onRefresh,
   ValueChanged<TodayWrapUpAction>? onAction,
   ValueChanged<DateTime>? onDate,
+  VoidCallback? onEdit,
   double width = 390,
   double textScale = 1,
   Brightness brightness = Brightness.light,
@@ -47,6 +53,7 @@ Future<void> _pump(
   await tester.pumpWidget(
     MaterialApp(
       theme: ThemeData(
+        platform: TargetPlatform.iOS,
         colorScheme: ColorScheme.fromSeed(
           seedColor: const Color(0xff4c7b2e),
           brightness: brightness,
@@ -79,7 +86,7 @@ Future<void> _pump(
             onRefresh: onRefresh ?? () {},
             onSelectDate: onDate ?? (_) {},
             onAction: onAction ?? (_) {},
-            onEditAttendance: () {},
+            onEditAttendance: onEdit ?? () {},
           ),
         ),
       ),
@@ -88,6 +95,29 @@ Future<void> _pump(
 }
 
 void main() {
+  final haptics = <MethodCall>[];
+  Completer<void>? hapticGate;
+
+  setUp(() async {
+    SharedPreferences.setMockInitialValues({});
+    await HapticUtils.setMode(HapticMode.advanced);
+    haptics.clear();
+    hapticGate = null;
+    TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
+        .setMockMethodCallHandler(SystemChannels.platform, (call) async {
+          if (call.method == 'HapticFeedback.vibrate') {
+            haptics.add(call);
+            await hapticGate?.future;
+          }
+          return null;
+        });
+  });
+
+  tearDown(() {
+    TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
+        .setMockMethodCallHandler(SystemChannels.platform, null);
+  });
+
   testWidgets('真实日志和截断工时正确展示，未知月累计保持未知', (tester) async {
     await _pump(tester);
     expect(find.text('8.56'), findsOneWidget);
@@ -114,6 +144,10 @@ void main() {
     expect(button.hitTestable(), findsOneWidget);
     await tester.tap(button);
     expect(action, TodayWrapUpAction.refresh);
+    expect(haptics.map((call) => call.arguments), [
+      'HapticFeedbackType.selectionClick',
+      'HapticFeedbackType.lightImpact',
+    ]);
   });
 
   testWidgets('未来日期不可点击，不会交给历史页触发日期选择断言', (tester) async {
@@ -124,7 +158,8 @@ void main() {
     await tester.tap(future);
     expect(selected, isNull);
     await tester.tap(find.byKey(const ValueKey('workbench-date-2026-09-10')));
-    expect(selected, DateTime(2026, 9, 10));
+    expect(selected, isNull);
+    expect(haptics, isEmpty);
   });
 
   testWidgets('滚动内容时主操作仍固定在屏幕底部', (tester) async {
@@ -132,6 +167,7 @@ void main() {
     final button = find.byKey(const ValueKey('ios-workbench-action'));
     final original = tester.getCenter(button);
     expect(button.hitTestable(), findsOneWidget);
+    expect(haptics, isEmpty);
     await tester.drag(
       find.byKey(const ValueKey('ios-workbench-scroll')),
       const Offset(0, -300),
@@ -168,6 +204,45 @@ void main() {
       isNull,
     );
     expect(count, 0);
+    await tester.tap(find.byKey(const ValueKey('ios-workbench-action')));
+    await tester.tap(find.byType(IconButton));
+    await tester.tap(find.widgetWithText(TextButton, '核对工时与类型'));
+    expect(haptics, isEmpty);
+  });
+
+  testWidgets('刷新与考勤编辑各反馈一次，触觉完成前业务已经执行', (tester) async {
+    var refreshed = 0;
+    var edited = 0;
+    hapticGate = Completer<void>();
+    await _pump(tester, onRefresh: () => refreshed++, onEdit: () => edited++);
+    await tester.tap(find.byTooltip('刷新今日状态'));
+    expect(refreshed, 1);
+    await tester.tap(find.widgetWithText(TextButton, '核对工时与类型'));
+    expect(edited, 1);
+    expect(haptics.map((call) => call.arguments), [
+      'HapticFeedbackType.lightImpact',
+      'HapticFeedbackType.lightImpact',
+    ]);
+    hapticGate!.complete();
+    await tester.pump();
+  });
+
+  testWidgets('关闭触觉仍可操作工作台且不调用震动通道', (tester) async {
+    await HapticUtils.setMode(HapticMode.off);
+    var count = 0;
+    await _pump(
+      tester,
+      onRefresh: () => count++,
+      onEdit: () => count++,
+      onAction: (_) => count++,
+      onDate: (_) => count++,
+    );
+    await tester.tap(find.byTooltip('刷新今日状态'));
+    await tester.tap(find.widgetWithText(TextButton, '核对工时与类型'));
+    await tester.tap(find.byKey(const ValueKey('ios-workbench-action')));
+    await tester.tap(find.byKey(const ValueKey('workbench-date-2026-09-09')));
+    expect(count, 4);
+    expect(haptics, isEmpty);
   });
 
   testWidgets('没有汇总和查询失败不会误报工时或完成，主操作可重试', (tester) async {

@@ -3,9 +3,24 @@ import 'dart:async';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:hikiot_worktime/services/boss_hours_auto_refresh_service.dart';
 import 'package:hikiot_worktime/services/storage_service.dart';
+import 'package:hikiot_worktime/services/boss_session_runner.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
 void main() {
+  test('失效的旧单日查询不能把无缓存日期伪装为确认零工时', () async {
+    SharedPreferences.setMockInitialValues({});
+    final storage = StorageService();
+    final gate = Completer<BossSessionResult<double>>();
+    final service = BossHoursAutoRefreshService(
+      storage: storage,
+      loadDay: (_) => gate.future,
+    );
+    final pending = service.refreshDate(DateTime(2026, 9, 12));
+    await storage.markBossHoursDateChanged('2026-09-12');
+    gate.complete(const BossSessionResult(BossSessionStatus.ok, 0));
+    expect((await pending).status, BossSessionStatus.failed);
+    expect(await storage.hasBossHoursForDate('2026-09-12'), isFalse);
+  });
   final now = DateTime(2026, 9, 4, 9);
   final month = DateTime(2026, 9);
 
@@ -127,5 +142,84 @@ void main() {
 
     expect(result.status, BossHoursAutoRefreshStatus.updated);
     expect(loadCount, 1);
+  });
+  test('单日并发合并，强制刷新等待旧的 0 回包再查询提交后的新值', () async {
+    final old = Completer<BossSessionResult<double>>();
+    var count = 0;
+    final service = BossHoursAutoRefreshService(
+      loadDay: (_) {
+        count++;
+        return count == 1
+            ? old.future
+            : Future.value(const BossSessionResult(BossSessionStatus.ok, 8));
+      },
+    );
+    final date = DateTime(2026, 9, 12);
+    final first = service.refreshDate(date);
+    expect(identical(first, service.refreshDate(date)), isTrue);
+    final forced = service.refreshDate(date, force: true);
+    expect(count, 1);
+    old.complete(const BossSessionResult(BossSessionStatus.ok, 0));
+    expect((await first).value, 0);
+    expect((await forced).value, 8);
+    expect(count, 2);
+    expect((await StorageService().loadBossHours('2026-09'))['2026-09-12'], 8);
+  });
+
+  test('单日旧回包不会覆盖期间提交，返回最终缓存值', () async {
+    final pending = Completer<BossSessionResult<double>>();
+    final storage = StorageService();
+    final service = BossHoursAutoRefreshService(
+      storage: storage,
+      loadDay: (_) => pending.future,
+    );
+    final request = service.refreshDate(DateTime(2026, 9, 12));
+    await storage.saveBossHoursForDate('2026-09-12', 8);
+    pending.complete(const BossSessionResult(BossSessionStatus.ok, 0));
+    expect((await request).value, 8);
+  });
+
+  test('单日查询异常或无效数值不清空原缓存', () async {
+    final storage = StorageService();
+    await storage.saveBossHoursForDate('2026-09-12', 8);
+    for (final value in [null, -1.0, double.nan, double.infinity]) {
+      final service = BossHoursAutoRefreshService(
+        storage: storage,
+        loadDay: (_) async => BossSessionResult(BossSessionStatus.ok, value),
+      );
+      expect(
+        (await service.refreshDate(DateTime(2026, 9, 12))).status,
+        BossSessionStatus.failed,
+      );
+      expect((await storage.loadBossHours('2026-09'))['2026-09-12'], 8);
+    }
+    final service = BossHoursAutoRefreshService(
+      storage: storage,
+      loadDay: (_) async => throw StateError('offline'),
+    );
+    expect(
+      (await service.refreshDate(DateTime(2026, 9, 12))).status,
+      BossSessionStatus.failed,
+    );
+    expect((await storage.loadBossHours('2026-09'))['2026-09-12'], 8);
+  });
+
+  test('月份刷新期间单日提交的新值保留，结果与缓存一致', () async {
+    final pending = Completer<Map<String, double>?>();
+    final started = Completer<void>();
+    final storage = StorageService();
+    final service = BossHoursAutoRefreshService(
+      storage: storage,
+      loadMonth: (_) {
+        started.complete();
+        return pending.future;
+      },
+    );
+    final request = service.refreshIfStale(month, force: true);
+    await started.future;
+    await storage.saveBossHoursForDate('2026-09-12', 8);
+    pending.complete({'2026-09-12': 0});
+    expect((await request).hours['2026-09-12'], 8);
+    expect((await storage.loadBossHours('2026-09'))['2026-09-12'], 8);
   });
 }

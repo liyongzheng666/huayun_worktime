@@ -3,8 +3,11 @@ import '../utils/work_log_boss_hours.dart';
 import '../utils/work_log_request_capture.dart';
 import 'boss_session_runner.dart';
 import 'storage_service.dart';
+import 'work_log_submit_service.dart';
 
 typedef BossMonthLoader = Future<Map<String, double>?> Function(DateTime month);
+typedef BossDayLoader =
+    Future<BossSessionResult<double>> Function(DateTime date);
 typedef RefreshClock = DateTime Function();
 
 enum BossHoursAutoRefreshStatus { updated, fresh, unavailable }
@@ -25,11 +28,13 @@ class BossHoursAutoRefreshService {
   BossHoursAutoRefreshService({
     StorageService? storage,
     BossMonthLoader? loadMonth,
+    BossDayLoader? loadDay,
     this.maxAge = const Duration(minutes: 15),
     this.failureBackoff = const Duration(minutes: 5),
     RefreshClock? now,
   }) : _storage = storage ?? StorageService(),
        _loadMonth = loadMonth ?? _defaultLoadMonth,
+       _loadDay = loadDay ?? _defaultLoadDay,
        _now = now ?? DateTime.now;
 
   static final BossHoursAutoRefreshService shared =
@@ -37,6 +42,8 @@ class BossHoursAutoRefreshService {
 
   final StorageService _storage;
   final BossMonthLoader _loadMonth;
+  final BossDayLoader _loadDay;
+  final Map<String, Future<BossSessionResult<double>>> _dayInFlight = {};
   final Duration maxAge;
   final Duration failureBackoff;
   final RefreshClock _now;
@@ -54,7 +61,9 @@ class BossHoursAutoRefreshService {
 
     final future = _refresh(normalized, monthKey, force: force);
     _inFlight[monthKey] = future;
-    future.whenComplete(() => _inFlight.remove(monthKey));
+    future.whenComplete(() {
+      if (identical(_inFlight[monthKey], future)) _inFlight.remove(monthKey);
+    });
     return future;
   }
 
@@ -93,6 +102,7 @@ class BossHoursAutoRefreshService {
       }
 
       _lastAttempt[monthKey] = now;
+      final revision = StorageService.bossHoursRevision;
       final loaded = await _loadMonth(month);
       if (loaded == null) {
         return BossHoursAutoRefreshResult(
@@ -101,10 +111,15 @@ class BossHoursAutoRefreshService {
         );
       }
 
-      await _storage.saveBossHours(monthKey, loaded, refreshedAt: now);
+      await _storage.saveBossHours(
+        monthKey,
+        loaded,
+        refreshedAt: now,
+        expectedRevision: revision,
+      );
       return BossHoursAutoRefreshResult(
         status: BossHoursAutoRefreshStatus.updated,
-        hours: loaded,
+        hours: await _storage.loadBossHours(monthKey),
       );
     } catch (_) {
       // 自动刷新不能把异常冒泡到全局，更不能清空已有缓存。
@@ -114,6 +129,62 @@ class BossHoursAutoRefreshService {
       );
     }
   }
+
+  /// 打开日志或提交后查询指定日期。强制刷新等待旧查询结束，再启动新查询。
+  Future<BossSessionResult<double>> refreshDate(
+    DateTime date, {
+    bool force = false,
+  }) {
+    final normalized = DateTime(date.year, date.month, date.day);
+    final key = DateHelper.formatDate(normalized);
+    final running = _dayInFlight[key];
+    if (running != null) {
+      if (!force) return running;
+      return running.then((_) => refreshDate(normalized, force: true));
+    }
+    final future = _refreshDate(normalized, key);
+    _dayInFlight[key] = future;
+    future.whenComplete(() {
+      if (identical(_dayInFlight[key], future)) _dayInFlight.remove(key);
+    });
+    return future;
+  }
+
+  Future<BossSessionResult<double>> _refreshDate(
+    DateTime date,
+    String key,
+  ) async {
+    try {
+      final revision = StorageService.bossHoursRevision;
+      final result = await _loadDay(date);
+      final hours = result.value;
+      if (!result.isOk) return result;
+      if (hours == null || !hours.isFinite || hours < 0) {
+        return const BossSessionResult(BossSessionStatus.failed);
+      }
+      await _storage.saveBossHoursForDate(
+        key,
+        hours,
+        expectedRevision: revision,
+      );
+      // 若请求期间已更新该日，返回最终缓存，避免调用页面再展示陈旧回包。
+      // 若旧请求已失效且还没有新值，缺席键表示未知，不能凭空补成0。
+      if (!await _storage.hasBossHoursForDate(key)) {
+        return const BossSessionResult(BossSessionStatus.failed);
+      }
+      final cached = await _storage.loadBossHours(key.substring(0, 7));
+      return BossSessionResult(BossSessionStatus.ok, cached[key] ?? 0);
+    } catch (_) {
+      return const BossSessionResult(BossSessionStatus.failed);
+    }
+  }
+
+  static Future<BossSessionResult<double>> _defaultLoadDay(DateTime date) =>
+      BossSessionRunner.run<double>(
+        (controller) => WorkLogSubmitService(
+          controller,
+        ).queryExistingHours(DateHelper.formatDate(date)),
+      );
 
   static Future<Map<String, double>?> _defaultLoadMonth(DateTime month) async {
     final result = await BossSessionRunner.run<String>((controller) async {

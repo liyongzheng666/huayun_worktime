@@ -1,7 +1,10 @@
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 
 import '../models/today_wrap_up.dart';
 import '../utils/date_helper.dart';
+import '../utils/haptic_utils.dart';
 import '../utils/work_log_csv_parser.dart';
 import '../utils/work_time_calculator.dart';
 
@@ -123,7 +126,12 @@ class IosWorkbench extends StatelessWidget {
                       ),
                       IconButton(
                         tooltip: '刷新今日状态',
-                        onPressed: isRefreshing ? null : onRefresh,
+                        onPressed: isRefreshing
+                            ? null
+                            : () {
+                                unawaited(HapticUtils.lightImpact());
+                                onRefresh();
+                              },
                         icon: isRefreshing
                             ? const SizedBox.square(
                                 dimension: 16,
@@ -229,7 +237,12 @@ class IosWorkbench extends StatelessWidget {
                   Align(
                     alignment: Alignment.centerRight,
                     child: TextButton(
-                      onPressed: isRefreshing ? null : onEditAttendance,
+                      onPressed: isRefreshing
+                          ? null
+                          : () {
+                              unawaited(HapticUtils.lightImpact());
+                              onEditAttendance();
+                            },
                       child: const Text(
                         '核对工时与类型',
                         style: TextStyle(fontSize: 12),
@@ -337,9 +350,14 @@ class IosWorkbench extends StatelessWidget {
                   key: const ValueKey('ios-workbench-action'),
                   onPressed: isRefreshing
                       ? null
-                      : () => status == null
-                            ? onRefresh()
-                            : onAction(status.primaryAction),
+                      : () {
+                          unawaited(HapticUtils.lightImpact());
+                          if (status == null) {
+                            onRefresh();
+                          } else {
+                            onAction(status.primaryAction);
+                          }
+                        },
                   style: FilledButton.styleFrom(
                     padding: const EdgeInsets.symmetric(
                       horizontal: 16,
@@ -485,7 +503,13 @@ class _WeekStrip extends StatelessWidget {
                     key: ValueKey(
                       'workbench-date-${DateHelper.formatDate(date)}',
                     ),
-                    onPressed: future ? null : () => onSelectDate(date),
+                    onPressed: future
+                        ? null
+                        : () {
+                            if (selected) return;
+                            unawaited(HapticUtils.selectionClick());
+                            onSelectDate(date);
+                          },
                     style: TextButton.styleFrom(
                       padding: const EdgeInsets.symmetric(vertical: 8),
                       minimumSize: const Size(40, 48),
