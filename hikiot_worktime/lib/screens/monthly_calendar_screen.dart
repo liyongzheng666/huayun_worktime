@@ -31,11 +31,13 @@ import '../widgets/team_selection_dialog.dart';
 class MonthlyCalendarScreen extends StatefulWidget {
   final String token;
   final bool autoInitialize;
+  final HikiotApiClient? apiClient;
 
   const MonthlyCalendarScreen({
     super.key,
     required this.token,
     this.autoInitialize = true,
+    this.apiClient,
   });
 
   @override
@@ -43,13 +45,14 @@ class MonthlyCalendarScreen extends StatefulWidget {
 }
 
 class MonthlyCalendarScreenState extends State<MonthlyCalendarScreen> {
-  final HikiotApiClient _apiClient = HikiotApiClient();
+  late final HikiotApiClient _apiClient;
   final StorageService _storage = StorageService();
   final BossHoursAutoRefreshService _bossAutoRefresh =
       BossHoursAutoRefreshService.shared;
   late final TeamContextService _teamContextService;
   late final MonthlyAttendanceRepository _monthlyRepository;
   bool _isLoading = true;
+  bool _isUserContextReady = false;
   String? _error;
 
   // 防止重复弹出团队选择对话框
@@ -89,6 +92,7 @@ class MonthlyCalendarScreenState extends State<MonthlyCalendarScreen> {
   @override
   void initState() {
     super.initState();
+    _apiClient = widget.apiClient ?? HikiotApiClient();
     _apiClient.setToken(widget.token);
     _teamContextService = TeamContextService(
       storage: _storage,
@@ -107,6 +111,9 @@ class MonthlyCalendarScreenState extends State<MonthlyCalendarScreen> {
   }
 
   Future<void> initializeUserContext() => _initializeUser();
+
+  /// 初始化可能已展示错误而正常返回，不能据 Future 完成推断登录有效。
+  bool get isUserContextReady => _isUserContextReady;
 
   /// 加载置顶目标
   Future<void> _loadPinnedTarget() async {
@@ -132,7 +139,9 @@ class MonthlyCalendarScreenState extends State<MonthlyCalendarScreen> {
 
   /// 初始化用户信息
   Future<void> _initializeUser() async {
+    if (!mounted) return;
     setState(() {
+      _isUserContextReady = false;
       _isLoading = true;
       _error = null;
     });
@@ -141,22 +150,28 @@ class MonthlyCalendarScreenState extends State<MonthlyCalendarScreen> {
       final teamContext = await _teamContextService.initialize(
         chooseTeam: _chooseInitialTeam,
       );
+      if (!mounted) return;
       _teamNo = teamContext.teamNo;
       _personNo = teamContext.personNo;
       _teamName = teamContext.teamName;
       _userName =
           teamContext.userName ?? await _storage.loadUserName() ?? '未知用户';
 
-      if (_personNo == null) {
+      if (_personNo == null || _personNo!.trim().isEmpty) {
         throw Exception('未找到员工编号');
       }
+
+      _isUserContextReady = true;
 
       // 加载月度数据（只有切换团队时才强制刷新，否则用缓存秒开）
       await _loadMonthlyData(forceRefresh: teamContext.teamChanged);
     } catch (e) {
+      if (!mounted) return;
+      _isUserContextReady = false;
       // 检查是否是Token失效导致的错误
-      if (mounted && TokenExpiredService.isTokenExpiredError(e)) {
+      if (TokenExpiredService.isTokenExpiredError(e)) {
         setState(() {
+          _error = '初始化失败: $e';
           _isLoading = false;
         });
         await TokenExpiredService.handleTokenExpired(context);
@@ -340,7 +355,11 @@ class MonthlyCalendarScreenState extends State<MonthlyCalendarScreen> {
             });
       }
     } catch (e) {
+      if (!mounted) return;
       setState(() {
+        if (TokenExpiredService.isTokenExpiredError(e)) {
+          _isUserContextReady = false;
+        }
         _error = '加载数据失败: $e';
         _isLoading = false;
       });

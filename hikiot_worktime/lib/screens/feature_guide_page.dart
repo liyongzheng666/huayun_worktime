@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 import '../core/theme/theme.dart';
+import '../services/platform_capabilities.dart';
 import '../utils/haptic_utils.dart';
 
 /// 功能说明页面
@@ -20,6 +21,7 @@ class FeatureGuidePage extends StatefulWidget {
 class _FeatureGuidePageState extends State<FeatureGuidePage> {
   final PageController _pageController = PageController();
   int _currentPage = 0;
+  bool _isClosing = false;
 
   final List<_FeatureItem> _features = [
     _FeatureItem(
@@ -51,7 +53,7 @@ class _FeatureGuidePageState extends State<FeatureGuidePage> {
       color: AppColors.warning,
       title: '下拉刷新',
       points: [
-        '在任意页面下拉即可刷新数据',
+        '在每日或月度页面下拉可刷新考勤',
         '自动同步服务器最新打卡记录',
         '保留你的手动修改标记',
         '智能缓存减少重复请求',
@@ -87,9 +89,9 @@ class _FeatureGuidePageState extends State<FeatureGuidePage> {
       color: Colors.cyan,
       title: '工时更新',
       points: [
-        '海康API不支持按月批量获取工时',
+        '在月度统计页面选择需要更新的月份',
         '快速更新：从今日向前逐日请求，遇到与缓存一致的数据即停止',
-        '全量更新：强制刷新本月所有日期',
+        '全量更新：刷新所选月份的考勤，并同步BOSS工时',
         '手动标记的日期不会被覆盖',
       ],
     ),
@@ -110,23 +112,25 @@ class _FeatureGuidePageState extends State<FeatureGuidePage> {
       icon: Icons.push_pin,
       color: AppColors.error,
       title: '目标置顶',
-      points: [
-        '长按任意目标卡片可置顶',
-        '置顶的目标显示在最前面',
-        '再次长按取消置顶',
-        '目标按百分比从低到高排列',
-      ],
+      points: ['长按任意目标卡片可置顶', '置顶的目标显示在最前面', '再次长按取消置顶', '目标按百分比从低到高排列'],
     ),
     _FeatureItem(
       icon: Icons.notifications_active,
       color: Colors.amber,
       title: '打卡提醒',
       points: [
-        '在设置中开启打卡提醒',
-        '上班提醒：检测是否已打上班卡',
-        '下班提醒：检测下班卡和工时情况',
+        '在设置中开启打卡提醒，并允许通知权限',
+        if (PlatformCapabilities.supportsLiveReminderContent) ...[
+          '上班提醒：检测是否已打上班卡',
+          '下班提醒：检测下班卡和工时情况',
+          '根据已保存的休息日标记跳过提醒，未知日期按周末判断',
+        ] else ...[
+          'iOS按设定时间发送固定文案，请打开App查看打卡状态',
+          '每天重复提醒，不会自动跳过周末或节假日',
+        ],
         '自定义提醒时间',
-        '节假日自动跳过',
+        if (PlatformCapabilities.needsVendorKeepAliveGuide)
+          '按设置中的手机权限引导开启自启动和后台运行',
       ],
     ),
   ];
@@ -138,8 +142,9 @@ class _FeatureGuidePageState extends State<FeatureGuidePage> {
   }
 
   void _nextPage() {
-    HapticUtils.lightImpact();
+    if (_isClosing) return;
     if (_currentPage < _features.length - 1) {
+      HapticUtils.lightImpact();
       _pageController.nextPage(
         duration: const Duration(milliseconds: 300),
         curve: Curves.easeInOut,
@@ -150,6 +155,9 @@ class _FeatureGuidePageState extends State<FeatureGuidePage> {
   }
 
   void _close() {
+    // 退出动画或宿主处理回调期间的连续点击只完成一次。
+    if (_isClosing) return;
+    _isClosing = true;
     HapticUtils.mediumImpact();
     if (widget.onClose != null) {
       widget.onClose!();
@@ -166,53 +174,58 @@ class _FeatureGuidePageState extends State<FeatureGuidePage> {
         title: const Text('功能说明'),
         backgroundColor: Theme.of(context).colorScheme.inversePrimary,
         leading: widget.showCloseButton
-            ? IconButton(icon: const Icon(Icons.close), onPressed: _close)
+            ? IconButton(
+                icon: const Icon(Icons.close),
+                tooltip: '关闭功能说明',
+                onPressed: _close,
+              )
             : null,
         automaticallyImplyLeading: widget.showCloseButton,
       ),
-      body: Column(
-        children: [
-          // 页面指示器
-          Container(
-            padding: const EdgeInsets.symmetric(vertical: 12),
-            child: Row(
-              mainAxisAlignment: MainAxisAlignment.center,
-              children: List.generate(
-                _features.length,
-                (index) => AnimatedContainer(
-                  duration: const Duration(milliseconds: 200),
-                  margin: const EdgeInsets.symmetric(horizontal: 3),
-                  width: _currentPage == index ? 20 : 8,
-                  height: 8,
-                  decoration: BoxDecoration(
-                    borderRadius: BorderRadius.circular(4),
-                    color: _currentPage == index
-                        ? _features[index].color
-                        : AppColors.border,
+      body: SafeArea(
+        top: false,
+        child: Column(
+          children: [
+            // 页面指示器
+            Container(
+              padding: const EdgeInsets.symmetric(vertical: 12),
+              child: Row(
+                mainAxisAlignment: MainAxisAlignment.center,
+                children: List.generate(
+                  _features.length,
+                  (index) => AnimatedContainer(
+                    duration: const Duration(milliseconds: 200),
+                    margin: const EdgeInsets.symmetric(horizontal: 3),
+                    width: _currentPage == index ? 20 : 8,
+                    height: 8,
+                    decoration: BoxDecoration(
+                      borderRadius: BorderRadius.circular(4),
+                      color: _currentPage == index
+                          ? _features[index].color
+                          : AppColors.border,
+                    ),
                   ),
                 ),
               ),
             ),
-          ),
 
-          // 功能卡片
-          Expanded(
-            child: PageView.builder(
-              controller: _pageController,
-              onPageChanged: (index) {
-                HapticUtils.selectionClick();
-                setState(() => _currentPage = index);
-              },
-              itemCount: _features.length,
-              itemBuilder: (context, index) {
-                return _buildFeatureCard(_features[index]);
-              },
+            // 功能卡片
+            Expanded(
+              child: PageView.builder(
+                controller: _pageController,
+                onPageChanged: (index) {
+                  HapticUtils.selectionClick();
+                  setState(() => _currentPage = index);
+                },
+                itemCount: _features.length,
+                itemBuilder: (context, index) {
+                  return _buildFeatureCard(_features[index]);
+                },
+              ),
             ),
-          ),
 
-          // 底部按钮
-          SafeArea(
-            child: Padding(
+            // 底部按钮
+            Padding(
               padding: const EdgeInsets.fromLTRB(20, 8, 20, 16),
               child: Row(
                 children: [
@@ -255,8 +268,8 @@ class _FeatureGuidePageState extends State<FeatureGuidePage> {
                 ],
               ),
             ),
-          ),
-        ],
+          ],
+        ),
       ),
     );
   }
@@ -267,7 +280,8 @@ class _FeatureGuidePageState extends State<FeatureGuidePage> {
       child: Card(
         elevation: 4,
         shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
-        child: Padding(
+        clipBehavior: Clip.antiAlias,
+        child: SingleChildScrollView(
           padding: const EdgeInsets.all(20),
           child: Column(
             crossAxisAlignment: CrossAxisAlignment.start,
@@ -285,12 +299,14 @@ class _FeatureGuidePageState extends State<FeatureGuidePage> {
                     child: Icon(feature.icon, size: 28, color: feature.color),
                   ),
                   const SizedBox(width: 16),
-                  Text(
-                    feature.title,
-                    style: TextStyle(
-                      fontSize: 22,
-                      fontWeight: FontWeight.bold,
-                      color: feature.color,
+                  Expanded(
+                    child: Text(
+                      feature.title,
+                      style: TextStyle(
+                        fontSize: 22,
+                        fontWeight: FontWeight.bold,
+                        color: feature.color,
+                      ),
                     ),
                   ),
                 ],
@@ -304,49 +320,45 @@ class _FeatureGuidePageState extends State<FeatureGuidePage> {
               const SizedBox(height: 16),
 
               // 功能点列表（主要内容区域）
-              Expanded(
-                child: ListView.separated(
-                  padding: EdgeInsets.zero,
-                  itemCount: feature.points.length,
-                  separatorBuilder: (_, _) => const SizedBox(height: 12),
-                  itemBuilder: (context, index) {
-                    return Row(
-                      crossAxisAlignment: CrossAxisAlignment.start,
-                      children: [
-                        Container(
-                          width: 24,
-                          height: 24,
-                          decoration: BoxDecoration(
-                            color: feature.color.withValues(alpha: 0.1),
-                            shape: BoxShape.circle,
-                          ),
-                          child: Center(
-                            child: Text(
-                              '${index + 1}',
-                              style: TextStyle(
-                                fontSize: 12,
-                                fontWeight: FontWeight.bold,
-                                color: feature.color,
-                              ),
-                            ),
+              for (var index = 0; index < feature.points.length; index++) ...[
+                if (index > 0) const SizedBox(height: 12),
+                Row(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Container(
+                      constraints: const BoxConstraints(
+                        minWidth: 24,
+                        minHeight: 24,
+                      ),
+                      decoration: BoxDecoration(
+                        color: feature.color.withValues(alpha: 0.1),
+                        shape: BoxShape.circle,
+                      ),
+                      child: Center(
+                        child: Text(
+                          '${index + 1}',
+                          style: TextStyle(
+                            fontSize: 12,
+                            fontWeight: FontWeight.bold,
+                            color: feature.color,
                           ),
                         ),
-                        const SizedBox(width: 12),
-                        Expanded(
-                          child: Text(
-                            feature.points[index],
-                            style: TextStyle(
-                              fontSize: AppDimens.font,
-                              height: 1.4,
-                              color: AppColors.textPrimary,
-                            ),
-                          ),
+                      ),
+                    ),
+                    const SizedBox(width: 12),
+                    Expanded(
+                      child: Text(
+                        feature.points[index],
+                        style: TextStyle(
+                          fontSize: AppDimens.font,
+                          height: 1.4,
+                          color: AppColors.textPrimary,
                         ),
-                      ],
-                    );
-                  },
+                      ),
+                    ),
+                  ],
                 ),
-              ),
+              ],
             ],
           ),
         ),

@@ -8,10 +8,10 @@ import '../services/storage_service.dart';
 import 'main_screen.dart';
 
 class LoginScreen extends StatefulWidget {
-  /// 是否强制登出（清除 cookies 后再加载登录页）
+  /// 默认先清理旧 Cookie，覆盖退出清理失败后无本地 token 的重启入口。
   final bool forceLogout;
 
-  const LoginScreen({super.key, this.forceLogout = false});
+  const LoginScreen({super.key, this.forceLogout = true});
 
   @override
   State<LoginScreen> createState() => _LoginScreenState();
@@ -22,6 +22,8 @@ class _LoginScreenState extends State<LoginScreen> {
   double progress = 0;
   bool isLoading = true;
   bool _cookiesCleared = false;
+  bool _isClearingCookies = false;
+  bool _cookieClearFailed = false;
   bool _isSavingToken = false;
 
   @override
@@ -35,11 +37,22 @@ class _LoginScreenState extends State<LoginScreen> {
   }
 
   Future<void> _clearCookiesFirst() async {
-    await SessionService.clearHikiotCookies();
-    if (mounted) {
+    if (_isClearingCookies) return;
+    setState(() {
+      _isClearingCookies = true;
+      _cookieClearFailed = false;
+    });
+    try {
+      await SessionService.clearHikiotCookies();
+      if (!mounted) return;
       setState(() {
         _cookiesCleared = true;
       });
+    } catch (_) {
+      if (!mounted) return;
+      setState(() => _cookieClearFailed = true);
+    } finally {
+      _isClearingCookies = false;
     }
   }
 
@@ -49,11 +62,28 @@ class _LoginScreenState extends State<LoginScreen> {
     if (widget.forceLogout && !_cookiesCleared) {
       return Scaffold(
         appBar: AppBar(
-          title: const Text('正在退出...'),
+          title: Text(_cookieClearFailed ? '登录准备失败' : '正在准备登录...'),
           backgroundColor: AppColors.primary,
           foregroundColor: AppColors.onPrimary,
         ),
-        body: const Center(child: CircularProgressIndicator()),
+        body: Center(
+          child: _cookieClearFailed
+              ? Padding(
+                  padding: const EdgeInsets.all(24),
+                  child: Column(
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      const Text('清理登录状态失败，请重试。'),
+                      const SizedBox(height: 16),
+                      FilledButton(
+                        onPressed: _clearCookiesFirst,
+                        child: const Text('重试'),
+                      ),
+                    ],
+                  ),
+                )
+              : const CircularProgressIndicator(),
+        ),
       );
     }
 

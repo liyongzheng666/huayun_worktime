@@ -23,7 +23,11 @@ class SessionService {
   /// 完整退出登录：尽力通知服务端，然后清 WebView 和本地认证信息。
   Future<void> logout() async {
     final token = await _storage.loadToken();
-    await clearRemoteAndWebSession(token);
+    try {
+      await clearRemoteAndWebSession(token);
+    } catch (_) {
+      // WebView 清理失败也要退出本地会话，登录页会在载入旧 Cookie 前重试。
+    }
     await _storage.clearAuthInfo();
   }
 

@@ -92,6 +92,7 @@ class IosWorkbench extends StatelessWidget {
           Expanded(
             child: SingleChildScrollView(
               key: const ValueKey('ios-workbench-scroll'),
+              physics: const AlwaysScrollableScrollPhysics(),
               padding: const EdgeInsets.fromLTRB(24, 0, 24, 16),
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.stretch,

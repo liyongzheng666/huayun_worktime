@@ -9,9 +9,10 @@ class StartupRefreshCoordinator {
     required AsyncStep refreshDaily,
     required AsyncStep refreshMonthly,
     required MountedCheck isMounted,
+    bool Function()? isSessionReady,
   }) async {
     await initializeSession();
-    if (!isMounted()) return;
+    if (!isMounted() || (isSessionReady != null && !isSessionReady())) return;
 
     await refreshDaily();
     if (!isMounted()) return;

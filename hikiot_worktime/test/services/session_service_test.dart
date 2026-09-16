@@ -86,5 +86,20 @@ void main() {
       expect(remoteLogoutTokens, ['token-1']);
       expect(clearWebSessionCount, 1);
     });
+
+    test('Cookie 清理失败仍清除本地凭据，让登录页可以重新清理并重试', () async {
+      await storage.saveToken('expired-token');
+      await storage.saveUserName('张三');
+      final service = SessionService(
+        storage: storage,
+        remoteLogout: (_) async {},
+        clearWebSession: () async => throw StateError('Cookie store failed'),
+      );
+
+      await expectLater(service.logout(), completes);
+
+      expect(await storage.loadToken(), isNull);
+      expect(await storage.loadUserName(), isNull);
+    });
   });
 }

@@ -3,6 +3,8 @@ import 'dart:async';
 import 'package:flutter/material.dart';
 import '../core/theme/theme.dart';
 import '../services/app_update_service.dart';
+import '../services/daily_attendance_repository.dart';
+import '../services/hikiot_api_client.dart';
 import 'daily_hours_screen.dart';
 import 'monthly_calendar_screen.dart';
 import 'settings_screen.dart';
@@ -17,8 +19,15 @@ import '../utils/haptic_utils.dart';
 /// 主框架页面 - 包含底部导航栏
 class MainScreen extends StatefulWidget {
   final String token;
+  final HikiotApiClient? apiClient;
+  final DailyAttendanceRepository? dailyRepository;
 
-  const MainScreen({super.key, required this.token});
+  const MainScreen({
+    super.key,
+    required this.token,
+    this.apiClient,
+    this.dailyRepository,
+  });
 
   @override
   State<MainScreen> createState() => _MainScreenState();
@@ -26,6 +35,7 @@ class MainScreen extends StatefulWidget {
 
 class _MainScreenState extends State<MainScreen> with WidgetsBindingObserver {
   int _currentIndex = 0;
+  bool _startupReady = false;
   final AppUpdateService _appUpdateService = AppUpdateService();
 
   final GlobalKey<MonthlyCalendarScreenState> _monthlyKey = GlobalKey();
@@ -89,13 +99,24 @@ class _MainScreenState extends State<MainScreen> with WidgetsBindingObserver {
       },
       refreshDaily: () async {
         await _dailyKey.currentState?.refreshData();
+        if (mounted) setState(() => _startupReady = true);
       },
       refreshMonthly: () async {
         await _monthlyKey.currentState?.smartUpdate();
       },
       isMounted: () => mounted,
+      isSessionReady: () =>
+          _monthlyKey.currentState?.isUserContextReady ?? false,
     );
-    if (mounted) await _dailyKey.currentState?.refreshMonthCache();
+    if (!mounted) return;
+    if (!(_monthlyKey.currentState?.isUserContextReady ?? false)) {
+      // 首次资料加载失败时展示已有错误和重试入口，避免留在空白首页。
+      if (_currentIndex == 0 && ModalRoute.of(context)?.isCurrent == true) {
+        setState(() => _currentIndex = 1);
+      }
+      return;
+    }
+    await _dailyKey.currentState?.refreshMonthCache();
   }
 
   Future<void> _onTabTap(int index) async {
@@ -104,6 +125,9 @@ class _MainScreenState extends State<MainScreen> with WidgetsBindingObserver {
     }
     setState(() {
       _currentIndex = index;
+      if (index == 0) {
+        _startupReady = _monthlyKey.currentState?.isUserContextReady ?? false;
+      }
     });
 
     // 切换到每日页面时,刷新数据（包括从月度页面修改的手动标记）
@@ -144,15 +168,23 @@ class _MainScreenState extends State<MainScreen> with WidgetsBindingObserver {
           DailyHoursScreen(
             key: _dailyKey,
             autoLoad: false,
+            dailyRepository: widget.dailyRepository,
+            isActive: _currentIndex == 0 && _startupReady,
             onWrapUpAction: _openWrapUpTask,
           ),
           MonthlyCalendarScreen(
             key: _monthlyKey,
             token: widget.token,
             autoInitialize: false,
+            apiClient: widget.apiClient,
           ),
           WorkLogScreen(key: _workLogKey),
-          const SettingsScreen(),
+          SettingsScreen(
+            onRestartOnboarding: () {
+              unawaited(_onTabTap(0));
+              _dailyKey.currentState?.showOnboarding();
+            },
+          ),
         ],
       ),
       bottomNavigationBar: PlatformCapabilities.supportsTodayWrapUp

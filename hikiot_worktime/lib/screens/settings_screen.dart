@@ -30,7 +30,9 @@ import 'feature_guide_page.dart';
 
 /// 设置页面
 class SettingsScreen extends StatefulWidget {
-  const SettingsScreen({super.key});
+  final VoidCallback? onRestartOnboarding;
+
+  const SettingsScreen({super.key, this.onRestartOnboarding});
 
   @override
   State<SettingsScreen> createState() => _SettingsScreenState();
@@ -2220,6 +2222,10 @@ class _SettingsScreenState extends State<SettingsScreen> {
     await _settingsRepository.saveOnboardingCompleted(false);
 
     if (mounted) {
+      if (widget.onRestartOnboarding != null) {
+        widget.onRestartOnboarding!();
+        return;
+      }
       ScaffoldMessenger.of(context).showSnackBar(
         const SnackBar(
           content: Text('已重置，重启本应用，即可重新体验新手引导'),

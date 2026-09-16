@@ -28,6 +28,7 @@ import 'photo_preview_screen.dart';
 
 class DailyHoursScreen extends StatefulWidget {
   final bool autoLoad;
+  final bool isActive;
   final DailyAttendanceRepository? dailyRepository;
   final TodayWrapUpService? todayWrapUpService;
   final DateTime Function()? wrapUpClock;
@@ -37,6 +38,7 @@ class DailyHoursScreen extends StatefulWidget {
   const DailyHoursScreen({
     super.key,
     this.autoLoad = true,
+    this.isActive = true,
     this.dailyRepository,
     this.todayWrapUpService,
     this.wrapUpClock,
@@ -77,7 +79,8 @@ class DailyHoursScreenState extends State<DailyHoursScreen>
   /// 目标进度列表的起点，可在设置里调整
   int _minTarget = AppConstants.defaultMinTarget;
   bool _showOnboarding = false; // 是否显示新手引导
-  bool _isUserPullRefresh = false; // 是否是用户主动下拉刷新
+  bool _completingOnboarding = false;
+  int _onboardingCheckSeq = 0;
 
   @override
   void initState() {
@@ -102,6 +105,14 @@ class DailyHoursScreenState extends State<DailyHoursScreen>
   }
 
   @override
+  void didUpdateWidget(covariant DailyHoursScreen oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (widget.isActive && !oldWidget.isActive) {
+      unawaited(_checkAndShowOnboarding());
+    }
+  }
+
+  @override
   void didChangeAppLifecycleState(AppLifecycleState state) {
     if (state == AppLifecycleState.resumed) {
       _loadDailyData();
@@ -110,13 +121,15 @@ class DailyHoursScreenState extends State<DailyHoursScreen>
 
   /// 检查并显示新手引导
   Future<void> _checkAndShowOnboarding() async {
-    // 检查是否首次使用
+    final seq = ++_onboardingCheckSeq;
     final completed = await _storage.loadOnboardingCompleted();
-
-    if (!completed) {
+    if (!mounted || seq != _onboardingCheckSeq) return;
+    if (completed) {
+      setState(() => _showOnboarding = false);
+    } else {
       // 延迟显示，让用户先看到页面内容
       await Future.delayed(const Duration(milliseconds: 500));
-      if (mounted) {
+      if (mounted && seq == _onboardingCheckSeq) {
         setState(() {
           _showOnboarding = true;
         });
@@ -126,39 +139,56 @@ class DailyHoursScreenState extends State<DailyHoursScreen>
 
   /// 显示新手引导(供外部调用)
   void showOnboarding() {
+    if (!mounted || _completingOnboarding) return;
+    ++_onboardingCheckSeq;
     setState(() {
       _showOnboarding = true;
     });
   }
 
   /// 完成新手引导
-  Future<void> _completeOnboarding() async {
+  Future<void> _completeOnboarding({bool showCongratulations = false}) async {
+    if (!_showOnboarding || _completingOnboarding || !widget.isActive) return;
+    _completingOnboarding = true;
+    ++_onboardingCheckSeq;
     setState(() {
       _showOnboarding = false;
     });
-
-    // 标记引导已完成
-    await _storage.saveOnboardingCompleted(true);
-
-    // 显示恭喜动画
-    if (!mounted) return;
-
-    await showDialog(
-      context: context,
-      barrierDismissible: false,
-      builder: (context) => _CongratulationsDialog(
-        onContinue: () {
-          Navigator.of(context).pop();
-          // 打开功能说明页面
-          Navigator.push(
-            context,
-            MaterialPageRoute(
-              builder: (_) => const FeatureGuidePage(showCloseButton: true),
-            ),
-          );
-        },
-      ),
-    );
+    try {
+      await _storage.saveOnboardingCompleted(true);
+      // 跳过只收起提示；庆祝只属于本次成功的主动下拉，不覆盖其它页面或弹窗。
+      if (!mounted ||
+          !showCongratulations ||
+          !widget.isActive ||
+          ModalRoute.of(context)?.isCurrent != true) {
+        return;
+      }
+      final showFeatures = await showDialog<bool>(
+        context: context,
+        barrierDismissible: false,
+        builder: (dialogContext) => _CongratulationsDialog(
+          onContinue: () => Navigator.of(dialogContext).pop(true),
+        ),
+      );
+      if (!mounted ||
+          !widget.isActive ||
+          showFeatures != true ||
+          ModalRoute.of(context)?.isCurrent != true) {
+        return;
+      }
+      await Navigator.of(
+        context,
+      ).push<void>(MaterialPageRoute(builder: (_) => const FeatureGuidePage()));
+    } catch (_) {
+      if (mounted) {
+        setState(() => _showOnboarding = true);
+        ScaffoldMessenger.of(
+          context,
+        ).showSnackBar(const SnackBar(content: Text('引导状态保存失败，请重试')));
+      }
+    } finally {
+      _completingOnboarding = false;
+    }
   }
 
   /// 加载置顶目标
@@ -192,7 +222,9 @@ class DailyHoursScreenState extends State<DailyHoursScreen>
   DateTime get selectedDate => _selectedDate;
 
   /// 加载每日数据
-  Future<void> _loadDailyData() async {
+  Future<void> _loadDailyData({bool fromPullRefresh = false}) async {
+    final completeOnRefresh = fromPullRefresh && _showOnboarding;
+    final onboardingSeq = _onboardingCheckSeq;
     final date = _selectedDate;
     final seq = ++_dailyLoadSeq;
     ++_wrapUpLoadSeq;
@@ -219,9 +251,14 @@ class DailyHoursScreenState extends State<DailyHoursScreen>
       }
 
       // 如果正在显示引导且是用户主动下拉刷新，完成引导
-      if (_showOnboarding && _isUserPullRefresh) {
-        _isUserPullRefresh = false;
-        _completeOnboarding();
+      if (completeOnRefresh &&
+          onboardingSeq == _onboardingCheckSeq &&
+          _showOnboarding &&
+          widget.isActive &&
+          ModalRoute.of(context)?.isCurrent == true &&
+          result.status == DailyAttendanceLoadStatus.loaded &&
+          result.attendanceData != null) {
+        unawaited(_completeOnboarding(showCongratulations: true));
       }
     } catch (e) {
       if (!mounted || seq != _dailyLoadSeq) return;
@@ -653,7 +690,7 @@ class DailyHoursScreenState extends State<DailyHoursScreen>
                 ),
           body: useWorkbench
               ? HapticRefreshIndicator(
-                  onRefresh: _loadDailyData,
+                  onRefresh: () => _loadDailyData(fromPullRefresh: true),
                   child: IosWorkbench(
                     selectedDate: _selectedDate,
                     today: _wrapUpNow,
@@ -673,19 +710,15 @@ class DailyHoursScreenState extends State<DailyHoursScreen>
                     onEditAttendance: _showEditDialog,
                   ),
                 )
-              : _isLoading
-              ? const Center(child: CircularProgressIndicator())
               : HapticRefreshIndicator(
-                  onRefresh: () async {
-                    _isUserPullRefresh = true; // 标记为用户主动下拉
-                    await _loadDailyData();
-                  },
+                  onRefresh: () => _loadDailyData(fromPullRefresh: true),
                   child: SingleChildScrollView(
                     physics: const AlwaysScrollableScrollPhysics(),
                     padding: const EdgeInsets.all(16),
                     child: Column(
                       crossAxisAlignment: CrossAxisAlignment.start,
                       children: [
+                        if (_isLoading) const LinearProgressIndicator(),
                         _buildDateSelector(),
                         const SizedBox(height: 12),
                         _buildTypeWarning(type),
@@ -705,7 +738,8 @@ class DailyHoursScreenState extends State<DailyHoursScreen>
                 ),
         ),
         // 新手引导覆盖层
-        if (_showOnboarding) PullRefreshGuide(onCompleted: _completeOnboarding),
+        if (_showOnboarding && widget.isActive)
+          PullRefreshGuide(onCompleted: () => _completeOnboarding()),
       ],
     );
   }
@@ -2496,6 +2530,7 @@ class _CongratulationsDialog extends StatefulWidget {
 
 class _CongratulationsDialogState extends State<_CongratulationsDialog>
     with SingleTickerProviderStateMixin {
+  bool _closing = false;
   late AnimationController _controller;
   late Animation<double> _scaleAnimation;
   late Animation<double> _rotateAnimation;
@@ -2527,6 +2562,16 @@ class _CongratulationsDialogState extends State<_CongratulationsDialog>
     super.dispose();
   }
 
+  void _close({bool showFeatures = false}) {
+    if (_closing) return;
+    _closing = true;
+    if (showFeatures) {
+      widget.onContinue();
+    } else {
+      Navigator.of(context).pop();
+    }
+  }
+
   @override
   Widget build(BuildContext context) {
     return Dialog(
@@ -2551,105 +2596,107 @@ class _CongratulationsDialogState extends State<_CongratulationsDialog>
                     ),
                   ],
                 ),
-                child: Column(
-                  mainAxisSize: MainAxisSize.min,
-                  children: [
-                    // 庆祝图标
-                    Container(
-                      width: 80,
-                      height: 80,
-                      decoration: BoxDecoration(
-                        gradient: LinearGradient(
-                          colors: [Colors.amber[400]!, Colors.orange[400]!],
-                          begin: Alignment.topLeft,
-                          end: Alignment.bottomRight,
-                        ),
-                        shape: BoxShape.circle,
-                      ),
-                      child: const Icon(
-                        Icons.celebration,
-                        size: 40,
-                        color: Colors.white,
-                      ),
-                    ),
-                    const SizedBox(height: 20),
-
-                    // 恭喜文字
-                    const Text(
-                      '🎉 恭喜！',
-                      style: TextStyle(
-                        fontSize: 28,
-                        fontWeight: FontWeight.bold,
-                        color: Colors.orange,
-                      ),
-                    ),
-                    const SizedBox(height: 12),
-
-                    Text(
-                      '你已经掌握了下拉刷新的操作',
-                      style: TextStyle(
-                        fontSize: 16,
-                        color: LegacyThemeColors.muted(
-                          context,
-                          Colors.grey[700]!,
-                        ),
-                      ),
-                    ),
-                    const SizedBox(height: 8),
-
-                    Text(
-                      '接下来了解更多实用功能吧',
-                      style: TextStyle(
-                        fontSize: 14,
-                        color: LegacyThemeColors.muted(
-                          context,
-                          Colors.grey[500]!,
-                        ),
-                      ),
-                    ),
-                    const SizedBox(height: 24),
-
-                    // 继续按钮
-                    SizedBox(
-                      width: double.infinity,
-                      child: ElevatedButton(
-                        onPressed: widget.onContinue,
-                        style: ElevatedButton.styleFrom(
-                          backgroundColor: LegacyThemeColors.primary(
-                            context,
-                            Colors.blue,
+                child: SingleChildScrollView(
+                  child: Column(
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      // 庆祝图标
+                      Container(
+                        width: 80,
+                        height: 80,
+                        decoration: BoxDecoration(
+                          gradient: LinearGradient(
+                            colors: [Colors.amber[400]!, Colors.orange[400]!],
+                            begin: Alignment.topLeft,
+                            end: Alignment.bottomRight,
                           ),
-                          foregroundColor: LegacyThemeColors.onPrimary(
-                            context,
-                            Colors.white,
-                          ),
-                          padding: const EdgeInsets.symmetric(vertical: 14),
-                          shape: RoundedRectangleBorder(
-                            borderRadius: BorderRadius.circular(12),
-                          ),
+                          shape: BoxShape.circle,
                         ),
-                        child: const Text(
-                          '查看功能说明',
-                          style: TextStyle(fontSize: 16),
+                        child: const Icon(
+                          Icons.celebration,
+                          size: 40,
+                          color: Colors.white,
                         ),
                       ),
-                    ),
-                    const SizedBox(height: 8),
+                      const SizedBox(height: 20),
 
-                    // 跳过按钮
-                    TextButton(
-                      onPressed: () => Navigator.of(context).pop(),
-                      child: Text(
-                        '稍后再看',
+                      // 恭喜文字
+                      const Text(
+                        '🎉 恭喜！',
                         style: TextStyle(
+                          fontSize: 28,
+                          fontWeight: FontWeight.bold,
+                          color: Colors.orange,
+                        ),
+                      ),
+                      const SizedBox(height: 12),
+
+                      Text(
+                        '你已经掌握了下拉刷新的操作',
+                        style: TextStyle(
+                          fontSize: 16,
+                          color: LegacyThemeColors.muted(
+                            context,
+                            Colors.grey[700]!,
+                          ),
+                        ),
+                      ),
+                      const SizedBox(height: 8),
+
+                      Text(
+                        '接下来了解更多实用功能吧',
+                        style: TextStyle(
+                          fontSize: 14,
                           color: LegacyThemeColors.muted(
                             context,
                             Colors.grey[500]!,
                           ),
                         ),
                       ),
-                    ),
-                  ],
+                      const SizedBox(height: 24),
+
+                      // 继续按钮
+                      SizedBox(
+                        width: double.infinity,
+                        child: ElevatedButton(
+                          onPressed: () => _close(showFeatures: true),
+                          style: ElevatedButton.styleFrom(
+                            backgroundColor: LegacyThemeColors.primary(
+                              context,
+                              Colors.blue,
+                            ),
+                            foregroundColor: LegacyThemeColors.onPrimary(
+                              context,
+                              Colors.white,
+                            ),
+                            padding: const EdgeInsets.symmetric(vertical: 14),
+                            shape: RoundedRectangleBorder(
+                              borderRadius: BorderRadius.circular(12),
+                            ),
+                          ),
+                          child: const Text(
+                            '查看功能说明',
+                            style: TextStyle(fontSize: 16),
+                          ),
+                        ),
+                      ),
+                      const SizedBox(height: 8),
+
+                      // 跳过按钮
+                      TextButton(
+                        onPressed: _close,
+                        child: Text(
+                          '稍后再看',
+                          style: TextStyle(
+                            color: LegacyThemeColors.muted(
+                              context,
+                              Colors.grey[500]!,
+                            ),
+                          ),
+                        ),
+                      ),
+                    ],
+                  ),
                 ),
               ),
             ),

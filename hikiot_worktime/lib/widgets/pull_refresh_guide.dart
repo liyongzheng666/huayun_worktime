@@ -57,87 +57,82 @@ class _PullRefreshGuideState extends State<PullRefreshGuide>
 
   @override
   Widget build(BuildContext context) {
-    return IgnorePointer(
-      ignoring: true, // 允许所有触摸事件穿透到下层页面
-      child: Stack(
-        children: [
-          // 顶部提示卡片
-          Positioned(
-            top: 100,
-            left: 20,
-            right: 20,
-            child: AnimatedBuilder(
-              animation: _pulseAnimation,
-              builder: (context, child) {
-                return Transform.scale(
-                  scale: _pulseAnimation.value,
-                  child: _buildGuideCard(),
-                );
-              },
-            ),
-          ),
-
-          // 中间手指动画
-          Positioned(
-            top: MediaQuery.of(context).size.height * 0.38,
-            left: 0,
-            right: 0,
-            child: AnimatedBuilder(
-              animation: _bounceAnimation,
-              builder: (context, child) {
-                return Transform.translate(
-                  offset: Offset(0, _bounceAnimation.value),
-                  child: Column(
-                    children: [
-                      // 向下箭头
-                      Icon(
-                        Icons.keyboard_double_arrow_down,
-                        size: 48,
-                        color: AppColors.primary.withValues(alpha: 0.8),
+    final colors = Theme.of(context).colorScheme;
+    return Positioned.fill(
+      child: SafeArea(
+        child: LayoutBuilder(
+          builder: (context, constraints) => Padding(
+            padding: const EdgeInsets.all(20),
+            child: Column(
+              mainAxisAlignment: MainAxisAlignment.spaceBetween,
+              children: [
+                // 仅装饰层穿透手势，按钮保留独立点击区域。
+                Flexible(
+                  flex: 3,
+                  child: IgnorePointer(
+                    child: AnimatedBuilder(
+                      animation: _pulseAnimation,
+                      builder: (context, child) => Transform.scale(
+                        scale: _pulseAnimation.value,
+                        child: child,
                       ),
-                      const SizedBox(height: 8),
-                      // 手指图标
-                      Container(
-                        padding: const EdgeInsets.all(16),
-                        decoration: BoxDecoration(
-                          color: AppColors.primary,
-                          shape: BoxShape.circle,
-                          boxShadow: [
-                            BoxShadow(
-                              color: AppColors.primary.withValues(alpha: 0.4),
-                              blurRadius: 20,
-                              spreadRadius: 5,
-                            ),
-                          ],
-                        ),
-                        child: Icon(
-                          Icons.touch_app,
-                          size: 40,
-                          color: AppColors.onPrimary,
+                      child: FittedBox(
+                        fit: BoxFit.scaleDown,
+                        alignment: Alignment.topCenter,
+                        child: SizedBox(
+                          width: constraints.maxWidth - 40,
+                          child: _buildGuideCard(),
                         ),
                       ),
-                    ],
+                    ),
                   ),
-                );
-              },
-            ),
-          ),
-
-          // 底部跳过按钮 - 这个需要可点击
-          Positioned(
-            bottom: 80,
-            left: 0,
-            right: 0,
-            child: Center(
-              child: IgnorePointer(
-                ignoring: false, // 跳过按钮可点击
-                child: ElevatedButton.icon(
+                ),
+                Expanded(
+                  child: IgnorePointer(
+                    child: constraints.maxHeight < 450
+                        ? const SizedBox.shrink()
+                        : Center(
+                            child: AnimatedBuilder(
+                              animation: _bounceAnimation,
+                              builder: (context, child) => Transform.translate(
+                                offset: Offset(0, _bounceAnimation.value),
+                                child: child,
+                              ),
+                              child: FittedBox(
+                                fit: BoxFit.scaleDown,
+                                child: Column(
+                                  mainAxisSize: MainAxisSize.min,
+                                  children: [
+                                    Icon(
+                                      Icons.keyboard_double_arrow_down,
+                                      size: 48,
+                                      color: colors.primary,
+                                    ),
+                                    const SizedBox(height: 8),
+                                    CircleAvatar(
+                                      radius: 36,
+                                      backgroundColor: colors.primary,
+                                      child: Icon(
+                                        Icons.touch_app,
+                                        size: 40,
+                                        color: colors.onPrimary,
+                                      ),
+                                    ),
+                                  ],
+                                ),
+                              ),
+                            ),
+                          ),
+                  ),
+                ),
+                const SizedBox(height: 12),
+                ElevatedButton.icon(
                   onPressed: widget.onCompleted,
                   icon: const Icon(Icons.skip_next, size: 20),
                   label: const Text('我知道了'),
                   style: ElevatedButton.styleFrom(
-                    backgroundColor: AppColors.surface,
-                    foregroundColor: AppColors.primary,
+                    backgroundColor: colors.surface,
+                    foregroundColor: colors.primary,
                     padding: const EdgeInsets.symmetric(
                       horizontal: 24,
                       vertical: 12,
@@ -146,44 +141,46 @@ class _PullRefreshGuideState extends State<PullRefreshGuide>
                       borderRadius: BorderRadius.circular(25),
                     ),
                     elevation: 8,
-                    shadowColor: AppColors.shadow,
                   ),
                 ),
-              ),
+              ],
             ),
           ),
-        ],
+        ),
       ),
     );
   }
 
   Widget _buildGuideCard() {
+    final colors = Theme.of(context).colorScheme;
     return Container(
       padding: const EdgeInsets.all(20),
       decoration: BoxDecoration(
-        color: AppColors.surface,
+        color: colors.surface,
         borderRadius: AppDimens.borderRadiusLg,
         boxShadow: [
           BoxShadow(
-            color: AppColors.shadow,
+            color: colors.shadow.withValues(alpha: 0.15),
             blurRadius: 20,
             offset: const Offset(0, 10),
           ),
         ],
       ),
       child: Row(
+        mainAxisSize: MainAxisSize.min,
         children: [
           Container(
             padding: const EdgeInsets.all(10),
             decoration: BoxDecoration(
-              color: AppColors.primary.withValues(alpha: 0.1),
+              color: colors.primary.withValues(alpha: 0.1),
               borderRadius: AppDimens.borderRadius,
             ),
-            child: Icon(Icons.swipe_down, color: AppColors.primary, size: 28),
+            child: Icon(Icons.swipe_down, color: colors.primary, size: 28),
           ),
           const SizedBox(width: 16),
           Expanded(
             child: Column(
+              mainAxisSize: MainAxisSize.min,
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
                 Text(
@@ -191,7 +188,7 @@ class _PullRefreshGuideState extends State<PullRefreshGuide>
                   style: TextStyle(
                     fontSize: AppDimens.fontLg,
                     fontWeight: FontWeight.bold,
-                    color: AppColors.textPrimary,
+                    color: colors.onSurface,
                   ),
                 ),
                 const SizedBox(height: 4),
@@ -199,7 +196,7 @@ class _PullRefreshGuideState extends State<PullRefreshGuide>
                   '向下拉动页面即可刷新数据',
                   style: TextStyle(
                     fontSize: AppDimens.fontMd,
-                    color: AppColors.textSecondary,
+                    color: colors.onSurfaceVariant,
                   ),
                 ),
               ],
