@@ -1,5 +1,7 @@
 import 'dart:convert';
 
+import 'package:flutter_inappwebview/flutter_inappwebview.dart';
+
 import 'boss_session_script.dart';
 
 /// BOSS 已填工时抓取
@@ -46,22 +48,26 @@ class WorkLogBossHours {
 
   /// 生成抓取整月工时的脚本。
   ///
-  /// [year] / [month] 指定月份；脚本会顺序请求该月每一天。
-  /// 顺序而非并发：这是公司内部系统，逐条请求更温和，也便于中途失败时定位。
+  /// [year] / [month] 指定月份；最多3个只读请求并发，避免同步XHR阻塞网页。
+  /// 返回Promise，原生调用必须使用 [fetchMonth] 等待异步桥接完成。
   ///
   /// 返回 JSON：`{"ok":true,"month":"2026-08","hours":{"2026-08-05":10.3,...}}`
   static String buildFetchMonthScript({
     required int year,
     required int month,
     required String captureStoreName,
+    int requestTimeoutMs = 10000,
+    int timeoutMs = 30000,
   }) {
+    if (requestTimeoutMs <= 0 || timeoutMs <= 0) {
+      throw ArgumentError('查询超时必须大于0');
+    }
     final monthKey =
         '${year.toString().padLeft(4, '0')}-${month.toString().padLeft(2, '0')}';
 
     return '''
-      (function() {
+      (async function() {
         ${BossSessionScript.sessionPreamble(captureStoreName: captureStoreName)}
-        ${BossSessionScript.callPreamble()}
         $pickUsedPreamble
 
         var YEAR = $year, MONTH = $month;
@@ -76,18 +82,50 @@ class WorkLogBossHours {
         var daysInMonth = new Date(YEAR, MONTH, 0).getDate();
         var hours = {};
         var failed = [];
+        var nextDay = 1;
+        var deadline = Date.now() + $timeoutMs;
+        var stopped = false;
 
-        for (var day = 1; day <= daysInMonth; day++) {
-          var dateStr = YEAR + '-' + pad(MONTH) + '-' + pad(day);
-
-          var res = bossCall(para, SERVICE_URI, { SelectDate: dateStr });
-          if (!res.ok) { failed.push(dateStr); continue; }
-
-          var used = pickUsed(res.data);
-          if (used === null) { failed.push(dateStr); continue; }
-          // 只记正工时；仅全部日期成功时，缺席键才能代表已确认的0。
-          if (used > 0) hours[dateStr] = used;
+        // 只在当前网页内克隆已验证的会话上下文，不回传或保存para。
+        function readDay(dateStr) {
+          return new Promise(function(resolve) {
+            var remaining = deadline - Date.now();
+            if (remaining <= 0) { resolve(null); return; }
+            var outer = Object.assign({}, para, {ServiceUri:SERVICE_URI});
+            var inner = Object.assign({}, para, {SelectDate:dateStr});
+            delete inner.ServiceUri;
+            var xhr = new XMLHttpRequest();
+            xhr.open('POST', ${jsonEncode(BossSessionScript.dataServicePath)}, true);
+            xhr.timeout = Math.min($requestTimeoutMs, remaining);
+            xhr.setRequestHeader('Content-Type', 'application/json');
+            xhr.setRequestHeader('X-Requested-With', 'XMLHttpRequest');
+            xhr.onerror = xhr.ontimeout = xhr.onabort = function() { resolve(null); };
+            xhr.onload = function() {
+              if (xhr.status !== 200) { resolve(null); return; }
+              try {
+                var first = JSON.parse(xhr.responseText || '').d;
+                var data = typeof first === 'string' ? JSON.parse(first).d : first;
+                resolve(pickUsed(data));
+              } catch (_) { resolve(null); }
+            };
+            try {
+              xhr.send(JSON.stringify({para:outer,content:JSON.stringify({para:inner})}));
+            } catch (_) { resolve(null); }
+          });
         }
+
+        async function worker() {
+          while (!stopped && nextDay <= daysInMonth) {
+            var day = nextDay++;
+            var dateStr = YEAR + '-' + pad(MONTH) + '-' + pad(day);
+            var used = await readDay(dateStr);
+            if (used === null) { failed.push(dateStr); stopped=true; return; }
+            // 只记正工时；仅全部日期成功时，缺席键才能代表已确认的0。
+            if (used > 0) hours[dateStr] = used;
+          }
+        }
+        await Promise.all([worker(),worker(),worker()]);
+        failed.sort();
 
         return JSON.stringify({
           ok: failed.length === 0,
@@ -99,6 +137,33 @@ class WorkLogBossHours {
         });
       })();
     ''';
+  }
+
+  /// Android evaluateJavascript不保证等待Promise；使用插件的异步桥并检查error。
+  static Future<String?> fetchMonth({
+    required InAppWebViewController controller,
+    required int year,
+    required int month,
+    required String captureStoreName,
+    Duration timeout = const Duration(seconds: 35),
+  }) async {
+    final script = buildFetchMonthScript(
+      year: year,
+      month: month,
+      captureStoreName: captureStoreName,
+    );
+    final CallAsyncJavaScriptResult? result;
+    try {
+      result = await controller
+          .callAsyncJavaScript(functionBody: 'return await $script')
+          .timeout(timeout);
+    } catch (_) {
+      return null;
+    }
+    if (result == null || result.error != null || result.value is! String) {
+      return null;
+    }
+    return result.value as String;
   }
 
   /// 生成查询单日已填工时的脚本，用于提交前检查当天是否已有日志。

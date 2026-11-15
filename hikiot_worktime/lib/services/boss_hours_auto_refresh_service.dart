@@ -7,6 +7,8 @@ import 'storage_service.dart';
 import 'work_log_submit_service.dart';
 
 typedef BossMonthLoader = Future<Map<String, double>?> Function(DateTime month);
+typedef BossMonthResultLoader =
+    Future<BossSessionResult<Map<String, double>>> Function(DateTime month);
 typedef BossDayLoader =
     Future<BossSessionResult<double>> Function(DateTime date);
 typedef RefreshClock = DateTime Function();
@@ -14,10 +16,15 @@ typedef RefreshClock = DateTime Function();
 enum BossHoursAutoRefreshStatus { updated, fresh, unavailable }
 
 class BossHoursAutoRefreshResult {
-  const BossHoursAutoRefreshResult({required this.status, required this.hours});
+  const BossHoursAutoRefreshResult({
+    required this.status,
+    required this.hours,
+    this.failureReason,
+  });
 
   final BossHoursAutoRefreshStatus status;
   final Map<String, double> hours;
+  final BossSessionStatus? failureReason;
 }
 
 /// BOSS 月度工时的无感刷新器。
@@ -29,12 +36,20 @@ class BossHoursAutoRefreshService {
   BossHoursAutoRefreshService({
     StorageService? storage,
     BossMonthLoader? loadMonth,
+    BossMonthResultLoader? loadMonthResult,
     BossDayLoader? loadDay,
     this.maxAge = const Duration(minutes: 15),
     this.failureBackoff = const Duration(minutes: 5),
     RefreshClock? now,
   }) : _storage = storage ?? StorageService(),
-       _loadMonth = loadMonth ?? _defaultLoadMonth,
+       _loadMonth =
+           loadMonthResult ??
+           (loadMonth == null
+               ? _defaultLoadMonth
+               : ((month) async => BossSessionResult(
+                   BossSessionStatus.ok,
+                   await loadMonth(month),
+                 ))),
        _loadDay = loadDay ?? _defaultLoadDay,
        _now = now ?? DateTime.now;
 
@@ -42,7 +57,7 @@ class BossHoursAutoRefreshService {
       BossHoursAutoRefreshService();
 
   final StorageService _storage;
-  final BossMonthLoader _loadMonth;
+  final BossMonthResultLoader _loadMonth;
   final BossDayLoader _loadDay;
   final Map<String, Future<BossSessionResult<double>>> _dayInFlight = {};
   final Duration maxAge;
@@ -104,11 +119,15 @@ class BossHoursAutoRefreshService {
 
       _lastAttempt[monthKey] = now;
       final revision = StorageService.bossHoursRevision;
-      final loaded = await _loadMonth(month);
-      if (loaded == null) {
+      final result = await _loadMonth(month);
+      final loaded = result.value;
+      if (!result.isOk || loaded == null) {
         return BossHoursAutoRefreshResult(
           status: BossHoursAutoRefreshStatus.unavailable,
           hours: cached,
+          failureReason: result.status == BossSessionStatus.noSession
+              ? BossSessionStatus.noSession
+              : BossSessionStatus.failed,
         );
       }
 
@@ -207,19 +226,23 @@ class BossHoursAutoRefreshService {
         ).queryExistingHours(DateHelper.formatDate(date)),
       );
 
-  static Future<Map<String, double>?> _defaultLoadMonth(DateTime month) =>
-      PerfFrameProbe.measure('boss.month.query', () async {
-        final result = await BossSessionRunner.run<String>((controller) async {
-          final raw = await controller.evaluateJavascript(
-            source: WorkLogBossHours.buildFetchMonthScript(
-              year: month.year,
-              month: month.month,
-              captureStoreName: WorkLogRequestCapture.storeName,
-            ),
-          );
-          return raw?.toString();
-        }, timeout: const Duration(seconds: 25));
-        if (!result.isOk) return null;
-        return WorkLogBossHours.parseSuccessfulResult(result.value);
-      });
+  static Future<BossSessionResult<Map<String, double>>> _defaultLoadMonth(
+    DateTime month,
+  ) => PerfFrameProbe.measure('boss.month.query', () async {
+    final result = await BossSessionRunner.run<String>(
+      (controller) => WorkLogBossHours.fetchMonth(
+        controller: controller,
+        year: month.year,
+        month: month.month,
+        captureStoreName: WorkLogRequestCapture.storeName,
+      ),
+      timeout: const Duration(seconds: 25),
+    );
+    if (!result.isOk) return BossSessionResult(result.status);
+    final hours = WorkLogBossHours.parseSuccessfulResult(result.value);
+    return BossSessionResult(
+      hours == null ? BossSessionStatus.failed : BossSessionStatus.ok,
+      hours,
+    );
+  });
 }

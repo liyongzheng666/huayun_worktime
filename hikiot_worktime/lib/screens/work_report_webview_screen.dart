@@ -893,15 +893,14 @@ class _WorkReportWebViewScreenState extends State<WorkReportWebViewScreen> {
 
     try {
       final revision = StorageService.bossHoursRevision;
-      final result = await controller.evaluateJavascript(
-        source: WorkLogBossHours.buildFetchMonthScript(
-          year: date.year,
-          month: date.month,
-          captureStoreName: WorkLogRequestCapture.storeName,
-        ),
+      final result = await WorkLogBossHours.fetchMonth(
+        controller: controller,
+        year: date.year,
+        month: date.month,
+        captureStoreName: WorkLogRequestCapture.storeName,
       );
 
-      final hours = WorkLogBossHours.parseSuccessfulResult(result?.toString());
+      final hours = WorkLogBossHours.parseSuccessfulResult(result);
       if (hours == null) {
         if (!mounted) return false;
         _notify('未能完整确认 BOSS 工时，已保留原记录，请稍后重试');

@@ -2253,6 +2253,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
         loadAccountDetail: _apiClient!.getAccountDetail,
         changeTeam: _apiClient!.changeTeam,
       );
+      final authRevision = await _storage.loadAuthRevision();
       final teamInfoList = await teamContextService.loadTeams();
 
       // 显示团队选择对话框
@@ -2262,7 +2263,10 @@ class _SettingsScreenState extends State<SettingsScreen> {
         return;
       }
 
-      final teamContext = await teamContextService.switchTo(selectedTeam);
+      final teamContext = await teamContextService.switchTo(
+        selectedTeam,
+        expectedAuthRevision: authRevision,
+      );
       if (!teamContext.teamChanged) {
         if (mounted) {
           ScaffoldMessenger.of(

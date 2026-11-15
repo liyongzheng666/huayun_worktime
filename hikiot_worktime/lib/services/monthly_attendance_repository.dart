@@ -212,6 +212,9 @@ class MonthlyAttendanceRepository {
 
       final localData = AttendanceData.fromLocal(localRow);
       final apiResponse = await _loadDailyAttendance(dateStr, personNo);
+      if (apiResponse?['dailyDetail'] is! Map) {
+        throw Exception('$dateStr 的考勤尚未确认，请稍后重试');
+      }
       final apiData = AttendanceParser.parseFromResponse(apiResponse);
       final currentType = localRow['type'] as String?;
       final typeCorrection = _resolveTypeAfterApi(
@@ -223,8 +226,25 @@ class MonthlyAttendanceRepository {
       final needsTypeCorrection =
           typeCorrection != null && typeCorrection != currentType;
 
-      if (localData.hasValidData &&
-          localData.isConsistentWith(apiData) &&
+      final localConfirmed =
+          SmartDayTypeHelper.parseDataSourceStatus(
+            localRow[SmartDayTypeHelper.dataSourceStatusKey],
+          ) ==
+          DayDataSourceStatus.apiConfirmed;
+      final sameAttendance =
+          localData.checkIn == apiData.checkIn &&
+          localData.checkOut == apiData.checkOut &&
+          localData.hours == apiData.hours &&
+          (localRow['isLate'] == true) == apiData.isLate &&
+          (localRow['isEarlyLeave'] == true) == apiData.isEarlyLeave &&
+          localData.hasCrossDayPunch == apiData.hasCrossDayPunch &&
+          localData.crossDayPunchTime == apiData.crossDayPunchTime;
+      // 历史休息/请假日的明确空打卡也是有效的稳定边界；未知不能当作0。
+      // 当天空白继续检查前一天，以免凌晨或休息日漏掉最近工作日的补卡。
+      if (localConfirmed &&
+          (localData.hasValidData ||
+              !DateHelper.isSameDay(targetDate, today)) &&
+          sameAttendance &&
           !needsTypeCorrection) {
         break;
       }

@@ -4,41 +4,62 @@ class BossLoginRequest {
   const BossLoginRequest.credentials({
     required this.userName,
     required this.password,
-  }) : openWeb = false;
+    this.rememberPassword = true,
+  }) : openWeb = false,
+       forgetCredentials = false;
 
   const BossLoginRequest.openWeb()
     : userName = '',
       password = '',
-      openWeb = true;
+      openWeb = true,
+      rememberPassword = false,
+      forgetCredentials = false;
+
+  const BossLoginRequest.forget()
+    : userName = '',
+      password = '',
+      openWeb = false,
+      rememberPassword = false,
+      forgetCredentials = true;
 
   final String userName;
   final String password;
   final bool openWeb;
+  final bool rememberPassword;
+  final bool forgetCredentials;
 }
 
 /// BOSS 首次登录面板。
 ///
-/// 只把密码作为返回值交给当前这一次隐藏 WebView 登录；调用方不得持久化、打印
-/// 或复制它。用户名可以在登录成功后单独记住，减少下次输入。
+/// 用户可明确选择通过本机系统安全存储记住验证成功的密码，也可随时清除。
+/// 密码不得写入日志、剪贴板或普通偏好设置。
 class BossLoginDialog {
   BossLoginDialog._();
 
   static Future<BossLoginRequest?> show({
     required BuildContext context,
     String initialUserName = '',
+    bool hasRememberedPassword = false,
   }) {
     return showDialog<BossLoginRequest>(
       context: context,
       barrierDismissible: false,
-      builder: (_) => _BossLoginDialogBody(initialUserName: initialUserName),
+      builder: (_) => _BossLoginDialogBody(
+        initialUserName: initialUserName,
+        hasRememberedPassword: hasRememberedPassword,
+      ),
     );
   }
 }
 
 class _BossLoginDialogBody extends StatefulWidget {
-  const _BossLoginDialogBody({required this.initialUserName});
+  const _BossLoginDialogBody({
+    required this.initialUserName,
+    required this.hasRememberedPassword,
+  });
 
   final String initialUserName;
+  final bool hasRememberedPassword;
 
   @override
   State<_BossLoginDialogBody> createState() => _BossLoginDialogBodyState();
@@ -48,6 +69,7 @@ class _BossLoginDialogBodyState extends State<_BossLoginDialogBody> {
   late final TextEditingController _userNameController;
   late final TextEditingController _passwordController;
   bool _showPassword = false;
+  bool _rememberPassword = true;
 
   @override
   void initState() {
@@ -117,15 +139,29 @@ class _BossLoginDialogBodyState extends State<_BossLoginDialogBody> {
                 if (valid) _submit(userName, password);
               },
             ),
+            CheckboxListTile(
+              contentPadding: EdgeInsets.zero,
+              value: _rememberPassword,
+              title: const Text('记住密码并自动登录'),
+              subtitle: const Text('仅本机；可取消或清除'),
+              onChanged: (value) =>
+                  setState(() => _rememberPassword = value ?? false),
+            ),
             const SizedBox(height: 12),
             Text(
-              'App 仅记住账号。密码只用于本次登录，不会由 App 保存或写入日志。',
+              '勾选后，验证成功的密码将保存在本机系统安全存储，供登录失效时自动恢复。',
               style: TextStyle(fontSize: 12, color: Colors.grey[600]),
             ),
           ],
         ),
       ),
       actions: [
+        if (widget.hasRememberedPassword)
+          TextButton(
+            onPressed: () =>
+                Navigator.pop(context, const BossLoginRequest.forget()),
+            child: const Text('清除记住的密码'),
+          ),
         TextButton(
           onPressed: () => Navigator.pop(context),
           child: const Text('取消'),
@@ -146,7 +182,11 @@ class _BossLoginDialogBodyState extends State<_BossLoginDialogBody> {
   void _submit(String userName, String password) {
     Navigator.pop(
       context,
-      BossLoginRequest.credentials(userName: userName, password: password),
+      BossLoginRequest.credentials(
+        userName: userName,
+        password: password,
+        rememberPassword: _rememberPassword,
+      ),
     );
   }
 }

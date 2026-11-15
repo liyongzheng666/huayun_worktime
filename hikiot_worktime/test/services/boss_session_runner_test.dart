@@ -4,6 +4,9 @@ import 'dart:convert';
 import 'package:flutter_inappwebview/flutter_inappwebview.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:hikiot_worktime/services/boss_session_runner.dart';
+import 'package:hikiot_worktime/services/boss_credentials_service.dart';
+import 'package:hikiot_worktime/services/storage_service.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 import 'package:hikiot_worktime/utils/work_log_request_capture.dart';
 
 import '../support/javascript_runner.dart';
@@ -12,7 +15,12 @@ void main() {
   TestWidgetsFlutterBinding.ensureInitialized();
   late _SessionPlatform platform;
 
-  setUp(() {
+  setUp(() async {
+    SharedPreferences.setMockInitialValues({});
+    final storage = StorageService();
+    await storage.saveToken('test-token');
+    await storage.saveTeamContext(teamNo: 'team', personNo: 'person');
+    await BossCredentialsService(storage: storage).bindCurrentSession();
     platform = _SessionPlatform();
     InAppWebViewPlatform.instance = platform;
   });
@@ -42,6 +50,7 @@ void main() {
   });
 
   test('后台业务操作也等待真实认证，不复用认证前请求', () async {
+    platform.controller.authenticating = true;
     var actionCalled = false;
     final operation = BossSessionRunner.run<String>((_) async {
       actionCalled = true;
@@ -67,7 +76,22 @@ void main() {
     );
     expect(result.ok, isTrue);
     expect(platform.controller.startCalls, 0);
+    expect(result.passwordAuthenticated, isFalse);
     expect(platform.view.disposed, isTrue);
+  });
+
+  test('认证中Cookie先恢复业务会话，缺少成功回调时不证明本次新密码有效', () async {
+    final login = BossSessionRunner.login(
+      userName: 'test-user',
+      password: 'unverified-input',
+    );
+    await platform.controller.firstProbe.future;
+    await Future<void>.delayed(Duration.zero);
+    platform.controller.authenticated = true;
+    final result = await login;
+    expect(result.ok, isTrue);
+    expect(result.passwordAuthenticated, isFalse);
+    expect(platform.controller.startCalls, 1);
   });
 
   test('Cookie 属于其他账号时不会把该账号冒认为本次登录成功', () async {
@@ -141,6 +165,7 @@ class _SessionController extends PlatformInAppWebViewController {
       );
 
   bool authenticated = false;
+  bool authenticating = false;
   bool alreadySignedIn = false;
   String userCode = 'test-user';
   String? failureReason;
@@ -178,7 +203,7 @@ class _SessionController extends PlatformInAppWebViewController {
       const window = {
         document,
         frames: [],
-        __bossNativeLogin: ${jsonEncode({'phase': startCalls > 0 ? 'authenticating' : 'pageLoading', if (failureReason != null) 'reason': failureReason})},
+        __bossNativeLogin: ${jsonEncode({'phase': startCalls > 0 || authenticating ? 'authenticating' : 'pageLoading', 'requested': startCalls > 0 || authenticating, if (failureReason != null) 'reason': failureReason})},
         HoteamUI: { Security: { LoginPara: ${jsonEncode(para)} } },
         ${WorkLogRequestCapture.storeName}: [{body: ${jsonEncode(jsonEncode({'para': para}))}}]
       };

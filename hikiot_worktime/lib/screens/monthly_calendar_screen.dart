@@ -22,8 +22,6 @@ import '../widgets/home_button.dart';
 import '../services/boss_session_runner.dart';
 import '../services/boss_login_coordinator.dart';
 import '../services/boss_hours_auto_refresh_service.dart';
-import '../utils/work_log_boss_hours.dart';
-import '../utils/work_log_request_capture.dart';
 import 'work_report_webview_screen.dart';
 import '../widgets/haptic_refresh_indicator.dart';
 import '../widgets/team_selection_dialog.dart';
@@ -32,6 +30,7 @@ import '../widgets/team_selection_dialog.dart';
 class MonthlyCalendarScreen extends StatefulWidget {
   final String token;
   final bool autoInitialize;
+  final bool isActive;
   final HikiotApiClient? apiClient;
   final BossHoursAutoRefreshService? bossAutoRefresh;
 
@@ -39,6 +38,7 @@ class MonthlyCalendarScreen extends StatefulWidget {
     super.key,
     required this.token,
     this.autoInitialize = true,
+    this.isActive = true,
     this.apiClient,
     this.bossAutoRefresh,
   });
@@ -54,6 +54,7 @@ class MonthlyCalendarScreenState extends State<MonthlyCalendarScreen> {
   late final TeamContextService _teamContextService;
   late final MonthlyAttendanceRepository _monthlyRepository;
   bool _isLoading = true;
+  String? _syncStage;
   bool _isUserContextReady = false;
   String? _error;
 
@@ -416,33 +417,56 @@ class MonthlyCalendarScreenState extends State<MonthlyCalendarScreen> {
   /// [forceAll] = true: 全量更新，调用月度API更新所有日期
   /// [forceAll] = false: 智能快速更新，从今天往前查找，直到找到数据一致的日期
   Future<void> _updateAttendance({required bool forceAll}) async {
-    setState(() => _isLoading = true);
+    if (_isLoading ||
+        !widget.isActive ||
+        _teamNo == null ||
+        _personNo == null) {
+      return;
+    }
+    final targetMonth = _selectedMonth;
+    final targetTeam = _teamNo!;
+    final targetPerson = _personNo!;
+    bool isCurrent() =>
+        mounted &&
+        _teamNo == targetTeam &&
+        DateHelper.formatMonth(_selectedMonth) ==
+            DateHelper.formatMonth(targetMonth);
+    setState(() {
+      _isLoading = true;
+      _syncStage = forceAll ? '正在同步本月考勤…' : '正在检查最近考勤…';
+    });
 
     try {
       final now = DateTime.now();
       final result = forceAll
           ? await _monthlyRepository.forceRefreshMonth(
-              teamNo: _teamNo!,
-              personNo: _personNo!,
-              selectedMonth: _selectedMonth,
+              teamNo: targetTeam,
+              personNo: targetPerson,
+              selectedMonth: targetMonth,
             )
           : await _monthlyRepository.smartQuickUpdate(
-              teamNo: _teamNo!,
-              personNo: _personNo!,
-              selectedMonth: _selectedMonth,
+              teamNo: targetTeam,
+              personNo: targetPerson,
+              selectedMonth: targetMonth,
               currentData: _monthlyData,
               now: now,
             );
 
-      _monthlyData = result.monthlyData;
-      _holidayPlan = result.holidayPlan;
-
-      if (mounted) {
+      if (!isCurrent()) return;
+      setState(() {
+        _monthlyData = result.monthlyData;
+        _holidayPlan = result.holidayPlan;
+        if (forceAll) _syncStage = '考勤已更新，正在同步华天已填工时…';
+      });
+      // 两阶段共用同一个忙碌状态，认证提示也不允许再启动一轮全量同步。
+      if (forceAll && !await _syncBossHours(month: targetMonth)) return;
+      if (mounted && isCurrent()) {
+        ScaffoldMessenger.of(context).hideCurrentSnackBar();
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(
             content: Text(
               forceAll
-                  ? '全量更新完成，共更新 ${result.updatedCount} 天'
+                  ? '考勤与华天同步完成，共更新 ${result.updatedCount} 天考勤'
                   : result.updatedCount > 0
                   ? '智能更新完成，更新了 ${result.updatedCount} 天'
                   : '数据已是最新，无需更新',
@@ -452,20 +476,19 @@ class MonthlyCalendarScreenState extends State<MonthlyCalendarScreen> {
           ),
         );
       }
-
-      setState(() => _isLoading = false);
-
-      // 全量更新顺带把 BOSS 已填工时也刷一遍：
-      // 「更新工时」在用户眼里是一件事，不该拆成两个入口、
-      // 其中一个还藏在网页页的三点菜单里。
-      if (forceAll && mounted) await _syncBossHours();
     } catch (e) {
-      if (mounted) {
+      if (mounted && isCurrent()) {
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(content: Text('更新失败: $e'), backgroundColor: AppColors.error),
         );
       }
-      setState(() => _isLoading = false);
+    } finally {
+      if (mounted) {
+        setState(() {
+          _isLoading = false;
+          _syncStage = null;
+        });
+      }
     }
   }
 
@@ -476,7 +499,7 @@ class MonthlyCalendarScreenState extends State<MonthlyCalendarScreen> {
   /// 但那是实现约束，没理由让用户看着页面跳进跳出。
   ///
   /// 只有在完全取不到会话（没登录 / 登录态过期）时，才引导去网页登录。
-  Future<void> _syncBossHours({bool allowLogin = true, DateTime? month}) async {
+  Future<bool> _syncBossHours({bool allowLogin = true, DateTime? month}) async {
     final targetMonth = month ?? _selectedMonth;
     final monthKey = DateFormat('yyyy-MM').format(targetMonth);
 
@@ -489,51 +512,44 @@ class MonthlyCalendarScreenState extends State<MonthlyCalendarScreen> {
       );
     }
 
-    final revision = StorageService.bossHoursRevision;
-    final result = await BossSessionRunner.run<Map<String, double>>((
-      controller,
-    ) async {
-      final raw = await controller.evaluateJavascript(
-        source: WorkLogBossHours.buildFetchMonthScript(
-          year: targetMonth.year,
-          month: targetMonth.month,
-          captureStoreName: WorkLogRequestCapture.storeName,
-        ),
-      );
-      return WorkLogBossHours.parseSuccessfulResult(raw?.toString());
-    }, timeout: const Duration(seconds: 25));
+    // 手动、下拉和后台刷新共用同月进行中的任务，不再重复开WebView查询31日。
+    final result = await _bossAutoRefresh.refreshIfStale(
+      targetMonth,
+      force: true,
+    );
 
-    if (!mounted) return;
+    if (!mounted) return false;
 
-    if (result.status == BossSessionStatus.noSession) {
-      if (allowLogin && await _promptBossLogin() && mounted) {
-        await _syncBossHours(allowLogin: false, month: targetMonth);
+    if (result.failureReason == BossSessionStatus.noSession) {
+      if (allowLogin &&
+          widget.isActive &&
+          ModalRoute.of(context)?.isCurrent == true &&
+          await _promptBossLogin() &&
+          mounted) {
+        return _syncBossHours(allowLogin: false, month: targetMonth);
       } else if (!allowLogin && mounted) {
         ScaffoldMessenger.of(
           context,
         ).showSnackBar(const SnackBar(content: Text('已登录，但后台会话尚未就绪，请稍后再试')));
       }
-      return;
+      return false;
     }
 
-    final hours = result.value;
-    if (!result.isOk || hours == null) {
+    if (result.status == BossHoursAutoRefreshStatus.unavailable) {
       ScaffoldMessenger.of(context).showSnackBar(
         const SnackBar(content: Text('未能完整确认 BOSS 工时，已保留原记录，请稍后重试')),
       );
-      return;
+      return false;
     }
 
-    // 逐日查询，整月一条都没有属正常（比如新月份），不当作失败
-    await _storage.saveBossHours(monthKey, hours, expectedRevision: revision);
     final savedHours = await _storage.loadBossHours(monthKey);
-    if (!mounted) return;
+    if (!mounted) return false;
 
     // 查询期间切月或提交时，以对应月份的最终合并缓存为准。
     if (DateFormat('yyyy-MM').format(_selectedMonth) == monthKey) {
       await _readBossHoursCache();
     }
-    if (!mounted) return;
+    if (!mounted) return false;
     ScaffoldMessenger.of(context).showSnackBar(
       SnackBar(
         content: Text(
@@ -544,6 +560,7 @@ class MonthlyCalendarScreenState extends State<MonthlyCalendarScreen> {
         backgroundColor: AppColors.success,
       ),
     );
+    return true;
   }
 
   Future<bool> _promptBossLogin() => BossLoginCoordinator.prompt(
@@ -566,14 +583,15 @@ class MonthlyCalendarScreenState extends State<MonthlyCalendarScreen> {
   /// 公开方法: 静默触发智能更新（用于应用启动时）
   Future<void> smartUpdate() async {
     if (_personNo == null || _teamNo == null) return;
-    final result = await _monthlyRepository.smartQuickUpdate(
+    final background = await _monthlyRepository.smartQuickUpdateSafely(
       teamNo: _teamNo!,
       personNo: _personNo!,
       selectedMonth: _selectedMonth,
       currentData: _monthlyData,
     );
 
-    if (!mounted) return;
+    final result = background.updateResult;
+    if (!mounted || result == null) return;
     setState(() {
       _monthlyData = result.monthlyData;
       _holidayPlan = result.holidayPlan;
@@ -858,7 +876,18 @@ class MonthlyCalendarScreenState extends State<MonthlyCalendarScreen> {
         ),
       ),
       body: _isLoading
-          ? const Center(child: CircularProgressIndicator())
+          ? Center(
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  const CircularProgressIndicator(),
+                  if (_syncStage != null) ...[
+                    const SizedBox(height: 16),
+                    Text(_syncStage!),
+                  ],
+                ],
+              ),
+            )
           : _error != null
           ? _buildErrorView()
           : HapticRefreshIndicator(

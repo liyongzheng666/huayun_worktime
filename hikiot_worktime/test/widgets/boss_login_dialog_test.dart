@@ -9,6 +9,7 @@ class Answer {
 Future<Answer> pumpDialog(
   WidgetTester tester, {
   String initialUserName = '',
+  bool hasRememberedPassword = false,
 }) async {
   final answer = Answer();
   await tester.pumpWidget(
@@ -19,6 +20,7 @@ Future<Answer> pumpDialog(
             answer.value = await BossLoginDialog.show(
               context: context,
               initialUserName: initialUserName,
+              hasRememberedPassword: hasRememberedPassword,
             );
           },
           child: const Text('打开'),
@@ -32,11 +34,12 @@ Future<Answer> pumpDialog(
 }
 
 void main() {
-  testWidgets('明确说明后台登录与密码不落盘', (tester) async {
+  testWidgets('明确说明后台登录与本机系统安全存储', (tester) async {
     await pumpDialog(tester);
 
     expect(find.text('登录将在后台完成，不会打开 BOSS 页面。'), findsOneWidget);
-    expect(find.textContaining('密码只用于本次登录'), findsOneWidget);
+    expect(find.textContaining('本机系统安全存储'), findsOneWidget);
+    expect(find.text('记住密码并自动登录'), findsOneWidget);
   });
 
   testWidgets('账号和密码缺一时不能提交', (tester) async {
@@ -75,6 +78,26 @@ void main() {
     expect(answer.value?.userName, 'remembered-user');
     expect(answer.value?.password, 'one-time-password');
     expect(answer.value?.openWeb, isFalse);
+    expect(answer.value?.rememberPassword, isTrue);
+  });
+
+  testWidgets('可取消记住密码，仅执行本次登录', (tester) async {
+    final answer = await pumpDialog(tester, initialUserName: 'user');
+    await tester.enterText(find.byType(TextField).at(1), 'test-password');
+    await tester.ensureVisible(find.byType(CheckboxListTile));
+    await tester.tap(find.byType(CheckboxListTile));
+    await tester.pump();
+    await tester.tap(find.text('后台登录'));
+    await tester.pumpAndSettle();
+    expect(answer.value?.rememberPassword, isFalse);
+  });
+
+  testWidgets('已有记住的密码时提供明确清除入口', (tester) async {
+    final answer = await pumpDialog(tester, hasRememberedPassword: true);
+    await tester.tap(find.text('清除记住的密码'));
+    await tester.pumpAndSettle();
+    expect(answer.value?.forgetCredentials, isTrue);
+    expect(answer.value?.password, isEmpty);
   });
 
   testWidgets('始终保留网页登录兜底', (tester) async {

@@ -64,6 +64,8 @@ class StorageService {
 
   // 历史键名保留以兼容iOS已有主题；两平台各自在本机使用同一套主题实现。
   static const String _appSkinKey = 'ios_app_skin';
+  static const String _authRevisionKey = 'auth_identity_revision';
+  static const String _bossCredentialIdentityKey = 'boss_credential_identity';
 
   /// 主题单独保存，避免工时设置整份写入时覆盖外观选择。
   Future<String?> loadAppSkinId() async {
@@ -153,6 +155,9 @@ class StorageService {
   Future<void> saveToken(String token) async {
     final prefs = await SharedPreferences.getInstance();
     final normalizedToken = token.trim();
+    if ((prefs.getString(StorageKeys.token)?.trim() ?? '') != normalizedToken) {
+      await _revokeBossCredentialIdentity(prefs);
+    }
     if (normalizedToken.isEmpty) {
       await prefs.remove(StorageKeys.token);
       return;
@@ -198,8 +203,14 @@ class StorageService {
     required String teamNo,
     String? personNo,
     String? teamName,
+    int? expectedAuthRevision,
   }) async {
     final prefs = await SharedPreferences.getInstance();
+    final revision = expectedAuthRevision ?? await loadAuthRevision();
+    if (revision != await loadAuthRevision()) {
+      throw StateError('账号已变化，请重新加载身份');
+    }
+    await prefs.remove(_bossCredentialIdentityKey);
     await prefs.setString(StorageKeys.teamNo, teamNo);
     await prefs.setString(_legacyCurrentTeamNo, teamNo);
     if (personNo != null) {
@@ -208,6 +219,19 @@ class StorageService {
     if (teamName != null && teamName.isNotEmpty) {
       await prefs.setString(StorageKeys.teamName, teamName);
       await prefs.setString(_legacyCurrentTeamName, teamName);
+    }
+    if (revision != await loadAuthRevision()) {
+      throw StateError('账号已变化，请重新加载身份');
+    }
+    final token = await loadToken();
+    if (token != null && teamNo.isNotEmpty && personNo?.isNotEmpty == true) {
+      await prefs.setString(
+        _bossCredentialIdentityKey,
+        jsonEncode({
+          'revision': revision,
+          'scope': [teamNo, personNo],
+        }),
+      );
     }
   }
 
@@ -240,8 +264,49 @@ class StorageService {
     return prefs.getString(StorageKeys.personNo);
   }
 
+  /// 仅返回当前主账号已确认的身份范围，供安全凭据隔离使用。
+  Future<String?> loadBossCredentialScope() async {
+    final prefs = await SharedPreferences.getInstance();
+    if (await loadToken() == null) return null;
+    final raw = prefs.getString(_bossCredentialIdentityKey);
+    if (raw == null) return null;
+    try {
+      final value = jsonDecode(raw);
+      if (value is! Map || value['revision'] != await loadAuthRevision()) {
+        return null;
+      }
+      final scope = value['scope'];
+      if (scope is! List ||
+          scope.length != 2 ||
+          scope.any((item) => item is! String || item.isEmpty) ||
+          scope[0] != await loadTeamNo() ||
+          scope[1] != await loadPersonNo()) {
+        return null;
+      }
+      if (value['revision'] != await loadAuthRevision()) return null;
+      return jsonEncode(scope);
+    } catch (_) {
+      return null;
+    }
+  }
+
+  /// 认证变更序号只用于拒绝迟到身份结果，不保存额外token或密码副本。
+  Future<int> loadAuthRevision() async {
+    final prefs = await SharedPreferences.getInstance();
+    return prefs.getInt(_authRevisionKey) ?? 0;
+  }
+
+  Future<void> _revokeBossCredentialIdentity(SharedPreferences prefs) async {
+    await prefs.remove(_bossCredentialIdentityKey);
+    await prefs.setInt(
+      _authRevisionKey,
+      (prefs.getInt(_authRevisionKey) ?? 0) + 1,
+    );
+  }
+
   Future<void> clearAuthInfo() async {
     final prefs = await SharedPreferences.getInstance();
+    await _revokeBossCredentialIdentity(prefs);
     await prefs.remove(StorageKeys.token);
     await prefs.remove(StorageKeys.userName);
     await prefs.remove(_legacyCurrentUserName);

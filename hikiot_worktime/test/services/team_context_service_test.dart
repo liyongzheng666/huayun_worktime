@@ -137,7 +137,7 @@ void main() {
           'teamNo': 'team-1',
           'personNo': 'person-1',
           'teamName': '一队',
-        });
+        }, expectedAuthRevision: await storage.loadAuthRevision());
 
         expect(result.teamChanged, isFalse);
         expect(changeCalls, 0);

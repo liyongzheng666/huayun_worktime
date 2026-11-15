@@ -44,7 +44,11 @@ class TeamContextService {
   final StorageService _storage;
 
   Future<List<Map<String, dynamic>>> loadTeams() async {
+    final authRevision = await _storage.loadAuthRevision();
     final accountDetail = await _loadAccountDetail();
+    if (authRevision != await _storage.loadAuthRevision()) {
+      throw StateError('账号已变化，请重新加载身份');
+    }
     if (accountDetail == null) {
       throw Exception('无法获取账户信息');
     }
@@ -57,6 +61,7 @@ class TeamContextService {
   }
 
   Future<TeamContext> initialize({TeamChooser? chooseTeam}) async {
+    final authRevision = await _storage.loadAuthRevision();
     final accountDetail = await _loadAccountDetail();
     if (accountDetail == null) {
       throw Exception('无法获取账户信息');
@@ -90,6 +95,7 @@ class TeamContextService {
       teamChanged: teamChanged,
       userName: _readUserName(accountDetail),
       skipIfCurrent: false,
+      expectedAuthRevision: authRevision,
     );
   }
 
@@ -109,12 +115,16 @@ class TeamContextService {
     return selectedTeam;
   }
 
-  Future<TeamContext> switchTo(Map<String, dynamic> selectedTeam) async {
+  Future<TeamContext> switchTo(
+    Map<String, dynamic> selectedTeam, {
+    required int expectedAuthRevision,
+  }) async {
     return _activateTeam(
       selectedTeam,
       teamChanged: true,
       userName: await _storage.loadUserName(),
       skipIfCurrent: true,
+      expectedAuthRevision: expectedAuthRevision,
     );
   }
 
@@ -123,7 +133,11 @@ class TeamContextService {
     required bool teamChanged,
     required String? userName,
     required bool skipIfCurrent,
+    required int expectedAuthRevision,
   }) async {
+    if (expectedAuthRevision != await _storage.loadAuthRevision()) {
+      throw StateError('账号已变化，请重新加载身份');
+    }
     final teamNo = selectedTeam['teamNo'] as String?;
     if (teamNo == null || teamNo.isEmpty) {
       throw Exception('团队信息不完整');
@@ -152,6 +166,7 @@ class TeamContextService {
       teamNo: teamNo,
       personNo: personNo,
       teamName: teamName,
+      expectedAuthRevision: expectedAuthRevision,
     );
     await _storage.saveSelectedTeam(teamNo);
 

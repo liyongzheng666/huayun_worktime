@@ -8,12 +8,14 @@ void main() {
     late StorageService storage;
     late List<String> remoteLogoutTokens;
     var clearWebSessionCount = 0;
+    var forgetBossCredentialsCount = 0;
 
     setUp(() {
       SharedPreferences.setMockInitialValues({});
       storage = StorageService();
       remoteLogoutTokens = <String>[];
       clearWebSessionCount = 0;
+      forgetBossCredentialsCount = 0;
     });
 
     SessionService createService({bool failRemoteLogout = false}) {
@@ -28,6 +30,10 @@ void main() {
         clearWebSession: () async {
           clearWebSessionCount++;
         },
+        forgetBossCredentials: () async {
+          forgetBossCredentialsCount++;
+          expect(await storage.loadToken(), isNotNull);
+        },
       );
     }
 
@@ -40,6 +46,7 @@ void main() {
 
       expect(remoteLogoutTokens, ['token-1']);
       expect(clearWebSessionCount, 1);
+      expect(forgetBossCredentialsCount, 1);
       expect(await storage.loadToken(), isNull);
       expect(await storage.loadUserName(), isNull);
     });
@@ -100,6 +107,35 @@ void main() {
 
       expect(await storage.loadToken(), isNull);
       expect(await storage.loadUserName(), isNull);
+    });
+
+    test('主账号自动过期不忘记华天密码，但撤销当前身份范围', () async {
+      await storage.saveToken('expired-token');
+      await storage.saveTeamContext(teamNo: 'team', personNo: 'person');
+      expect(await storage.loadBossCredentialScope(), isNotNull);
+      await createService().logout(forgetBossCredentials: false);
+      expect(forgetBossCredentialsCount, 0);
+      expect(await storage.loadToken(), isNull);
+      expect(await storage.loadBossCredentialScope(), isNull);
+      expect(clearWebSessionCount, 1);
+    });
+
+    test('清除记忆发生在身份撤销前，安全存储异常不阻断主账号退出', () async {
+      await storage.saveToken('test-token');
+      var forgot = false;
+      final service = SessionService(
+        storage: storage,
+        remoteLogout: (_) async {},
+        clearWebSession: () async {},
+        forgetBossCredentials: () async {
+          expect(await storage.loadToken(), 'test-token');
+          forgot = true;
+          throw StateError('test storage unavailable');
+        },
+      );
+      await expectLater(service.logout(), completes);
+      expect(forgot, isTrue);
+      expect(await storage.loadToken(), isNull);
     });
   });
 }

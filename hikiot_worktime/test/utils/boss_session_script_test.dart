@@ -1,3 +1,5 @@
+import 'dart:convert';
+
 import 'package:flutter_test/flutter_test.dart';
 import 'package:hikiot_worktime/utils/boss_session_script.dart';
 import 'package:hikiot_worktime/utils/work_log_boss_hours.dart';
@@ -5,6 +7,8 @@ import 'package:hikiot_worktime/utils/work_log_constants_scanner.dart';
 import 'package:hikiot_worktime/utils/work_log_csv_parser.dart';
 import 'package:hikiot_worktime/utils/work_log_diagnostics_script.dart';
 import 'package:hikiot_worktime/utils/work_log_submit_script.dart';
+
+import '../support/javascript_runner.dart';
 
 /// 这些约束原先散在五个脚本里各断言一遍，结果是同一个 BUG 要修五次，
 /// 实际上两次都漏修过。收口到 BossSessionScript 之后，在这里断言一次即可。
@@ -132,9 +136,9 @@ void main() {
       });
     });
 
-    test('发请求的脚本一律通过 bossCall()，不自己拼 XHR', () {
+    test('同步请求脚本统一通过 bossCall()，不自己拼 XHR', () {
       // 报文形状、逐层解响应这套模板重复三遍是当初漏修的根源
-      for (final name in ['提交', '单日工时', '整月工时', '扫描常量']) {
+      for (final name in ['提交', '单日工时', '扫描常量']) {
         final script = allScripts()[name]!;
         final bodyOnly = script
             .replaceAll(sessionBody(), '')
@@ -145,6 +149,52 @@ void main() {
           reason: '$name 脚本自己拼了 XHR',
         );
         expect(bodyOnly.contains('bossCall('), isTrue, reason: '$name 脚本');
+      }
+    });
+
+    test('整月异步入口保留同源会话、内外层报文和不导出凭据约定', () {
+      final month = allScripts()['整月工时']!;
+      final actual = runJavaScript('''
+        var fixturePara={UserID:'fixture-user',LoginID:'fixture-login',Password:'fixture-secret'};
+        var original=JSON.stringify(fixturePara),requests=0,violations=[];
+        var window={frames:[],__store:[{body:JSON.stringify({para:fixturePara})}]};
+        class XMLHttpRequest {
+          constructor() {this.headers={};}
+          open(method,url,async) {
+            if(method!=='POST'||url!==${jsonEncode(BossSessionScript.dataServicePath)}||async!==true)
+              violations.push('transport');
+          }
+          setRequestHeader(name,value) {
+            this.headers[name]=value;
+          }
+          send(raw) {
+            requests++;
+            if(this.headers['Content-Type']!=='application/json') violations.push('content-type');
+            if(this.headers['X-Requested-With']!=='XMLHttpRequest') violations.push('requested-with');
+            var payload=JSON.parse(raw),outer=payload.para,inner=JSON.parse(payload.content).para;
+            if(outer.ServiceUri!==${jsonEncode(WorkLogBossHours.hoursServiceUri)}) violations.push('service');
+            if(Object.hasOwn(inner,'ServiceUri')) violations.push('inner-service');
+            if(!/^2026-08-\\d{2}\$/.test(inner.SelectDate)) violations.push('date');
+            for(var key of Object.keys(fixturePara)) {
+              if(outer[key]!==fixturePara[key]||inner[key]!==fixturePara[key]) violations.push('session');
+            }
+            if(JSON.stringify(fixturePara)!==original) violations.push('mutated');
+            this.status=200;
+            this.responseText=JSON.stringify({d:JSON.stringify({d:[24,8,16]})});
+            setTimeout(()=>this.onload(),0);
+          }
+        }
+        var pending=$month
+        Promise.resolve(pending).then(answer=>console.log(JSON.stringify({answer:JSON.parse(answer),requests,violations})));
+      ''');
+      expect(actual['requests'], 31);
+      expect(actual['violations'], isEmpty);
+      final answer = actual['answer'] as Map;
+      expect(answer['ok'], isTrue);
+      expect(answer['hours'], hasLength(31));
+      final exported = jsonEncode(answer);
+      for (final field in ['para', 'Password', 'LoginID', 'fixture-secret']) {
+        expect(exported, isNot(contains(field)));
       }
     });
   });

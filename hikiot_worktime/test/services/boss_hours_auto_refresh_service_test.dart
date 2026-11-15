@@ -52,6 +52,23 @@ void main() {
     SharedPreferences.setMockInitialValues({});
   });
 
+  test('整月会话不可用保留noSession原因，允许月度入口引导登录且不覆盖旧值', () async {
+    final storage = StorageService();
+    await storage.saveBossHours('2026-09', {'2026-09-03': 10.2});
+    final service = BossHoursAutoRefreshService(
+      storage: storage,
+      loadMonthResult: (_) async =>
+          const BossSessionResult(BossSessionStatus.noSession),
+    );
+
+    final result = await service.refreshIfStale(month, force: true);
+
+    expect(result.status, BossHoursAutoRefreshStatus.unavailable);
+    expect(result.failureReason, BossSessionStatus.noSession);
+    expect(result.hours['2026-09-03'], 10.2);
+    expect((await storage.loadBossHours('2026-09'))['2026-09-03'], 10.2);
+  });
+
   test('旧版新鲜空月时间戳不能跳过严格重查', () async {
     SharedPreferences.setMockInitialValues({
       StorageKeys.bossHoursKey('2026-09'): jsonEncode({}),

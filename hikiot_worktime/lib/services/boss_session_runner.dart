@@ -5,6 +5,8 @@ import 'dart:convert';
 import 'package:flutter/foundation.dart';
 import 'package:flutter_inappwebview/flutter_inappwebview.dart';
 
+import 'boss_credentials_service.dart';
+
 import '../screens/work_report_webview_screen.dart';
 import '../utils/boss_login_script.dart';
 import '../utils/boss_session_script.dart';
@@ -32,10 +34,17 @@ class BossSessionResult<T> {
 }
 
 class BossLoginResult {
-  const BossLoginResult({required this.ok, this.message});
+  const BossLoginResult({
+    required this.ok,
+    this.message,
+    this.reason,
+    this.passwordAuthenticated = false,
+  });
 
   final bool ok;
   final String? message;
+  final String? reason;
+  final bool passwordAuthenticated;
 }
 
 /// 在**不显示网页**的前提下执行 BOSS 网页会话内的操作
@@ -64,53 +73,218 @@ class BossSessionRunner {
   ///
   /// 会话不可用时返回 [BossSessionStatus.noSession]，由调用方决定
   /// 是提示用户去登录，还是打开可见的网页页面。
+  static final Map<String, Future<BossLoginResult>> _authentication = {};
+
   static Future<BossSessionResult<T>> run<T>(
     Future<T?> Function(InAppWebViewController controller) action, {
     Duration timeout = sessionTimeout,
+    BossCredentialsService? credentialsService,
+    String? expectedScope,
   }) async {
+    final credentials = credentialsService ?? BossCredentialsService();
     HeadlessInAppWebView? headless;
-
     try {
-      headless = _createHeadless();
-
-      await headless.run();
-
-      final controller = await _awaitSession(headless, timeout);
-      if (controller == null) {
+      final scope = await credentials.currentScope();
+      if (scope == null || (expectedScope != null && scope != expectedScope)) {
         return const BossSessionResult(BossSessionStatus.noSession);
       }
-
+      final saved = await credentials.loadForCurrentScope();
+      final bound = await credentials.isCurrentSessionBound();
+      // 未经用户确认的主账号不得复用上一账号留下的网页Cookie。
+      if (!bound && saved == null) {
+        return const BossSessionResult(BossSessionStatus.noSession);
+      }
+      headless = _createHeadless();
+      await headless.run();
+      var probe = await _awaitSession(
+        headless,
+        timeout,
+        expectedUserName: saved?.userName,
+      );
+      if (probe.needsLogin && saved != null) {
+        final restored = await _restoreInView(
+          headless,
+          saved,
+          credentials,
+          timeout,
+        );
+        if (!restored.ok) {
+          return const BossSessionResult(BossSessionStatus.noSession);
+        }
+        probe = await _awaitSession(
+          headless,
+          timeout,
+          expectedUserName: saved.userName,
+        );
+      }
+      final controller = probe.controller;
+      if (controller == null || await credentials.currentScope() != scope) {
+        return const BossSessionResult(BossSessionStatus.noSession);
+      }
+      await credentials.bindCurrentSession(expectedScope: scope);
+      // action只执行一次；超时或未知写入结果不能触发再次认证后重放保存。
       final value = await action(controller);
+      if (await credentials.currentScope() != scope) {
+        return const BossSessionResult(BossSessionStatus.failed);
+      }
       return BossSessionResult(BossSessionStatus.ok, value);
-    } catch (e) {
-      debugPrint('[BOSS 后台会话] 执行失败: $e');
+    } catch (_) {
+      debugPrint('[BOSS 后台会话] 执行失败（详细异常已省略）');
       return const BossSessionResult(BossSessionStatus.failed);
     } finally {
       await headless?.dispose();
     }
   }
 
-  /// 在隐藏 WebView 中调用 BOSS 网页自身的登录逻辑。
-  ///
-  /// 密码只作为本次方法参数进入 WebView 内存；不写 Cookie 以外的 App 存储，
-  /// 不写日志，也不返回给调用方。成功后普通后台会话即可复用共享 Cookie。
+  static Future<BossLoginResult> _restoreInView(
+    HeadlessInAppWebView headless,
+    BossSavedCredentials saved,
+    BossCredentialsService credentials,
+    Duration timeout,
+  ) async {
+    final running = _authentication[saved.scope];
+    if (running != null) {
+      final result = await running;
+      if (result.ok && await credentials.currentScope() == saved.scope) {
+        // 其它隐藏视图需要重新载入，才能消费刚更新的共享Cookie。
+        await headless.webViewController?.reload();
+      }
+      return result;
+    }
+    if (!credentials.claimAutomaticAttempt(saved)) {
+      return const BossLoginResult(ok: false, reason: 'automaticLoginPaused');
+    }
+    final future = _loginInView(
+      headless,
+      userName: saved.userName,
+      password: saved.password,
+      timeout: timeout,
+    );
+    _authentication[saved.scope] = future;
+    try {
+      final result = await future;
+      if (await credentials.currentScope() != saved.scope) {
+        return const BossLoginResult(ok: false, reason: 'identityChanged');
+      }
+      if (result.ok) {
+        await credentials.bindCurrentSession(expectedScope: saved.scope);
+      } else if (_loginError(result.reason) != null) {
+        final current = await credentials.loadForCurrentScope();
+        if (current?.userName == saved.userName &&
+            current?.password == saved.password) {
+          await credentials.disableAutomaticLogin(saved.scope);
+        }
+      }
+      return result;
+    } finally {
+      if (identical(_authentication[saved.scope], future)) {
+        _authentication.remove(saved.scope);
+      }
+    }
+  }
+
+  /// 记住密码后的只读恢复入口，不执行任何业务保存。
+  static Future<bool> restoreRememberedSession({
+    BossCredentialsService? credentialsService,
+  }) async {
+    final result = await run<bool>(
+      (_) async => true,
+      credentialsService: credentialsService,
+    );
+    return result.isOk && result.value == true;
+  }
+
+  /// 手工网页登录完成后，显式绑定当前主账号；不保存或推断密码。
+  static Future<bool> bindWebSession({
+    BossCredentialsService? credentialsService,
+    String? expectedScope,
+  }) async {
+    final credentials = credentialsService ?? BossCredentialsService();
+    HeadlessInAppWebView? headless;
+    try {
+      final scope = await credentials.currentScope();
+      if (scope == null || (expectedScope != null && scope != expectedScope)) {
+        return false;
+      }
+      final saved = await credentials.loadForCurrentScope();
+      headless = _createHeadless();
+      await headless.run();
+      final probe = await _awaitSession(
+        headless,
+        sessionTimeout,
+        expectedUserName: saved?.userName,
+      );
+      if (probe.controller == null ||
+          await credentials.currentScope() != scope) {
+        return false;
+      }
+      await credentials.bindCurrentSession(expectedScope: scope);
+      return true;
+    } catch (_) {
+      return false;
+    } finally {
+      await headless?.dispose();
+    }
+  }
+
+  /// 认证成功须等网页真实业务会话就绪；Cookie复用不等于验证了本次新密码。
   static Future<BossLoginResult> login({
     required String userName,
     required String password,
     Duration timeout = const Duration(seconds: 30),
+    BossCredentialsService? credentialsService,
+    String? expectedScope,
   }) async {
+    final credentials = credentialsService ?? BossCredentialsService();
     HeadlessInAppWebView? headless;
     try {
+      final scope = await credentials.currentScope();
+      if (scope == null || (expectedScope != null && scope != expectedScope)) {
+        return const BossLoginResult(
+          ok: false,
+          reason: 'identityNotReady',
+          message: '主账号身份尚未确认，请稍后重试',
+        );
+      }
       headless = _createHeadless();
-      var deadline = DateTime.now().add(timeout);
       await headless.run().timeout(timeout);
+      final result = await _loginInView(
+        headless,
+        userName: userName,
+        password: password,
+        timeout: timeout,
+      );
+      if (await credentials.currentScope() != scope) {
+        return const BossLoginResult(
+          ok: false,
+          reason: 'identityChanged',
+          message: '主账号已变化，请重新确认登录',
+        );
+      }
+      if (result.ok) await credentials.bindCurrentSession(expectedScope: scope);
+      return result;
+    } catch (_) {
+      debugPrint('[BOSS 后台登录] 执行失败（详细异常已省略）');
+      return const BossLoginResult(ok: false, message: '后台登录失败，请稍后重试');
+    } finally {
+      await headless?.dispose();
+    }
+  }
+
+  static Future<BossLoginResult> _loginInView(
+    HeadlessInAppWebView headless, {
+    required String userName,
+    required String password,
+    required Duration timeout,
+  }) async {
+    try {
+      var deadline = DateTime.now().add(timeout);
       var started = false;
       var phase = 'pageLoading';
       while (DateTime.now().isBefore(deadline)) {
         final controller = headless.webViewController;
         if (controller != null) {
           try {
-            // Cookie 可能已自动恢复，先探测同一账号的真实会话，再考虑填登录框。
             final probe = await controller
                 .evaluateJavascript(
                   source: BossSessionScript.buildReadyProbe(
@@ -122,12 +296,21 @@ class BossSessionRunner {
             final decoded = jsonDecode(probe?.toString() ?? '{}');
             if (decoded is Map) {
               if (decoded['ready'] == true) {
-                return const BossLoginResult(ok: true);
+                return BossLoginResult(
+                  ok: true,
+                  passwordAuthenticated:
+                      started && decoded['phase'] == 'businessSession',
+                );
               }
               phase = '${decoded['phase'] ?? phase}';
-              final error = _loginError(decoded['reason']);
+              final reason = decoded['reason']?.toString();
+              final error = _loginError(reason);
               if (error != null) {
-                return BossLoginResult(ok: false, message: error);
+                return BossLoginResult(
+                  ok: false,
+                  message: error,
+                  reason: reason,
+                );
               }
             }
             if (!started && DateTime.now().isBefore(deadline)) {
@@ -141,25 +324,31 @@ class BossSessionRunner {
                   .timeout(deadline.difference(DateTime.now()));
               final start = BossLoginScript.parse(raw?.toString());
               if (start.status == BossLoginStartStatus.failed) {
-                return BossLoginResult(ok: false, message: start.message);
+                final data = jsonDecode(raw?.toString() ?? '{}');
+                final reason = data is Map ? data['reason']?.toString() : null;
+                return BossLoginResult(
+                  ok: false,
+                  message: _loginError(reason) ?? start.message,
+                  reason: _loginError(reason) == null ? 'pageError' : reason,
+                );
               }
               if (start.status == BossLoginStartStatus.started) {
                 started = true;
                 phase = 'authenticating';
-                // 首页资源慢不应吃掉整个认证预算；登录动作始终只发起一次。
                 deadline = DateTime.now().add(timeout);
               }
             }
           } on TimeoutException {
             break;
           } catch (_) {
-            // 页面导航期间控制器可能暂不可用，继续等待；不输出包含密码的异常。
+            /* 导航时可暂不可用，不打印含密码的源码异常。 */
           }
         }
         await Future.delayed(const Duration(milliseconds: 500));
       }
       return BossLoginResult(
         ok: false,
+        reason: 'timeout',
         message: phase == 'businessSession'
             ? '账号已验证，但 BOSS 业务页面尚未就绪，请稍后重试'
             : started
@@ -167,11 +356,11 @@ class BossSessionRunner {
             : 'BOSS 登录页加载超时，请检查网络后重试',
       );
     } catch (_) {
-      // 登录异常里可能夹带 evaluateJavascript 源码；源码含本次密码，绝不打印。
-      debugPrint('[BOSS 后台登录] 执行失败（详细异常已省略）');
-      return const BossLoginResult(ok: false, message: '后台登录失败，请稍后重试');
-    } finally {
-      await headless?.dispose();
+      return const BossLoginResult(
+        ok: false,
+        reason: 'pageError',
+        message: '后台登录失败，请稍后重试',
+      );
     }
   }
 
@@ -208,12 +397,12 @@ class BossSessionRunner {
   ///
   /// 不能只等 `onLoadStop`：页面加载完之后才会陆续发业务请求，
   /// 而我们要的 `para` 正是从那些请求里来的。
-  static Future<InAppWebViewController?> _awaitSession(
+  static Future<_BossSessionProbe> _awaitSession(
     HeadlessInAppWebView headless,
-    Duration timeout,
-  ) async {
+    Duration timeout, {
+    String? expectedUserName,
+  }) async {
     final deadline = DateTime.now().add(timeout);
-
     while (DateTime.now().isBefore(deadline)) {
       final controller = headless.webViewController;
       if (controller != null) {
@@ -221,17 +410,33 @@ class BossSessionRunner {
           final probe = await controller.evaluateJavascript(
             source: BossSessionScript.buildReadyProbe(
               captureStoreName: WorkLogRequestCapture.storeName,
+              expectedUserName: expectedUserName,
             ),
           );
           final decoded = jsonDecode(probe?.toString() ?? '{}');
-          if (decoded is Map && decoded['ready'] == true) return controller;
+          if (decoded is Map) {
+            if (decoded['ready'] == true) {
+              return _BossSessionProbe(controller: controller);
+            }
+            if (decoded['reason'] != null) return const _BossSessionProbe();
+            if (decoded['needsLogin'] == true &&
+                decoded['phase'] != 'authenticating' &&
+                decoded['phase'] != 'businessSession') {
+              return const _BossSessionProbe(needsLogin: true);
+            }
+          }
         } catch (_) {
-          // 页面还没起来，继续等
+          /* 页面加载期间继续等待。 */
         }
       }
       await Future.delayed(const Duration(milliseconds: 500));
     }
-
-    return null;
+    return const _BossSessionProbe();
   }
+}
+
+class _BossSessionProbe {
+  const _BossSessionProbe({this.controller, this.needsLogin = false});
+  final InAppWebViewController? controller;
+  final bool needsLogin;
 }

@@ -212,6 +212,7 @@ class _MainScreenState extends State<MainScreen> with WidgetsBindingObserver {
                 enabled: _currentIndex == 1,
                 child: MonthlyCalendarScreen(
                   key: _monthlyKey,
+                  isActive: _currentIndex == 1,
                   token: widget.token,
                   autoInitialize: false,
                   apiClient: widget.apiClient,

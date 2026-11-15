@@ -22,6 +22,106 @@ void main() {
       SharedPreferences.setMockInitialValues({});
     });
 
+    test('快速同步遇到已确认且一致的历史空打卡时停止，不串行重查31日', () async {
+      final requests = <String>[];
+      final repository = MonthlyAttendanceRepository(
+        loadMonthlyAttendance: (_, _) async => null,
+        loadDailyAttendance: (date, _) async {
+          requests.add(date);
+          return {
+            'dailyDetail': {'shiftId': -1, 'shiftDetails': <dynamic>[]},
+          };
+        },
+      );
+      final result = await repository.smartQuickUpdate(
+        teamNo: 'team-1',
+        personNo: 'person-1',
+        selectedMonth: DateTime(2026, 10),
+        now: DateTime(2026, 11, 1, 9),
+        currentData: {
+          for (var day = 1; day <= 31; day++)
+            '2026-10-${day.toString().padLeft(2, '0')}': {
+              'type': AppConstants.typeRestDay,
+              'hours': 0.0,
+              'apiHours': 0.0,
+              'checkIn': null,
+              'checkOut': null,
+              'isManual': false,
+              'dataSourceStatus': 'apiConfirmed',
+            },
+        },
+      );
+
+      expect(requests, ['2026-10-31']);
+      expect(result.updatedCount, 0);
+    });
+
+    for (final confirmed in [true, false]) {
+      test('快速同步当天空白仍查前日，未知历史空打卡不能提前停止：$confirmed', () async {
+        final requests = <String>[];
+        final repository = MonthlyAttendanceRepository(
+          loadMonthlyAttendance: (_, _) async => null,
+          loadDailyAttendance: (date, _) async {
+            requests.add(date);
+            return {
+              'dailyDetail': {'shiftId': -1, 'shiftDetails': <dynamic>[]},
+            };
+          },
+        );
+        final result = await repository.smartQuickUpdate(
+          teamNo: 'team-1',
+          personNo: 'person-1',
+          selectedMonth: DateTime(2026, 10),
+          now: DateTime(2026, 10, 31, 9),
+          currentData: {
+            for (var day = 1; day <= 31; day++)
+              '2026-10-${day.toString().padLeft(2, '0')}': {
+                'type': AppConstants.typeRestDay,
+                'hours': 0.0,
+                'apiHours': 0.0,
+                'checkIn': null,
+                'checkOut': null,
+                'isManual': false,
+                'dataSourceStatus': confirmed ? 'apiConfirmed' : 'unknown',
+              },
+          },
+        );
+        expect(requests.length, confirmed ? 2 : 31);
+        expect(requests.take(2), ['2026-10-31', '2026-10-30']);
+        expect(result.updatedCount, confirmed ? 1 : 31);
+      });
+    }
+
+    test('快速同步查询失败不能把原缓存覆盖成已确认零工时', () async {
+      final storage = StorageService();
+      final old = {
+        '2026-10-31': {
+          'type': AppConstants.typeWorkday,
+          'hours': 8.0,
+          'checkIn': '09:00',
+          'checkOut': '18:00',
+          'dataSourceStatus': 'apiConfirmed',
+        },
+      };
+      await storage.saveMonthlyData('team-1', '2026-10', old);
+      final repository = MonthlyAttendanceRepository(
+        storage: storage,
+        loadMonthlyAttendance: (_, _) async => null,
+        loadDailyAttendance: (_, _) async => null,
+      );
+      await expectLater(
+        repository.smartQuickUpdate(
+          teamNo: 'team-1',
+          personNo: 'person-1',
+          selectedMonth: DateTime(2026, 10),
+          now: DateTime(2026, 10, 31, 18),
+          currentData: old,
+        ),
+        throwsException,
+      );
+      expect(await storage.loadMonthlyData('team-1', '2026-10'), old);
+    });
+
     test('旧精度缓存惰性重算，不能把10.19当新版10.20继续复用', () async {
       final storage = StorageService();
       await storage.saveMonthlyData('team-1', '2026-06', {

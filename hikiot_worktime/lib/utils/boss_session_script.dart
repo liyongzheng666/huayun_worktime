@@ -37,11 +37,12 @@ class BossSessionScript {
         ${sessionPreamble(captureStoreName: captureStoreName)}
         var expectedUserName = ${jsonEncode(expectedUserName)};
         var store = bossCaptured();
-        var result = { ready: false, phase: 'pageLoading' };
+        var result = { ready: false, phase: 'pageLoading', needsLogin: false };
         function hasVisibleLoginForm(win) {
           var node = win.document.getElementById('txtUserName');
           var container = win.document.getElementById('PageContainer');
-          var pageName = container && container.getAttribute('pagepagename');
+          var pageName = container && container.getAttribute
+            ? container.getAttribute('pagepagename') : null;
           var loginPage = (win.AppSets && win.AppSets.LoginPage) || 'Login';
           // 二维码登录也会隐藏账号框；只有页面确实已切到业务页才忽略残留框。
           if (pageName === loginPage || pageName === 'MobileLogin') return true;
@@ -64,6 +65,9 @@ class BossSessionScript {
                 result.reason = state.reason;
                 return;
               }
+            }
+            if ((!state || !state.requested) && hasVisibleLoginForm(win)) {
+              result.needsLogin = true;
             }
             var security = win.HoteamUI && win.HoteamUI.Security;
             var current = security && security.LoginPara;

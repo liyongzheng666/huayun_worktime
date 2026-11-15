@@ -757,6 +757,7 @@ class WorkLogScreenState extends State<WorkLogScreen> {
       context: context,
       openWeb: _openReportSystem,
       successMessage: 'BOSS 登录成功，之后可直接提交日志',
+      forceManual: true,
     );
     if (loggedIn && mounted) unawaited(refreshBossHoursSilently());
   }
@@ -803,6 +804,11 @@ class WorkLogScreenState extends State<WorkLogScreen> {
         backgroundColor: LegacyThemeColors.surface(context, AppColors.primary),
         foregroundColor: LegacyThemeColors.text(context, AppColors.onPrimary),
         actions: [
+          IconButton(
+            icon: const Icon(Icons.manage_accounts_outlined),
+            tooltip: 'BOSS 登录与密码记忆',
+            onPressed: _loginBossFromConfig,
+          ),
           IconButton(
             icon: const Icon(Icons.balance),
             tooltip: '整月工时建议',

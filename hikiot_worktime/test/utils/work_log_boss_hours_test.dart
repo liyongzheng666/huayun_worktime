@@ -1,12 +1,159 @@
 import 'dart:convert';
+import 'dart:async';
 
 import 'package:flutter_test/flutter_test.dart';
+import 'package:flutter_inappwebview/flutter_inappwebview.dart';
 import 'package:hikiot_worktime/utils/boss_session_script.dart';
 import 'package:hikiot_worktime/utils/work_log_boss_hours.dart';
 
 import '../support/javascript_runner.dart';
 
+class _MonthBridge extends Fake implements InAppWebViewController {
+  _MonthBridge(this.result, {this.neverCompletes = false});
+  final CallAsyncJavaScriptResult? result;
+  final bool neverCompletes;
+  String? body;
+
+  @override
+  Future<CallAsyncJavaScriptResult?> callAsyncJavaScript({
+    required String functionBody,
+    Map<String, dynamic> arguments = const {},
+    ContentWorld? contentWorld,
+  }) async {
+    body = functionBody;
+    if (neverCompletes) return Completer<CallAsyncJavaScriptResult?>().future;
+    return result;
+  }
+}
+
 void main() {
+  test('整月异步桥等待Promise并只接收value，错误和Promise占位对象均保留未知', () async {
+    const raw = '{"ok":true,"failed":[],"hours":{"2026-10-01":10.2}}';
+    for (final response in [
+      CallAsyncJavaScriptResult(value: raw),
+      CallAsyncJavaScriptResult(value: raw, error: 'query failed'),
+      CallAsyncJavaScriptResult(value: <String, dynamic>{}),
+      null,
+    ]) {
+      final controller = _MonthBridge(response);
+      final result = await WorkLogBossHours.fetchMonth(
+        controller: controller,
+        year: 2026,
+        month: 10,
+        captureStoreName: '__store',
+      );
+      expect(
+        result,
+        response?.value == raw && response?.error == null ? raw : isNull,
+      );
+      expect(controller.body, startsWith('return await '));
+    }
+  });
+
+  test('原生异步桥不回包时到预算即返回未知', () async {
+    final result = await WorkLogBossHours.fetchMonth(
+      controller: _MonthBridge(null, neverCompletes: true),
+      year: 2026,
+      month: 10,
+      captureStoreName: '__store',
+      timeout: const Duration(milliseconds: 5),
+    );
+    expect(result, isNull);
+  });
+
+  test('整月请求超时后停止派发，部分结果不能宣告成功', () {
+    final script = WorkLogBossHours.buildFetchMonthScript(
+      year: 2026,
+      month: 10,
+      captureStoreName: '__store',
+      requestTimeoutMs: 2,
+      timeoutMs: 1000,
+    );
+    final actual = runJavaScript('''
+      var window={frames:[],__store:[{body:JSON.stringify({para:{UserID:'test',LoginID:'test'}})}]};
+      var requests=0;
+      class XMLHttpRequest {
+        open(method,url,async) {if(!async) throw Error('must be async');}
+        setRequestHeader() {}
+        send() {requests++; setTimeout(()=>this.ontimeout(),this.timeout);}
+      }
+      var pending=$script
+      Promise.resolve(pending).then(answer=>console.log(JSON.stringify({answer:JSON.parse(answer),requests})));
+    ''');
+    expect(actual['requests'], inInclusiveRange(1, 3));
+    expect(actual['answer']['ok'], isFalse);
+    expect(
+      WorkLogBossHours.parseSuccessfulResult(jsonEncode(actual['answer'])),
+      isNull,
+    );
+  });
+
+  test('整月整体截止后不再派发日期，也不把未查询日期补成零', () {
+    final script = WorkLogBossHours.buildFetchMonthScript(
+      year: 2026,
+      month: 10,
+      captureStoreName: '__store',
+      timeoutMs: 150,
+    );
+    final actual = runJavaScript('''
+      var window={frames:[],__store:[{body:JSON.stringify({para:{UserID:'test',LoginID:'test'}})}]};
+      var now=0,requests=0; Date.now=()=>now;
+      class XMLHttpRequest {
+        open() {} setRequestHeader() {}
+        send() {
+          requests++; now+=100; this.status=200;
+          this.responseText=JSON.stringify({d:JSON.stringify({d:[24,10.2,13.8]})});
+          this.onload();
+        }
+      }
+      var pending=$script
+      Promise.resolve(pending).then(answer=>console.log(JSON.stringify({answer:JSON.parse(answer),requests})));
+    ''');
+    expect(actual['requests'], 2);
+    expect(actual['answer']['ok'], isFalse);
+    expect(
+      WorkLogBossHours.parseSuccessfulResult(jsonEncode(actual['answer'])),
+      isNull,
+    );
+  });
+
+  test('整月只读查询使用至多3个异步请求，让出网页事件循环', () {
+    final script = WorkLogBossHours.buildFetchMonthScript(
+      year: 2026,
+      month: 10,
+      captureStoreName: '__store',
+    );
+    final actual = runJavaScript('''
+      var window = {frames:[],__store:[{body:JSON.stringify({para:{UserID:'test',LoginID:'test'}})}]};
+      var requests=0, synchronous=0, active=0, peak=0, heartbeat=false;
+      setTimeout(function(){heartbeat=true;},0);
+      class XMLHttpRequest {
+        open(method,url,async) {this.async=async;}
+        setRequestHeader() {}
+        send(raw) {
+          requests++; active++; peak=Math.max(peak,active);
+          var finish=()=>{
+            active--; this.status=200;
+            this.responseText=JSON.stringify({d:JSON.stringify({d:[24,10.2,13.8]})});
+            if(this.onload) this.onload();
+          };
+          if(this.async) setTimeout(finish,2);
+          else {synchronous++; finish();}
+        }
+      }
+      var pending = $script
+      Promise.resolve(pending).then(function(answer){
+        console.log(JSON.stringify({answer:JSON.parse(answer),requests,synchronous,peak,heartbeat}));
+      });
+    ''');
+    expect(actual['requests'], 31);
+    expect(actual['synchronous'], 0);
+    expect(actual['peak'], inInclusiveRange(2, 3));
+    expect(actual['heartbeat'], isTrue);
+    expect(actual['answer']['ok'], isTrue);
+    expect(actual['answer']['hours'], hasLength(31));
+  });
+
   group('真实工时响应解析回归', () {
     test('JSON字符串包装的三元组取第二项，不得按字符取成零', () {
       final values = [
@@ -53,10 +200,11 @@ void main() {
             var date=JSON.parse(JSON.parse(raw).content).para.SelectDate;
             this.status=date==='2026-09-10'?500:200;
             this.responseText=JSON.stringify({d:JSON.stringify({d:[8,8,0]})});
+            if(this.onload) this.onload();
           }
         }
         var answer = $script
-        console.log(answer);
+        Promise.resolve(answer).then(console.log);
       ''');
       expect(actual['ok'], isFalse);
       expect(actual['failed'], ['2026-09-10']);

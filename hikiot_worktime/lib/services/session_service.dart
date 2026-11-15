@@ -1,10 +1,12 @@
 import 'package:flutter_inappwebview/flutter_inappwebview.dart';
 
 import 'hikiot_api_client.dart';
+import 'boss_credentials_service.dart';
 import 'storage_service.dart';
 
 typedef RemoteLogout = Future<void> Function(String token);
 typedef ClearWebSession = Future<void> Function();
+typedef ForgetBossCredentials = Future<void> Function();
 
 /// 会话服务：统一处理远程登出、WebView 会话清理和本地认证信息清理。
 class SessionService {
@@ -12,17 +14,30 @@ class SessionService {
     StorageService? storage,
     RemoteLogout? remoteLogout,
     ClearWebSession? clearWebSession,
+    ForgetBossCredentials? forgetBossCredentials,
   }) : _storage = storage ?? StorageService(),
        _remoteLogout = remoteLogout ?? _defaultRemoteLogout,
-       _clearWebSession = clearWebSession ?? clearHikiotCookies;
+       _clearWebSession = clearWebSession ?? clearHikiotCookies,
+       _forgetBossCredentials =
+           forgetBossCredentials ??
+           BossCredentialsService(storage: storage).forgetCurrentScope;
 
   final StorageService _storage;
   final RemoteLogout _remoteLogout;
   final ClearWebSession _clearWebSession;
+  final ForgetBossCredentials _forgetBossCredentials;
 
   /// 完整退出登录：尽力通知服务端，然后清 WebView 和本地认证信息。
-  Future<void> logout() async {
+  Future<void> logout({bool forgetBossCredentials = true}) async {
     final token = await _storage.loadToken();
+    if (forgetBossCredentials) {
+      try {
+        // 凭据服务先停用再删除；必须在撤销主账号身份前处理当前范围。
+        await _forgetBossCredentials();
+      } catch (_) {
+        // 安全存储不可用不能阻断主账号退出，不输出可能含凭据的异常。
+      }
+    }
     try {
       await clearRemoteAndWebSession(token);
     } catch (_) {

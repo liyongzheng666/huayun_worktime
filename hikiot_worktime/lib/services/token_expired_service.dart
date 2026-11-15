@@ -85,7 +85,8 @@ class TokenExpiredService {
   /// 复用设置页面的退出登录逻辑
   static Future<void> performLogoutAndNavigate(BuildContext context) async {
     try {
-      await SessionService().logout();
+      // 主账号自动过期仅撤销当前身份；同一账号重新验证后仍可恢复记住的BOSS密码。
+      await SessionService().logout(forgetBossCredentials: false);
 
       // 跳转到登录页（使用 forceLogout 确保 WebView 也清除 cookies）
       if (context.mounted) {
