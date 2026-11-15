@@ -1,4 +1,5 @@
 import 'work_time_calculator.dart';
+import 'decimal_hours.dart';
 
 class TargetProgressResult {
   const TargetProgressResult({
@@ -78,11 +79,15 @@ class TargetProgressHelper {
     final currentPercentage = baseHours > 0
         ? adjustedTotalHours / baseHours * 100
         : 0.0;
-    final targets = _targetsForPercentage(baseTarget, minTarget, currentPercentage);
+    final targets = _targetsForPercentage(
+      baseTarget,
+      minTarget,
+      currentPercentage,
+    );
     final targetData = targets.map((target) {
       final targetHours = baseHours * target / 100;
       final isCompleted = currentPercentage >= target;
-      final gapHours = targetHours - adjustedTotalHours;
+      final gapHours = DecimalHours.add(targetHours, -adjustedTotalHours);
       final dailyNeed = remainingWorkDays > 0
           ? gapHours / remainingWorkDays
           : 0.0;

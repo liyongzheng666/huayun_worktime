@@ -8,6 +8,7 @@ import '../utils/calendar_mark_merge.dart';
 import '../utils/date_helper.dart';
 import '../utils/smart_day_type_helper.dart';
 import '../utils/work_time_calculator.dart';
+import '../utils/decimal_hours.dart';
 import 'storage_service.dart';
 
 /// 一次完整的月度核对结果；不可用与已核对无差额是不同状态。
@@ -72,19 +73,7 @@ class MonthlyReportBalanceService {
         (enforceDailyLimit && value > 24)) {
       return null;
     }
-    if (value == 0) return 0;
-    final match = RegExp(
-      r'^(\d+)(?:\.(\d*))?(?:[eE]([+-]?\d+))?$',
-    ).firstMatch(value.toString());
-    if (match == null) return null;
-    final whole = match[1]!;
-    final digits = whole + (match[2] ?? '');
-    final length = whole.length + int.parse(match[3] ?? '0') + 2;
-    if (length <= 0) return 0;
-    final text = length >= digits.length
-        ? digits.padRight(length, '0')
-        : digits.substring(0, length);
-    return int.tryParse(text);
+    return DecimalHours.tryHundredths(value);
   }
 
   Future<MonthlyReportSnapshot> load(DateTime month, {DateTime? now}) async {

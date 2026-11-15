@@ -19,7 +19,10 @@ class Answer {
   WorkLogEditOutcome? value;
 }
 
-Future<Answer> pumpDialog(WidgetTester tester) async {
+Future<Answer> pumpDialog(
+  WidgetTester tester, {
+  BossWorkLogRecord source = record,
+}) async {
   final answer = Answer();
   await tester.pumpWidget(
     MaterialApp(
@@ -28,7 +31,7 @@ Future<Answer> pumpDialog(WidgetTester tester) async {
           onPressed: () async {
             answer.value = await WorkLogEditDialog.show(
               context: context,
-              record: record,
+              record: source,
             );
           },
           child: const Text('打开'),
@@ -42,6 +45,44 @@ Future<Answer> pumpDialog(WidgetTester tester) async {
 }
 
 void main() {
+  for (final remoteHours in ['10.20', '1.15', '4.10']) {
+    final source = BossWorkLogRecord(
+      objectId: record.objectId,
+      rawData: {...record.rawData, 'ACTWORK': remoteHours},
+    );
+
+    testWidgets('远端$remoteHours原样进入编辑框，未修改时仍禁止空保存', (tester) async {
+      await pumpDialog(tester, source: source);
+
+      final save = tester.widget<FilledButton>(
+        find.widgetWithText(FilledButton, '保存修改'),
+      );
+      expect(save.onPressed, isNull);
+      final field = tester.widget<TextField>(find.byType(TextField).at(2));
+      expect(field.controller!.text, remoteHours);
+    });
+
+    testWidgets('只改标题时保留远端工时$remoteHours，不把误差回写为新工时', (tester) async {
+      final answer = await pumpDialog(tester, source: source);
+      await tester.enterText(find.byType(TextField).at(0), '只修改标题');
+      await tester.pump();
+      await tester.tap(find.text('保存修改'));
+      await tester.pumpAndSettle();
+
+      expect(answer.value?.title, '只修改标题');
+      expect(answer.value?.content, '原内容');
+      expect(answer.value?.actWork, remoteHours);
+      final update = WorkLogEditScript.buildUpdatedData(
+        record: source,
+        title: answer.value!.title,
+        content: answer.value!.content,
+        actWork: answer.value!.actWork,
+      );
+      expect(update['ACTWORK'], remoteHours);
+      expect(source.rawData['ACTWORK'], remoteHours);
+    });
+  }
+
   testWidgets('显示服务端原记录，不拿 CSV 草稿冒充已提交内容', (tester) async {
     await pumpDialog(tester);
 

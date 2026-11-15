@@ -1,5 +1,6 @@
 import '../core/constants/constants.dart';
 import '../services/storage_service.dart';
+import 'decimal_hours.dart';
 
 /// 工时计算工具类
 /// 统一管理午休扣除逻辑和工时计算
@@ -176,9 +177,8 @@ class WorkTimeCalculator {
       checkOutMinutes,
       deductLunch: deductLunch,
     );
-    final hours = minutes / 60.0;
-    // 截断到2位小数
-    return (hours * 100).truncateToDouble() / 100;
+    // 从整数分钟直接换算百分之一小时，避免先除再乘的浮点误差。
+    return (minutes * 100 ~/ 60) / 100;
   }
 
   /// 从字符串计算工时（小时）
@@ -262,11 +262,11 @@ class WorkTimeCalculator {
       return hours.toString();
     }
 
-    // 例如: 8.0 -> 8.00
-    // 例如: 5.559 (double) -> 5.55
-    final h = hours.toDouble();
-    final truncated = (h * 100).truncateToDouble() / 100;
-    return truncated.toStringAsFixed(2);
+    final hundredths = DecimalHours.tryHundredths(hours);
+    if (hundredths == null) {
+      throw ArgumentError.value(hours, 'hours', '工时必须是可表示的有限数值');
+    }
+    return DecimalHours.formatHundredths(hundredths);
   }
 
   /// 解析用户手输的工时，非法输入返回 null。
@@ -281,9 +281,12 @@ class WorkTimeCalculator {
     if (text.isEmpty) return null;
 
     final value = double.tryParse(text);
-    if (value == null || value <= 0 || value > 24) return null;
-
-    return (value * 100).truncateToDouble() / 100;
+    if (value == null || !value.isFinite || value <= 0 || value > 24) {
+      return null;
+    }
+    final hundredths = DecimalHours.tryHundredths(text);
+    if (hundredths == null || hundredths <= 0) return null;
+    return hundredths / 100;
   }
 
   /// 打卡工时与 BOSS 已填工时的一致性容差。
@@ -351,7 +354,11 @@ class WorkTimeCalculator {
     if (start > baseTarget) return [baseTarget];
 
     final targets = <int>{};
-    for (var value = start; value < baseTarget; value += AppConstants.targetStep) {
+    for (
+      var value = start;
+      value < baseTarget;
+      value += AppConstants.targetStep
+    ) {
       targets.add(value);
     }
     targets.add(baseTarget); // 基础目标必定在列表中，且为最后一项

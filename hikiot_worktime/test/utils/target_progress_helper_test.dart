@@ -2,6 +2,22 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:hikiot_worktime/utils/target_progress_helper.dart';
 
 void main() {
+  test('目标与累计相减保留精确两位，8.00减7.20应为0.80', () {
+    final result = TargetProgressHelper.buildMonthlyProgress(
+      adjustedTotalHours: 7.2,
+      baseHours: 8,
+      avgHoursPerDay: 7.2,
+      remainingWorkDays: 1,
+      baseTarget: 100,
+      minTarget: 100,
+      pinnedTarget: null,
+    );
+    final target = result.sortedTargetData.firstWhere(
+      (d) => d['target'] == 100,
+    );
+    expect(target['gapHours'], 0.8);
+    expect(target['dailyNeed'], 0.8);
+  });
   group('目标列表范围', () {
     test('从最低目标排到基础目标，基础目标是最后一项', () {
       final result = TargetProgressHelper.buildDailyProgress(

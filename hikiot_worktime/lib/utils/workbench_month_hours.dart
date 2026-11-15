@@ -2,6 +2,7 @@ import '../core/constants/constants.dart';
 import 'calendar_mark_merge.dart';
 import 'date_helper.dart';
 import 'smart_day_type_helper.dart';
+import 'decimal_hours.dart';
 
 /// 复用月度缓存与手工标记；数据不全时留空，不把部分累计伪装为整月结果。
 class WorkbenchMonthHours {
@@ -32,7 +33,7 @@ class WorkbenchMonthHours {
       }
       final hours = value['hours'];
       if (hours is! num || !hours.isFinite || hours < 0) return null;
-      total += hours.toDouble();
+      total = DecimalHours.add(total, hours);
     }
     return total;
   }

@@ -1,6 +1,7 @@
 import '../core/error/exceptions.dart';
 import '../utils/attendance_parser.dart';
 import '../utils/smart_day_type_helper.dart';
+import '../utils/decimal_hours.dart';
 
 typedef MonthlyDailyLoader =
     Future<Map<String, dynamic>?> Function(String date, String personNo);
@@ -67,9 +68,8 @@ class MonthlyAttendanceAggregator {
       return checkIn != null && checkIn.isNotEmpty && checkIn != '-';
     }).toList();
 
-    final totalHours = recordsWithPunch.fold<double>(
-      0.0,
-      (sum, record) => sum + ((record['hours'] as num?)?.toDouble() ?? 0.0),
+    final totalHours = DecimalHours.sum(
+      recordsWithPunch.map((record) => (record['hours'] as num?) ?? 0),
     );
     final workDays = recordsWithPunch.length;
     final lateCount = recordsWithPunch

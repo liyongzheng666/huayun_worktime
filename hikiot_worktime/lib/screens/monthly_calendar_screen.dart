@@ -12,6 +12,7 @@ import '../services/storage_service.dart';
 import '../services/team_context_service.dart';
 import '../services/token_expired_service.dart';
 import '../utils/work_time_calculator.dart';
+import '../utils/decimal_hours.dart';
 import '../widgets/collapsed_target_goal.dart';
 import '../utils/haptic_utils.dart';
 import '../utils/date_helper.dart';
@@ -2101,23 +2102,23 @@ class MonthlyCalendarScreenState extends State<MonthlyCalendarScreen> {
       switch (type) {
         case '工作日':
           workDayCountAll++;
-          workDayHoursAll += hours;
+          workDayHoursAll = DecimalHours.add(workDayHoursAll, hours);
           break;
         case '加班日':
           overtimeDayCountAll++;
-          overtimeDayHoursAll += hours;
+          overtimeDayHoursAll = DecimalHours.add(overtimeDayHoursAll, hours);
           break;
         case '出差':
           tripDayCountAll++;
-          tripDayHoursAll += hours;
+          tripDayHoursAll = DecimalHours.add(tripDayHoursAll, hours);
           break;
         case '请假':
           leaveDayCountAll++;
-          leaveDayHoursAll += hours;
+          leaveDayHoursAll = DecimalHours.add(leaveDayHoursAll, hours);
           break;
         case '自定义':
           customDayCountAll++;
-          customDayHoursAll += hours;
+          customDayHoursAll = DecimalHours.add(customDayHoursAll, hours);
           break;
         case '非工作日':
           restDayCountAll++;
@@ -2133,34 +2134,34 @@ class MonthlyCalendarScreenState extends State<MonthlyCalendarScreen> {
       switch (type) {
         case '工作日':
           workDayCount++;
-          workDayHours += hours;
+          workDayHours = DecimalHours.add(workDayHours, hours);
           break;
         case '加班日':
           overtimeDayCount++;
-          overtimeDayHours += hours;
+          overtimeDayHours = DecimalHours.add(overtimeDayHours, hours);
           break;
         case '出差':
-          tripDayHours += hours;
+          tripDayHours = DecimalHours.add(tripDayHours, hours);
           if (isOvertime) {
             tripOvertimeCount++;
-            tripOvertimeHours += hours;
+            tripOvertimeHours = DecimalHours.add(tripOvertimeHours, hours);
           } else {
             tripNormalCount++;
-            tripNormalHours += hours;
+            tripNormalHours = DecimalHours.add(tripNormalHours, hours);
           }
           break;
         case '请假':
           leaveDayCount++;
-          leaveDayHours += hours;
+          leaveDayHours = DecimalHours.add(leaveDayHours, hours);
           break;
         case '自定义':
-          customDayHours += hours;
+          customDayHours = DecimalHours.add(customDayHours, hours);
           if (isOvertime) {
             customOvertimeCount++;
-            customOvertimeHours += hours;
+            customOvertimeHours = DecimalHours.add(customOvertimeHours, hours);
           } else {
             customNormalCount++;
-            customNormalHours += hours;
+            customNormalHours = DecimalHours.add(customNormalHours, hours);
           }
           break;
         case '非工作日':
@@ -2175,9 +2176,16 @@ class MonthlyCalendarScreenState extends State<MonthlyCalendarScreen> {
     final totalOvertimeDays =
         overtimeDayCount + customOvertimeCount + tripOvertimeCount;
     final totalRestDays = restDayCount;
-    final totalWorkHours = workDayHours + customNormalHours + tripNormalHours;
-    final totalOvertimeHours =
-        overtimeDayHours + customOvertimeHours + tripOvertimeHours;
+    final totalWorkHours = DecimalHours.sum([
+      workDayHours,
+      customNormalHours,
+      tripNormalHours,
+    ]);
+    final totalOvertimeHours = DecimalHours.sum([
+      overtimeDayHours,
+      customOvertimeHours,
+      tripOvertimeHours,
+    ]);
 
     // 计算整月的总天数(含未来)
     int totalWorkDaysAll = 0;
@@ -2202,18 +2210,22 @@ class MonthlyCalendarScreenState extends State<MonthlyCalendarScreen> {
       }
     });
 
-    final totalHours =
-        workDayHours +
-        overtimeDayHours +
-        tripDayHours +
-        leaveDayHours +
-        customDayHours;
+    final totalHours = DecimalHours.sum([
+      workDayHours,
+      overtimeDayHours,
+      tripDayHours,
+      leaveDayHours,
+      customDayHours,
+    ]);
     final avgHours = totalWorkDays > 0
-        ? (totalWorkHours + totalOvertimeHours) / totalWorkDays
+        ? DecimalHours.add(totalWorkHours, totalOvertimeHours) / totalWorkDays
         : 0.0;
 
     // 计算包含今天的统计
-    final totalHoursWithToday = totalWorkHours + totalOvertimeHours;
+    final totalHoursWithToday = DecimalHours.add(
+      totalWorkHours,
+      totalOvertimeHours,
+    );
     final percentageWithToday = totalWorkDays > 0
         ? (totalHoursWithToday / (totalWorkDays * 8.0)) * 100
         : 0.0;
@@ -2232,22 +2244,40 @@ class MonthlyCalendarScreenState extends State<MonthlyCalendarScreen> {
         // 从总工时中减去今天的工时
         if (todayType == AppConstants.typeWorkday ||
             todayType == AppConstants.typeLeave) {
-          totalHoursExcludingToday -= todayHours;
+          totalHoursExcludingToday = DecimalHours.add(
+            totalHoursExcludingToday,
+            -todayHours,
+          );
           totalWorkDaysExcludingToday -= 1;
         } else if (todayType == AppConstants.typeOvertime) {
-          totalHoursExcludingToday -= todayHours;
+          totalHoursExcludingToday = DecimalHours.add(
+            totalHoursExcludingToday,
+            -todayHours,
+          );
         } else if (todayType == AppConstants.typeCustom && !todayIsOvertime) {
-          totalHoursExcludingToday -= todayHours;
+          totalHoursExcludingToday = DecimalHours.add(
+            totalHoursExcludingToday,
+            -todayHours,
+          );
           totalWorkDaysExcludingToday -= 1;
         } else if (todayType == AppConstants.typeCustom && todayIsOvertime) {
-          totalHoursExcludingToday -= todayHours;
+          totalHoursExcludingToday = DecimalHours.add(
+            totalHoursExcludingToday,
+            -todayHours,
+          );
         } else if (todayType == AppConstants.typeBusinessTrip &&
             !todayIsOvertime) {
-          totalHoursExcludingToday -= todayHours;
+          totalHoursExcludingToday = DecimalHours.add(
+            totalHoursExcludingToday,
+            -todayHours,
+          );
           totalWorkDaysExcludingToday -= 1;
         } else if (todayType == AppConstants.typeBusinessTrip &&
             todayIsOvertime) {
-          totalHoursExcludingToday -= todayHours;
+          totalHoursExcludingToday = DecimalHours.add(
+            totalHoursExcludingToday,
+            -todayHours,
+          );
         }
       }
     }
@@ -2567,7 +2597,7 @@ class MonthlyCalendarScreenState extends State<MonthlyCalendarScreen> {
 
         // 如果开关关闭，需要排除今日数据
         if (!_includeTodayData && todayIsWorkDay) {
-          adjustedTotalHours -= hours;
+          adjustedTotalHours = DecimalHours.add(adjustedTotalHours, -hours);
           adjustedTotalWorkDays -= 1;
         }
       }

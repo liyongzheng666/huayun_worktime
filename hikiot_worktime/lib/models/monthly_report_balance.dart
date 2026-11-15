@@ -1,3 +1,5 @@
+import '../utils/decimal_hours.dart';
+
 /// 月度差额无法继续分配时，提示用户核对已有日报。
 enum MonthlyReportProblem { overReported, noPendingDates, capacityExceeded }
 
@@ -120,12 +122,8 @@ class MonthlyReportBalance {
   }
 
   /// 已经是百分之一小时的整数，直接格式化，避免再乘浮点数造成少一分。
-  static String formatHundredths(int value) {
-    final sign = value < 0 ? '-' : '';
-    final magnitude = value.abs();
-    return '$sign${magnitude ~/ 100}.'
-        '${(magnitude % 100).toString().padLeft(2, '0')}';
-  }
+  static String formatHundredths(int value) =>
+      DecimalHours.formatHundredths(value);
 
   static void _validateHours(Map<String, int> values) {
     for (final entry in values.entries) {
