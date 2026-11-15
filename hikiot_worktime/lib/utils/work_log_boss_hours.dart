@@ -13,9 +13,8 @@ import 'boss_session_script.dart';
 /// 数据来源：`Hoteam.InforCenter.WorkReportService.GetWorkHours`，
 /// 传 `SelectDate` 返回 `[总额度, 已填, 剩余]`，取中间值即当日已填工时。
 ///
-/// 为什么在 WebView 里跑而不在 Dart 里直接请求：BOSS 把 `Password` 放在
-/// 每个请求体里，要在 Dart 侧发请求就必须先把凭据存到本地。
-/// 复用网页会话可以完全避免这一点。
+/// 在WebView内复用网页已认证的会话，业务请求的上下文与认证协议不搬到Dart。
+/// 用户选择记住的登录密码由独立安全存储管理，不作为原生业务请求上下文使用。
 class WorkLogBossHours {
   WorkLogBossHours._();
 

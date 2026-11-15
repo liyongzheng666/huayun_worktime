@@ -58,8 +58,8 @@ class BossLoginResult {
 /// 漏到了界面上。这里用 `HeadlessInAppWebView` 在后台加载首页、
 /// 等页面自己发出带 `para` 的请求，然后执行操作，全程无跳转。
 ///
-/// 登录态来自共享 Cookie，与可见的日志系统页面是同一份；
-/// 因此用户在网页上登录过一次之后，后台执行就能一直复用。
+/// 优先复用与可见页面共享的Cookie；过期后可用当前已验证身份的安全凭据恢复。
+/// 密码拒绝或需要额外认证时停止自动尝试，交回人工流程。
 class BossSessionRunner {
   BossSessionRunner._();
 
