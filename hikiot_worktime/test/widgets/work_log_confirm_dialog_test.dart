@@ -46,7 +46,7 @@ Future<Answer> pumpDialog(
               constants: constants,
               canChangeProject: canChangeProject,
               canChangeAuditor: canChangeAuditor,
-              now: now,
+              now: now ?? DateTime(2026, 8, 11, 20, 33),
             );
             answer.returned = true;
           },
@@ -105,6 +105,40 @@ void main() {
   });
 
   group('凑整建议', () {
+    testWidgets('过去日期不显示建议多待或不用再等提示', (tester) async {
+      await pumpDialog(
+        tester,
+        hours: const WorkLogHours(
+          hours: 11.55,
+          checkIn: '08:30',
+          checkOut: '20:33',
+        ),
+        date: '2026-08-10',
+        now: DateTime(2026, 8, 11, 20, 33),
+      );
+      expect(find.textContaining('再待'), findsNothing);
+      expect(find.textContaining('不用再等'), findsNothing);
+      expect(
+        tester.widget<TextField>(find.byType(TextField)).controller!.text,
+        '11.55',
+      );
+    });
+
+    testWidgets('未来日期不显示实时等待提示', (tester) async {
+      await pumpDialog(
+        tester,
+        hours: const WorkLogHours(
+          hours: 11.6,
+          checkIn: '08:30',
+          checkOut: '20:36',
+        ),
+        date: '2026-08-12',
+        now: DateTime(2026, 8, 11, 20, 33),
+      );
+      expect(find.textContaining('再待'), findsNothing);
+      expect(find.textContaining('不用再等'), findsNothing);
+    });
+
     testWidgets('11.55 小时提示还差 3 分钟到 11.60', (tester) async {
       await pumpDialog(
         tester,

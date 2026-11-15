@@ -1,6 +1,9 @@
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:hikiot_worktime/services/work_log_repository.dart';
+import 'package:hikiot_worktime/services/monthly_report_balance_service.dart';
 import 'package:hikiot_worktime/utils/work_log_csv_parser.dart';
 import 'package:hikiot_worktime/widgets/work_log_confirm_dialog.dart';
 
@@ -16,6 +19,30 @@ const _entry = WorkLogEntry(
   content: '测试内容',
 );
 
+class _GatedBalance extends MonthlyReportBalanceService {
+  _GatedBalance(MonthlyBalanceFixture fixture)
+    : super(storage: fixture.storage, clock: () => fixture.now);
+  final gate = Completer<void>();
+
+  @override
+  Future<bool> isCurrent(MonthlyReportSnapshot snapshot) async {
+    await gate.future;
+    return super.isCurrent(snapshot);
+  }
+}
+
+class _ConfirmGateBalance extends MonthlyReportBalanceService {
+  _ConfirmGateBalance(MonthlyBalanceFixture fixture)
+    : super(storage: fixture.storage, clock: () => fixture.now);
+  Completer<void>? gate;
+
+  @override
+  Future<bool> isCurrent(MonthlyReportSnapshot snapshot) async {
+    await gate?.future;
+    return super.isCurrent(snapshot);
+  }
+}
+
 void main() {
   late MonthlyBalanceFixture fixture;
   WorkLogConfirmOutcome? answer;
@@ -30,6 +57,7 @@ void main() {
     WidgetTester tester, {
     double hours = 10.42,
     String date = '2026-09-01',
+    MonthlyReportBalanceService? service,
   }) async {
     await tester.binding.setSurfaceSize(const Size(900, 1500));
     addTearDown(() => tester.binding.setSurfaceSize(null));
@@ -49,7 +77,7 @@ void main() {
                 ),
                 existingHours: 0,
                 constants: const {'auditorName': '测试'},
-                balanceService: fixture.service,
+                balanceService: service ?? fixture.service,
                 now: fixture.now,
               );
             },
@@ -98,6 +126,61 @@ void main() {
     expect(await fixture.storage.loadBossHours('2026-09'), isEmpty);
   });
 
+  testWidgets('填报确认直接显示本日建议，可原地采用再确认，无需打开整月列表', (tester) async {
+    await open(tester);
+    expect(find.text('本日建议填报 10.40 小时'), findsOneWidget);
+    expect(find.text('月度填报工时建议'), findsNothing);
+    expect(
+      tester.widget<TextField>(find.byType(TextField)).controller!.text,
+      '10.42',
+    );
+    await tester.ensureVisible(find.text('采用本日建议'));
+    await tester.tap(find.text('采用本日建议'));
+    await tester.pumpAndSettle();
+    expect(answer, isNull);
+    expect(find.text('已采用本日建议'), findsOneWidget);
+    expect(
+      tester.widget<TextField>(find.byType(TextField)).controller!.text,
+      '10.40',
+    );
+    expect(find.textContaining('再待'), findsNothing);
+    await tester.tap(find.text('确认提交'));
+    await tester.pumpAndSettle();
+    expect(answer!.actWork, '10.40');
+    expect(answer!.monthlyBalance, isNotNull);
+  });
+
+  testWidgets('原地采用尚在校验时禁用输入与确认，避免原值抢先提交或迟到覆盖', (tester) async {
+    final service = _GatedBalance(fixture);
+    await open(tester, service: service);
+    final oldConfirm = tester
+        .widget<FilledButton>(find.widgetWithText(FilledButton, '确认提交'))
+        .onPressed!;
+    await tester.ensureVisible(find.text('采用本日建议'));
+    await tester.tap(find.text('采用本日建议'));
+    // 模拟按钮尚未重建时同帧到达的第二次点击。
+    oldConfirm();
+    await tester.pump();
+    expect(tester.widget<TextField>(find.byType(TextField)).enabled, isFalse);
+    expect(
+      tester
+          .widget<FilledButton>(find.widgetWithText(FilledButton, '确认提交'))
+          .onPressed,
+      isNull,
+    );
+    expect(answer, isNull);
+    service.gate.complete();
+    await tester.pumpAndSettle();
+    expect(tester.widget<TextField>(find.byType(TextField)).enabled, isTrue);
+    expect(
+      tester.widget<TextField>(find.byType(TextField)).controller!.text,
+      '10.40',
+    );
+    await tester.tap(find.text('确认提交'));
+    await tester.pumpAndSettle();
+    expect(answer!.actWork, '10.40');
+  });
+
   testWidgets('关闭预览保留原工时，未采用不会改变提交值', (tester) async {
     await open(tester);
     await preview(tester);
@@ -118,6 +201,50 @@ void main() {
     await tester.pumpAndSettle();
     expect(answer!.actWork, '10.50');
     expect(answer!.monthlyBalance, isNull);
+  });
+
+  testWidgets('最终校验期间再次改动工时，不能按旧输入结束确认', (tester) async {
+    final service = _ConfirmGateBalance(fixture);
+    await open(tester, service: service);
+    await tester.ensureVisible(find.text('采用本日建议'));
+    await tester.tap(find.text('采用本日建议'));
+    await tester.pumpAndSettle();
+    service.gate = Completer<void>();
+    await tester.tap(find.text('确认提交'));
+    await tester.pump();
+    await tester.enterText(find.byType(TextField), '9.00');
+    await tester.pump();
+    service.gate!.complete();
+    await tester.pumpAndSettle();
+    expect(answer, isNull);
+    expect(find.textContaining('工时已变化，请重新确认'), findsOneWidget);
+    await tester.tap(find.text('确认提交'));
+    await tester.pumpAndSettle();
+    expect(answer!.actWork, '9.00');
+    expect(answer!.monthlyBalance, isNull);
+  });
+
+  testWidgets('最终校验期间取消，迟到结果不能再次关闭页面或使用已销毁输入框', (tester) async {
+    final service = _ConfirmGateBalance(fixture);
+    await open(tester, service: service);
+    await tester.ensureVisible(find.text('采用本日建议'));
+    await tester.tap(find.text('采用本日建议'));
+    await tester.pumpAndSettle();
+    service.gate = Completer<void>();
+    await tester.tap(find.text('确认提交'));
+    await tester.pump();
+    await tester.tap(find.text('取消'));
+    await tester.pumpAndSettle();
+    await fixture.storage.saveBossHoursForDate(
+      '2026-09-02',
+      10.5,
+      refreshedAt: fixture.now,
+    );
+    service.gate!.complete();
+    await tester.pumpAndSettle();
+    expect(answer, isNull);
+    expect(find.text('打开'), findsOneWidget);
+    expect(tester.takeException(), isNull);
   });
 
   testWidgets('确认期间其它日期已填发生变化，阻止旧建议返回', (tester) async {
