@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:flutter_inappwebview/flutter_inappwebview.dart';
+import 'package:hikiot_worktime/core/constants/storage_keys.dart';
 import 'package:hikiot_worktime/models/today_wrap_up.dart';
 import 'package:hikiot_worktime/screens/work_log_screen.dart';
 import 'package:hikiot_worktime/services/boss_hours_auto_refresh_service.dart';
@@ -152,6 +153,63 @@ void main() {
     await storage.markBossHoursDateChanged(date);
     await tester.pumpAndSettle();
     expect(find.text('上次 BOSS 已填 6.50h，当前待确认'), findsOneWidget);
+  });
+
+  testWidgets('同月损坏保留已显示值，公开选择器切月往返后不复活旧月值', (tester) async {
+    final current = DateTime.parse('$month-01');
+    final previous = DateTime(current.year, current.month - 1);
+    final prefs = await SharedPreferences.getInstance();
+    await open(tester);
+    await detail(tester);
+    expect(find.textContaining('BOSS 已填 6.50h'), findsOneWidget);
+    await tester.tapAt(const Offset(5, 5));
+    await tester.pumpAndSettle();
+
+    // 同月坏缓存不能用零覆盖最后一次可用显示。
+    await prefs.setString(StorageKeys.bossHoursKey(month), 'broken-json');
+    await prefs.setString(
+      StorageKeys.bossHoursKey(DateHelper.formatMonth(previous)),
+      'broken-json',
+    );
+    await screenKey.currentState!.refreshFromStorage();
+    await tester.pumpAndSettle();
+    await detail(tester);
+    expect(find.textContaining('BOSS 已填 6.50h'), findsOneWidget);
+    await tester.tapAt(const Offset(5, 5));
+    await tester.pumpAndSettle();
+
+    var selected = current;
+    for (final target in [previous, current]) {
+      final header = find.text(
+        '${selected.year}年${selected.month.toString().padLeft(2, '0')}月',
+      );
+      await tester.ensureVisible(header);
+      await tester.tap(header);
+      await tester.pumpAndSettle();
+      expect(find.text('选择年月'), findsOneWidget);
+      if (target.year != selected.year) {
+        await tester.tap(find.byType(DropdownButton<int>).first);
+        await tester.pumpAndSettle();
+        final year = find.text('${target.year}年').last;
+        await tester.ensureVisible(year);
+        await tester.tap(year);
+        await tester.pumpAndSettle();
+      }
+      await tester.tap(find.byType(DropdownButton<int>).last);
+      await tester.pumpAndSettle();
+      final targetMonth = find.text('${target.month}月').last;
+      await tester.ensureVisible(targetMonth);
+      await tester.tap(targetMonth);
+      await tester.pumpAndSettle();
+      await tester.tap(find.text('确定'));
+      await tester.pumpAndSettle();
+      selected = target;
+      await detail(tester);
+      expect(find.textContaining('BOSS 已填'), findsNothing);
+      await tester.tapAt(const Offset(5, 5));
+      await tester.pumpAndSettle();
+    }
+    expect(tester.takeException(), isNull);
   });
 
   testWidgets('服务端确认零工时后明细不能残留旧的正数', (tester) async {
