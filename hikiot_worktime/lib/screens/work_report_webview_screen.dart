@@ -9,6 +9,7 @@ import '../core/theme/theme.dart';
 import '../services/storage_service.dart';
 import '../services/work_log_submit_service.dart';
 import '../services/work_log_repository.dart';
+import '../services/monthly_report_balance_service.dart';
 import '../utils/date_helper.dart';
 import '../utils/work_log_boss_hours.dart';
 import '../utils/work_log_fill_script.dart';
@@ -502,6 +503,7 @@ class _WorkReportWebViewScreenState extends State<WorkReportWebViewScreen> {
     // 用户可在确认框里调整工时，因此提交的是它返回的值而非打卡原值；
     // 点「改选」时回到选择框，改完再回来重新核对一遍
     String actWork;
+    MonthlyReportSnapshot? monthlyBalance;
     while (true) {
       final outcome = await WorkLogConfirmDialog.show(
         context: context,
@@ -578,6 +580,7 @@ class _WorkReportWebViewScreenState extends State<WorkReportWebViewScreen> {
       }
 
       actWork = outcome.actWork!;
+      monthlyBalance = outcome.monthlyBalance;
       break;
     }
 
@@ -585,6 +588,7 @@ class _WorkReportWebViewScreenState extends State<WorkReportWebViewScreen> {
       entry: entry,
       actWork: actWork,
       constants: constants,
+      monthlyBalance: monthlyBalance,
     );
     if (!mounted) return;
 

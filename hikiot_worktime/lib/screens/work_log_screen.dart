@@ -21,12 +21,14 @@ import '../services/boss_session_runner.dart';
 import '../services/boss_login_coordinator.dart';
 import '../services/boss_hours_auto_refresh_service.dart';
 import '../services/work_log_submit_service.dart';
+import '../services/monthly_report_balance_service.dart';
 import '../models/today_wrap_up.dart';
 import '../widgets/boss_constants_dialog.dart';
 import '../widgets/work_log_auditor_picker_dialog.dart';
 import '../widgets/work_log_project_picker_dialog.dart';
 import '../widgets/work_log_confirm_dialog.dart';
 import '../widgets/work_log_edit_dialog.dart';
+import '../widgets/monthly_report_balance_dialog.dart';
 import '../widgets/week_strip.dart';
 import 'work_report_webview_screen.dart';
 
@@ -35,9 +37,15 @@ import 'work_report_webview_screen.dart';
 /// 职责：展示某一天的填报素材（CSV 内容 + 实际打卡工时），并提供一键复制。
 /// 解析、存储、工时合并全部在 [WorkLogRepository]，本页只做展示与交互。
 class WorkLogScreen extends StatefulWidget {
-  const WorkLogScreen({super.key, this.repository, this.bossAutoRefresh});
+  const WorkLogScreen({
+    super.key,
+    this.repository,
+    this.bossAutoRefresh,
+    this.monthlyBalanceService,
+  });
   final WorkLogRepository? repository;
   final BossHoursAutoRefreshService? bossAutoRefresh;
+  final MonthlyReportBalanceService? monthlyBalanceService;
 
   @override
   State<WorkLogScreen> createState() => WorkLogScreenState();
@@ -49,6 +57,7 @@ class WorkLogScreenState extends State<WorkLogScreen> {
   double? _reportedHours;
   bool _bossRefreshing = false;
   bool _bossUnavailable = false;
+  bool _balanceLoading = false;
   int _bossReadSeq = 0;
   int _bossQuerySeq = 0;
   final GlobalKey<WeekStripState> _weekStripKey = GlobalKey();
@@ -561,6 +570,7 @@ class WorkLogScreenState extends State<WorkLogScreen> {
     // 用户在确认框里点「改选」时回到对应的选择框，改完再回来重新核对一遍——
     // 改了项目或审核人还接着用上一屏的核对结果，等于没核对。
     String actWork;
+    MonthlyReportSnapshot? monthlyBalance;
     while (true) {
       // 改项目后也会回到这里，审核人确认完成之前不能继续提交。
       if ((constants['auditor'] ?? '').isEmpty) {
@@ -599,6 +609,7 @@ class WorkLogScreenState extends State<WorkLogScreen> {
         // 候选空不是「不能改」，只是「这一趟没扫到」——点了现场重扫即可。
         canChangeProject: true,
         canChangeAuditor: true,
+        balanceService: widget.monthlyBalanceService,
       );
       if (outcome == null || !mounted) return;
 
@@ -650,6 +661,7 @@ class WorkLogScreenState extends State<WorkLogScreen> {
       }
 
       actWork = outcome.actWork!;
+      monthlyBalance = outcome.monthlyBalance;
       break;
     }
 
@@ -657,9 +669,12 @@ class WorkLogScreenState extends State<WorkLogScreen> {
     final result = await BossSessionRunner.run<WorkLogSubmitResult>((
       controller,
     ) async {
-      return WorkLogSubmitService(
-        controller,
-      ).submit(entry: entry, actWork: actWork, constants: constants);
+      return WorkLogSubmitService(controller).submit(
+        entry: entry,
+        actWork: actWork,
+        constants: constants,
+        monthlyBalance: monthlyBalance,
+      );
     });
 
     if (!mounted) return;
@@ -741,6 +756,33 @@ class WorkLogScreenState extends State<WorkLogScreen> {
     );
   }
 
+  /// 月度入口只预览；真正采用仍在某一天的提交确认中完成。
+  Future<void> _previewMonthlyBalance() async {
+    if (_balanceLoading || _submitting || _editingSubmitted) return;
+    final date = _selectedDate;
+    final seq = _loadSeq;
+    setState(() => _balanceLoading = true);
+    try {
+      await _bossAutoRefresh.refreshIfStale(date);
+      final snapshot =
+          await (widget.monthlyBalanceService ?? MonthlyReportBalanceService())
+              .load(date);
+      if (!mounted ||
+          seq != _loadSeq ||
+          !DateHelper.isSameDay(date, _selectedDate)) {
+        return;
+      }
+      await MonthlyReportBalanceDialog.show(
+        context: context,
+        snapshot: snapshot,
+      );
+    } catch (_) {
+      _showMessage('暂未取得整月数据，请同步考勤和华天工时后重试');
+    } finally {
+      if (mounted) setState(() => _balanceLoading = false);
+    }
+  }
+
   @override
   Widget build(BuildContext context) {
     return Scaffold(
@@ -749,6 +791,11 @@ class WorkLogScreenState extends State<WorkLogScreen> {
         backgroundColor: LegacyThemeColors.surface(context, AppColors.primary),
         foregroundColor: LegacyThemeColors.text(context, AppColors.onPrimary),
         actions: [
+          IconButton(
+            icon: const Icon(Icons.balance),
+            tooltip: '整月工时建议',
+            onPressed: _balanceLoading ? null : _previewMonthlyBalance,
+          ),
           IconButton(
             icon: const Icon(Icons.tune),
             tooltip: 'BOSS 提交配置',

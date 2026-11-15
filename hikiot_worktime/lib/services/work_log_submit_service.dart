@@ -15,6 +15,8 @@ import '../utils/work_log_request_capture.dart';
 import '../utils/work_log_saved_capture.dart';
 import '../utils/work_log_submit_script.dart';
 import 'storage_service.dart';
+import 'monthly_report_balance_service.dart';
+import '../models/monthly_report_balance.dart';
 
 /// 提交配置的解析结果
 class BossConstantsResolution {
@@ -95,11 +97,18 @@ class WorkLogSubmitResult {
 ///
 /// 本类只做业务，不碰 UI：确认对话框、提示、剪贴板都由调用方负责。
 class WorkLogSubmitService {
-  WorkLogSubmitService(this._controller, {StorageService? storage})
-    : _storage = storage ?? StorageService();
+  WorkLogSubmitService(
+    this._controller, {
+    StorageService? storage,
+    MonthlyReportBalanceService? monthlyBalanceService,
+  }) : _storage = storage ?? StorageService(),
+       _monthlyBalanceService =
+           monthlyBalanceService ??
+           MonthlyReportBalanceService(storage: storage);
 
   final InAppWebViewController _controller;
   final StorageService _storage;
+  final MonthlyReportBalanceService _monthlyBalanceService;
 
   static const String _store = WorkLogRequestCapture.storeName;
 
@@ -647,8 +656,22 @@ class WorkLogSubmitService {
     required WorkLogEntry entry,
     required String actWork,
     required Map<String, String> constants,
+    MonthlyReportSnapshot? monthlyBalance,
   }) async {
     try {
+      // 月度建议只在用户采用且整月数据仍一致时使用；不影响原有单日手填流程。
+      if (monthlyBalance != null) {
+        final suggested = monthlyBalance.plan?.suggestions[entry.date];
+        if (suggested == null ||
+            suggested <= 0 ||
+            actWork != MonthlyReportBalance.formatHundredths(suggested) ||
+            !await _monthlyBalanceService.isCurrent(monthlyBalance)) {
+          return const WorkLogSubmitResult(
+            status: WorkLogSubmitStatus.deferred,
+            message: '整月工时已变化，请重新生成建议并确认，本次未提交',
+          );
+        }
+      }
       final workLogData = WorkLogSubmitScript.buildWorkLogData(
         entry: entry,
         actWork: actWork,

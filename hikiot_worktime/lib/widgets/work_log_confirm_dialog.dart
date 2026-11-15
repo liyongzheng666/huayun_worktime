@@ -3,30 +3,37 @@ import 'package:flutter/material.dart';
 import '../core/theme/legacy_theme_colors.dart';
 import '../core/theme/theme.dart';
 import '../services/work_log_repository.dart';
+import '../models/monthly_report_balance.dart';
+import '../services/monthly_report_balance_service.dart';
+import '../services/boss_hours_auto_refresh_service.dart';
 import '../utils/date_helper.dart';
 import '../utils/work_log_csv_parser.dart';
 import '../utils/work_time_calculator.dart';
+import 'monthly_report_balance_dialog.dart';
 
 /// 用户在提交确认框里的选择
 class WorkLogConfirmOutcome {
   /// 确认提交，[actWork] 是最终工时
-  const WorkLogConfirmOutcome.submit(this.actWork)
+  const WorkLogConfirmOutcome.submit(this.actWork, {this.monthlyBalance})
     : changeProject = false,
       changeAuditor = false;
 
   /// 要求改选项目，回到项目选择框
   const WorkLogConfirmOutcome.changeProject()
     : actWork = null,
+      monthlyBalance = null,
       changeProject = true,
       changeAuditor = false;
 
   /// 要求改选审核人，回到审核人选择框
   const WorkLogConfirmOutcome.changeAuditor()
     : actWork = null,
+      monthlyBalance = null,
       changeProject = false,
       changeAuditor = true;
 
   final String? actWork;
+  final MonthlyReportSnapshot? monthlyBalance;
   final bool changeProject;
   final bool changeAuditor;
 }
@@ -61,6 +68,7 @@ class WorkLogConfirmDialog {
     bool canChangeProject = false,
     bool canChangeAuditor = false,
     DateTime? now,
+    MonthlyReportBalanceService? balanceService,
   }) async {
     final alreadyFiled = existingHours != null && existingHours > 0;
 
@@ -76,6 +84,11 @@ class WorkLogConfirmDialog {
         hours.checkIn?.isNotEmpty == true &&
         DateHelper.isTodayStr(date, now: now);
     var useCheckIn = true;
+    final balance = balanceService ?? MonthlyReportBalanceService();
+    MonthlyReportSnapshot? adoptedBalance;
+    int? adoptedHours;
+    var loadingBalance = false;
+    String? balanceMessage;
 
     final result = await showDialog<WorkLogConfirmOutcome>(
       context: context,
@@ -107,6 +120,9 @@ class WorkLogConfirmDialog {
 
           void switchSource(bool toCheckIn) {
             setDialogState(() {
+              adoptedBalance = null;
+              adoptedHours = null;
+              balanceMessage = null;
               useCheckIn = toCheckIn;
               // 切换即以新来源的值为准。手改过的值也会被覆盖——
               // 用户点这个开关就是在说「按这个来源重算」
@@ -187,6 +203,75 @@ class WorkLogConfirmDialog {
                   _confirmRow(context, '工作类型', entry.workType),
                   _confirmRow(context, '项目阶段', entry.stage),
                   _confirmRow(context, '阶段活动', entry.activity),
+                  if (!alreadyFiled && existingHours == 0)
+                    TextButton.icon(
+                      onPressed: loadingBalance
+                          ? null
+                          : () async {
+                              setDialogState(() => loadingBalance = true);
+                              try {
+                                final month = DateTime.parse(date);
+                                // 用户请求建议时复用现有同步器；启动提醒不发网络请求。
+                                if (balanceService == null) {
+                                  await BossHoursAutoRefreshService.shared
+                                      .refreshIfStale(month);
+                                }
+                                final snapshot = await balance.load(
+                                  month,
+                                  now: now,
+                                );
+                                if (!dialogContext.mounted) return;
+                                final selected =
+                                    await MonthlyReportBalanceDialog.show(
+                                      context: dialogContext,
+                                      snapshot: snapshot,
+                                      selectedDate: date,
+                                    );
+                                if (!dialogContext.mounted ||
+                                    selected == null) {
+                                  return;
+                                }
+                                final current = await balance.isCurrent(
+                                  snapshot,
+                                );
+                                if (!dialogContext.mounted) return;
+                                setDialogState(() {
+                                  if (!current) {
+                                    balanceMessage = '月度数据已变化，请重新生成建议';
+                                    return;
+                                  }
+                                  adoptedBalance = snapshot;
+                                  adoptedHours = selected;
+                                  useCheckIn = true;
+                                  hoursController.text =
+                                      MonthlyReportBalance.formatHundredths(
+                                        selected,
+                                      );
+                                  balanceMessage = '已采用整月建议，原始打卡工时保持不变';
+                                });
+                              } catch (_) {
+                                if (dialogContext.mounted) {
+                                  setDialogState(() {
+                                    balanceMessage = '暂未取得整月数据，请同步考勤和华天工时后重试';
+                                  });
+                                }
+                              } finally {
+                                if (dialogContext.mounted) {
+                                  setDialogState(() => loadingBalance = false);
+                                }
+                              }
+                            },
+                      icon: const Icon(Icons.balance),
+                      label: Text(loadingBalance ? '正在核对整月工时…' : '整月工时建议'),
+                    ),
+                  if (balanceMessage != null)
+                    Padding(
+                      padding: const EdgeInsets.only(bottom: 8),
+                      child: Text(
+                        balanceMessage!,
+                        style: const TextStyle(fontSize: 12),
+                      ),
+                    ),
                   if (canUseNow)
                     _buildSourceSwitch(
                       context: context,
@@ -202,22 +287,27 @@ class WorkLogConfirmDialog {
                     sourceLabel: useCheckIn || !canUseNow ? '打卡工时' : '按当前时间',
                     parsed: parsed,
                     edited: edited,
-                    onChanged: () => setDialogState(() {}),
+                    onChanged: () => setDialogState(() {
+                      adoptedBalance = null;
+                      adoptedHours = null;
+                      balanceMessage = null;
+                    }),
                   ),
-                  _buildStepHint(
-                    context: context,
-                    parsed: parsed,
-                    // 手改过工时之后，参照时刻和输入框里的数已经对不上，
-                    // 再给「几点」只会指向一个错的时间。
-                    //
-                    // 参照时刻随来源走：按打卡算时是下班打卡时刻，
-                    // 按当前时间算时就是此刻——「再待 3 分钟」是从现在起算的。
-                    baseClock: edited
-                        ? null
-                        : (useCheckIn || !canUseNow
-                              ? hours.checkOut
-                              : DateHelper.nowClock(now: now)),
-                  ),
+                  if (adoptedHours == null)
+                    _buildStepHint(
+                      context: context,
+                      parsed: parsed,
+                      // 手改过工时之后，参照时刻和输入框里的数已经对不上，
+                      // 再给「几点」只会指向一个错的时间。
+                      //
+                      // 参照时刻随来源走：按打卡算时是下班打卡时刻，
+                      // 按当前时间算时就是此刻——「再待 3 分钟」是从现在起算的。
+                      baseClock: edited
+                          ? null
+                          : (useCheckIn || !canUseNow
+                                ? hours.checkOut
+                                : DateHelper.nowClock(now: now)),
+                    ),
                   const Divider(),
                   _confirmRow(context, '工作内容', entry.content),
                 ],
@@ -232,14 +322,34 @@ class WorkLogConfirmDialog {
                 // 已填或查询状态未知时都不允许提交。BOSS 不做幂等，
                 // “仍要提交”会把一次网络抖动变成同日两条重复日志。
                 onPressed:
-                    parsed == null || existingHours == null || alreadyFiled
+                    parsed == null ||
+                        existingHours == null ||
+                        alreadyFiled ||
+                        loadingBalance
                     ? null
-                    : () => Navigator.pop(
-                        dialogContext,
-                        WorkLogConfirmOutcome.submit(
-                          WorkTimeCalculator.formatHours(parsed),
-                        ),
-                      ),
+                    : () async {
+                        final snapshot = adoptedBalance;
+                        if (snapshot != null &&
+                            !await balance.isCurrent(snapshot)) {
+                          if (!dialogContext.mounted) return;
+                          setDialogState(() {
+                            balanceMessage = '月度数据已变化，请重新生成建议，或手工修改工时';
+                          });
+                          return;
+                        }
+                        if (!dialogContext.mounted) return;
+                        Navigator.pop(
+                          dialogContext,
+                          WorkLogConfirmOutcome.submit(
+                            adoptedHours == null
+                                ? WorkTimeCalculator.formatHours(parsed)
+                                : MonthlyReportBalance.formatHundredths(
+                                    adoptedHours!,
+                                  ),
+                            monthlyBalance: snapshot,
+                          ),
+                        );
+                      },
                 child: Text(
                   alreadyFiled
                       ? '该日已提交'

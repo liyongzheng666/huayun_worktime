@@ -15,18 +15,22 @@ import '../widgets/app_update_dialog.dart';
 import '../models/today_wrap_up.dart';
 import '../services/platform_capabilities.dart';
 import '../utils/haptic_utils.dart';
+import '../services/monthly_report_balance_service.dart';
+import '../widgets/monthly_report_reminder.dart';
 
 /// 主框架页面 - 包含底部导航栏
 class MainScreen extends StatefulWidget {
   final String token;
   final HikiotApiClient? apiClient;
   final DailyAttendanceRepository? dailyRepository;
+  final MonthlyReportBalanceService? monthlyBalanceService;
 
   const MainScreen({
     super.key,
     required this.token,
     this.apiClient,
     this.dailyRepository,
+    this.monthlyBalanceService,
   });
 
   @override
@@ -41,6 +45,7 @@ class _MainScreenState extends State<MainScreen> with WidgetsBindingObserver {
   final GlobalKey<MonthlyCalendarScreenState> _monthlyKey = GlobalKey();
   final GlobalKey<DailyHoursScreenState> _dailyKey = GlobalKey();
   final GlobalKey<WorkLogScreenState> _workLogKey = GlobalKey();
+  final GlobalKey<MonthlyReportReminderState> _reportReminderKey = GlobalKey();
 
   @override
   void initState() {
@@ -117,6 +122,7 @@ class _MainScreenState extends State<MainScreen> with WidgetsBindingObserver {
       return;
     }
     await _dailyKey.currentState?.refreshMonthCache();
+    await _reportReminderKey.currentState?.refresh();
   }
 
   Future<void> _onTabTap(int index) async {
@@ -148,6 +154,7 @@ class _MainScreenState extends State<MainScreen> with WidgetsBindingObserver {
     if (index == 2 && _workLogKey.currentState != null) {
       await _workLogKey.currentState!.refreshData();
     }
+    await _reportReminderKey.currentState?.refresh();
   }
 
   /// 今日卡片直达原有导入、登录和提交确认流程，不绕过核对环节。
@@ -162,30 +169,37 @@ class _MainScreenState extends State<MainScreen> with WidgetsBindingObserver {
     final theme = Theme.of(context);
 
     return Scaffold(
-      body: IndexedStack(
-        index: _currentIndex,
-        children: [
-          DailyHoursScreen(
-            key: _dailyKey,
-            autoLoad: false,
-            dailyRepository: widget.dailyRepository,
-            isActive: _currentIndex == 0 && _startupReady,
-            onWrapUpAction: _openWrapUpTask,
-          ),
-          MonthlyCalendarScreen(
-            key: _monthlyKey,
-            token: widget.token,
-            autoInitialize: false,
-            apiClient: widget.apiClient,
-          ),
-          WorkLogScreen(key: _workLogKey),
-          SettingsScreen(
-            onRestartOnboarding: () {
-              unawaited(_onTabTap(0));
-              _dailyKey.currentState?.showOnboarding();
-            },
-          ),
-        ],
+      body: MonthlyReportReminder(
+        key: _reportReminderKey,
+        service: widget.monthlyBalanceService,
+        child: IndexedStack(
+          index: _currentIndex,
+          children: [
+            DailyHoursScreen(
+              key: _dailyKey,
+              autoLoad: false,
+              dailyRepository: widget.dailyRepository,
+              isActive: _currentIndex == 0 && _startupReady,
+              onWrapUpAction: _openWrapUpTask,
+            ),
+            MonthlyCalendarScreen(
+              key: _monthlyKey,
+              token: widget.token,
+              autoInitialize: false,
+              apiClient: widget.apiClient,
+            ),
+            WorkLogScreen(
+              key: _workLogKey,
+              monthlyBalanceService: widget.monthlyBalanceService,
+            ),
+            SettingsScreen(
+              onRestartOnboarding: () {
+                unawaited(_onTabTap(0));
+                _dailyKey.currentState?.showOnboarding();
+              },
+            ),
+          ],
+        ),
       ),
       bottomNavigationBar: PlatformCapabilities.supportsTodayWrapUp
           ? _buildIosNavigation()
