@@ -14,13 +14,21 @@ class HikiotApiClient {
 
   final http.Client _httpClient;
   String? _token;
+  int _sessionGeneration = 0;
+  final Map<(int, String, String), Future<http.Response>> _dailyInFlight = {};
 
   HikiotApiClient({String? token, http.Client? httpClient})
     : _token = token,
       _httpClient = httpClient ?? http.Client();
 
   void setToken(String token) {
+    if (_token != token) _invalidateReads();
     _token = token;
+  }
+
+  void _invalidateReads() {
+    _sessionGeneration++;
+    _dailyInFlight.clear();
   }
 
   Map<String, String> _getHeaders({bool useBearer = false}) {
@@ -61,6 +69,7 @@ class HikiotApiClient {
   }
 
   Future<bool> changeTeam(String teamNo) async {
+    _invalidateReads();
     final response = await _send(
       () => _httpClient.post(
         Uri.parse(ApiConstants.changeTeamUrl),
@@ -70,10 +79,12 @@ class HikiotApiClient {
     );
     final json = _decodeResponse(response);
     _readBusinessData(json, allowMissingData: true);
+    _invalidateReads();
     return true;
   }
 
   Future<bool> logout() async {
+    _invalidateReads();
     final response = await _send(
       () => _httpClient.post(
         Uri.parse(ApiConstants.logoutUrl),
@@ -90,12 +101,27 @@ class HikiotApiClient {
     String personNo,
   ) async {
     final url = '$dailyAttendanceUrl?date=$date&ID=myStatic';
-    final response = await _send(
-      () => _httpClient.get(
-        Uri.parse(url),
-        headers: _getHeaders(useBearer: true),
+    final generation = _sessionGeneration;
+    final key = (generation, date, personNo);
+    final request = _dailyInFlight.putIfAbsent(
+      key,
+      () => _send(
+        () => _httpClient.get(
+          Uri.parse(url),
+          headers: _getHeaders(useBearer: true),
+        ),
       ),
     );
+    final http.Response response;
+    try {
+      response = await request;
+    } finally {
+      if (identical(_dailyInFlight[key], request)) _dailyInFlight.remove(key);
+    }
+    if (generation != _sessionGeneration) {
+      throw const NetworkException('账号或团队已变化，请重新读取考勤');
+    }
+    // 只合并在途HTTP读取，各调用者独立解析，避免修改共享Map污染其他页面。
     final json = _decodeResponse(response);
     final data = _readBusinessData(json);
     if (data == null) return null;

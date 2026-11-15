@@ -58,9 +58,14 @@ void main() {
     await HapticUtils.setMode(HapticMode.off);
     api = _SyncApi();
     bossCalls = 0;
-    await StorageService().saveBossHours(
+    final storage = StorageService();
+    await storage.saveToken('test');
+    await storage.saveTeamContext(teamNo: 'team-sync', personNo: 'person-sync');
+    await storage.saveBossHours(
       DateHelper.formatMonth(DateTime.now()),
       {},
+      expectedAuthRevision: await storage.loadAuthRevision(),
+      expectedScope: await storage.loadBossCredentialScope(),
     );
   });
 
@@ -157,7 +162,13 @@ void main() {
 
   testWidgets('华天同步失败保留旧已填数据并结束忙碌，不提示整项同步完成', (tester) async {
     final day = '${DateHelper.formatMonth(DateTime.now())}-01';
-    await StorageService().saveBossHoursForDate(day, 10.2);
+    final storage = StorageService();
+    await storage.saveBossHoursForDate(
+      day,
+      10.2,
+      expectedAuthRevision: await storage.loadAuthRevision(),
+      expectedScope: await storage.loadBossCredentialScope(),
+    );
     await open(tester);
     await tester.tap(find.text('全量更新工时'));
     await tester.pump();

@@ -1,3 +1,5 @@
+import 'dart:convert';
+
 import '../utils/date_helper.dart';
 import '../utils/work_log_boss_hours.dart';
 import '../utils/work_log_request_capture.dart';
@@ -40,6 +42,7 @@ class BossHoursAutoRefreshService {
     BossDayLoader? loadDay,
     this.maxAge = const Duration(minutes: 15),
     this.failureBackoff = const Duration(minutes: 5),
+    this.passiveMaxAge = const Duration(seconds: 30),
     RefreshClock? now,
   }) : _storage = storage ?? StorageService(),
        _loadMonth =
@@ -59,162 +62,328 @@ class BossHoursAutoRefreshService {
   final StorageService _storage;
   final BossMonthResultLoader _loadMonth;
   final BossDayLoader _loadDay;
-  final Map<String, Future<BossSessionResult<double>>> _dayInFlight = {};
   final Duration maxAge;
   final Duration failureBackoff;
+  final Duration passiveMaxAge;
   final RefreshClock _now;
-  final Map<String, Future<BossHoursAutoRefreshResult>> _inFlight = {};
-  final Map<String, DateTime> _lastAttempt = {};
+  final _dayInFlight = <String, _DayQuery>{};
+  final _trailingDay = <String, Future<BossSessionResult<double>>>{};
+  final _inFlight = <String, _MonthQuery>{};
+  final _dayFailures = <String, _QueryFailure>{};
+  final _monthFailures = <String, _QueryFailure>{};
+
+  Future<_QueryIdentity?> _identity() async {
+    try {
+      final revision = await _storage.loadAuthRevision();
+      final scope = await _storage.loadBossCredentialScope();
+      if (revision != await _storage.loadAuthRevision()) return null;
+      return _QueryIdentity(revision, scope);
+    } catch (_) {
+      return null;
+    }
+  }
+
+  Future<bool> _isCurrent(_QueryIdentity identity) async =>
+      (await _identity())?.key == identity.key;
+
+  bool _backingOff(_QueryFailure? failure) {
+    if (failure == null) return false;
+    final age = _now().difference(failure.at);
+    return !age.isNegative && age < failureBackoff;
+  }
 
   Future<BossHoursAutoRefreshResult> refreshIfStale(
     DateTime month, {
     bool force = false,
-  }) {
-    final normalized = DateTime(month.year, month.month);
-    final monthKey = DateHelper.formatMonth(normalized);
-    final running = _inFlight[monthKey];
-    if (running != null) return running;
-
-    final future = _refresh(normalized, monthKey, force: force);
-    _inFlight[monthKey] = future;
-    future.whenComplete(() {
-      if (identical(_inFlight[monthKey], future)) _inFlight.remove(monthKey);
-    });
-    return future;
+  }) async {
+    final identity = await _identity();
+    if (identity == null) return _unavailable();
+    return _refreshMonthScoped(
+      identity,
+      DateTime(month.year, month.month),
+      force,
+    );
   }
 
-  Future<BossHoursAutoRefreshResult> _refresh(
+  Future<BossHoursAutoRefreshResult> _refreshMonthScoped(
+    _QueryIdentity identity,
     DateTime month,
+    bool force,
+  ) {
+    final monthKey = DateHelper.formatMonth(month);
+    final key = '${identity.key}/$monthKey';
+    final running = _inFlight[key];
+    if (running != null) {
+      if (!force) return running.future;
+      // 若前一轮只读了缓存/退避，force仍须真正查询；已在远端查询则合并。
+      return running.future.then(
+        (result) => running.networkStarted
+            ? result
+            : _refreshMonthScoped(identity, month, true),
+      );
+    }
+    final query = _MonthQuery();
+    query.future = _refreshMonth(identity, month, monthKey, key, force, query);
+    _inFlight[key] = query;
+    query.future.whenComplete(() {
+      if (identical(_inFlight[key], query)) _inFlight.remove(key);
+    });
+    return query.future;
+  }
+
+  BossHoursAutoRefreshResult _unavailable({
+    Map<String, double> hours = const {},
+    BossSessionStatus? reason,
+  }) => BossHoursAutoRefreshResult(
+    status: BossHoursAutoRefreshStatus.unavailable,
+    hours: hours,
+    failureReason: reason,
+  );
+
+  Future<BossMonthSnapshot> _snapshot(
+    _QueryIdentity identity,
     String monthKey, {
-    required bool force,
-  }) async {
+    Duration? age,
+  }) => _storage.loadBossMonthSnapshot(
+    monthKey,
+    now: _now(),
+    maxAge: age ?? maxAge,
+    expectedScope: identity.scope,
+  );
+
+  bool _complete(BossMonthSnapshot snapshot, DateTime month) =>
+      snapshot.isValid &&
+      snapshot.consistent &&
+      snapshot.revision == StorageService.bossHoursRevision &&
+      snapshot.confirmedDates.length ==
+          DateTime(month.year, month.month + 1, 0).day &&
+      snapshot.ownedDates.length ==
+          DateTime(month.year, month.month + 1, 0).day;
+
+  Future<BossHoursAutoRefreshResult> _refreshMonth(
+    _QueryIdentity identity,
+    DateTime month,
+    String monthKey,
+    String key,
+    bool force,
+    _MonthQuery query,
+  ) async {
     var cached = <String, double>{};
     try {
-      final now = _now();
-      final cachedRevision = StorageService.bossHoursRevision;
-      cached = await _storage.loadBossHours(monthKey);
+      var snapshot = await _snapshot(identity, monthKey);
+      cached = snapshot.hours;
+      if (!await _isCurrent(identity)) return _unavailable();
       if (!force) {
-        // 单日提交会撤销整月标记，但重新确认后逐日证明仍可能完整有效。
-        // 不依赖宽松解析后的空表或旧月份时间戳，逐日确认后才复用缓存。
-        if (await _hasFreshMonthProofs(month, monthKey, now) &&
-            cachedRevision == StorageService.bossHoursRevision) {
+        final failure = _monthFailures[key];
+        if (_backingOff(failure)) {
+          return _unavailable(hours: cached, reason: failure!.reason);
+        }
+        if (_complete(snapshot, month)) {
           return BossHoursAutoRefreshResult(
             status: BossHoursAutoRefreshStatus.fresh,
             hours: cached,
           );
         }
-        final lastAttempt = _lastAttempt[monthKey];
-        final attemptAge = lastAttempt == null
-            ? null
-            : now.difference(lastAttempt);
-        if (attemptAge != null &&
-            !attemptAge.isNegative &&
-            attemptAge < failureBackoff) {
-          return BossHoursAutoRefreshResult(
-            status: BossHoursAutoRefreshStatus.unavailable,
-            hours: cached,
+        // 旧调用方只更新一日时，仅重核少量所有权/证明孔洞，不再查询整月31日。
+        final days = DateTime(month.year, month.month + 1, 0).day;
+        final missing = <DateTime>[
+          for (var day = 1; day <= days; day++)
+            if (!snapshot.ownedDates.contains(
+                  '$monthKey-${day.toString().padLeft(2, '0')}',
+                ) ||
+                !snapshot.confirmedDates.contains(
+                  '$monthKey-${day.toString().padLeft(2, '0')}',
+                ))
+              DateTime(month.year, month.month, day),
+        ];
+        if (snapshot.isValid &&
+            snapshot.consistent &&
+            snapshot.ownedDates.isNotEmpty &&
+            missing.length <= 3) {
+          query.networkStarted = true;
+          await Future.wait(
+            missing.map((date) => _refreshDayScoped(identity, date, true)),
+          );
+          snapshot = await _snapshot(identity, monthKey);
+          if (!await _isCurrent(identity)) return _unavailable();
+          if (_complete(snapshot, month)) {
+            return BossHoursAutoRefreshResult(
+              status: BossHoursAutoRefreshStatus.updated,
+              hours: snapshot.hours,
+            );
+          }
+          _monthFailures[key] = _QueryFailure(_now(), BossSessionStatus.failed);
+          return _unavailable(
+            hours: snapshot.hours,
+            reason: BossSessionStatus.failed,
           );
         }
       }
-
-      _lastAttempt[monthKey] = now;
+      query.networkStarted = true;
       final revision = StorageService.bossHoursRevision;
       final result = await _loadMonth(month);
+      if (!await _isCurrent(identity)) return _unavailable();
       final loaded = result.value;
       if (!result.isOk || loaded == null) {
-        return BossHoursAutoRefreshResult(
-          status: BossHoursAutoRefreshStatus.unavailable,
-          hours: cached,
-          failureReason: result.status == BossSessionStatus.noSession
-              ? BossSessionStatus.noSession
-              : BossSessionStatus.failed,
-        );
+        final reason = result.status == BossSessionStatus.noSession
+            ? BossSessionStatus.noSession
+            : BossSessionStatus.failed;
+        _monthFailures[key] = _QueryFailure(_now(), reason);
+        return _unavailable(hours: cached, reason: reason);
       }
-
       await _storage.saveBossHours(
         monthKey,
         loaded,
-        refreshedAt: now,
+        refreshedAt: _now(),
         expectedRevision: revision,
+        expectedAuthRevision: identity.authRevision,
+        expectedScope: identity.scope,
       );
+      if (!await _isCurrent(identity)) return _unavailable();
+      _monthFailures.remove(key);
+      final current = await _snapshot(identity, monthKey);
       return BossHoursAutoRefreshResult(
         status: BossHoursAutoRefreshStatus.updated,
-        hours: await _storage.loadBossHours(monthKey),
+        hours: current.hours,
       );
     } catch (_) {
-      // 自动刷新不能把异常冒泡到全局，更不能清空已有缓存。
-      return BossHoursAutoRefreshResult(
-        status: BossHoursAutoRefreshStatus.unavailable,
-        hours: cached,
-      );
+      _monthFailures[key] = _QueryFailure(_now(), BossSessionStatus.failed);
+      return _unavailable(hours: cached, reason: BossSessionStatus.failed);
     }
   }
 
-  Future<bool> _hasFreshMonthProofs(
-    DateTime month,
-    String monthKey,
-    DateTime now,
-  ) async {
-    if (!await _storage.hasValidBossHoursCache(monthKey)) return false;
-    final days = DateTime(month.year, month.month + 1, 0).day;
-    for (var day = 1; day <= days; day++) {
-      final date = '$monthKey-${day.toString().padLeft(2, '0')}';
-      if (!await _storage.hasFreshBossHoursForDate(
-        date,
-        now: now,
-        maxAge: maxAge,
-      )) {
-        return false;
-      }
-    }
-    return true;
-  }
-
-  /// 打开日志或提交后查询指定日期。强制刷新等待旧查询结束，再启动新查询。
+  /// 被动页面读取可复用30秒内同身份的确认；force绕过缓存和失败退避。
+  /// 同轮force只保留一轮后续查询，不按点击次数串行排队。
   Future<BossSessionResult<double>> refreshDate(
     DateTime date, {
     bool force = false,
-  }) {
-    final normalized = DateTime(date.year, date.month, date.day);
-    final key = DateHelper.formatDate(normalized);
-    final running = _dayInFlight[key];
-    if (running != null) {
-      if (!force) return running;
-      return running.then((_) => refreshDate(normalized, force: true));
+  }) async {
+    final identity = await _identity();
+    if (identity == null) {
+      return const BossSessionResult(BossSessionStatus.failed);
     }
-    final future = _refreshDate(normalized, key);
-    _dayInFlight[key] = future;
-    future.whenComplete(() {
-      if (identical(_dayInFlight[key], future)) _dayInFlight.remove(key);
-    });
-    return future;
+    final normalized = DateTime(date.year, date.month, date.day);
+    final monthKey = '${identity.key}/${DateHelper.formatMonth(normalized)}';
+    final monthly = _inFlight[monthKey];
+    if (!force && monthly != null) {
+      final result = await monthly.future;
+      if (!await _isCurrent(identity)) {
+        return const BossSessionResult(BossSessionStatus.failed);
+      }
+      if (result.status == BossHoursAutoRefreshStatus.unavailable) {
+        return BossSessionResult(
+          result.failureReason ?? BossSessionStatus.failed,
+        );
+      }
+    }
+    return _refreshDayScoped(identity, normalized, force);
   }
 
-  Future<BossSessionResult<double>> _refreshDate(
+  Future<BossSessionResult<double>> _refreshDayScoped(
+    _QueryIdentity identity,
     DateTime date,
+    bool force,
+  ) {
+    final dateKey = DateHelper.formatDate(date);
+    final key = '${identity.key}/$dateKey';
+    final running = _dayInFlight[key];
+    if (running != null) {
+      if (!force ||
+          (running.forced &&
+              running.revision == StorageService.bossHoursRevision)) {
+        return running.future;
+      }
+      final queued = _trailingDay[key];
+      if (queued != null) return queued;
+      late final Future<BossSessionResult<double>> trailing;
+      trailing = running.future.then((_) {
+        if (identical(_trailingDay[key], trailing)) _trailingDay.remove(key);
+        return _refreshDayScoped(identity, date, true);
+      });
+      _trailingDay[key] = trailing;
+      return trailing;
+    }
+    final query = _DayQuery(force, StorageService.bossHoursRevision);
+    query.future = _refreshDay(identity, date, dateKey, key, force, query);
+    _dayInFlight[key] = query;
+    query.future.whenComplete(() {
+      if (identical(_dayInFlight[key], query)) _dayInFlight.remove(key);
+    });
+    return query.future;
+  }
+
+  Future<BossSessionResult<double>> _refreshDay(
+    _QueryIdentity identity,
+    DateTime date,
+    String dateKey,
     String key,
+    bool force,
+    _DayQuery query,
   ) async {
     try {
-      final revision = StorageService.bossHoursRevision;
-      final result = await _loadDay(date);
-      final hours = result.value;
-      if (!result.isOk) return result;
-      if (hours == null || !hours.isFinite || hours < 0) {
+      if (!await _isCurrent(identity)) {
         return const BossSessionResult(BossSessionStatus.failed);
+      }
+      if (!force) {
+        final failure = _dayFailures[key];
+        if (_backingOff(failure)) return BossSessionResult(failure!.reason);
+        final snapshot = await _snapshot(
+          identity,
+          dateKey.substring(0, 7),
+          age: passiveMaxAge,
+        );
+        if (!await _isCurrent(identity)) {
+          return const BossSessionResult(BossSessionStatus.failed);
+        }
+        if (snapshot.isValid &&
+            snapshot.consistent &&
+            snapshot.revision == StorageService.bossHoursRevision &&
+            snapshot.confirmedDates.contains(dateKey) &&
+            snapshot.ownedDates.contains(dateKey)) {
+          return BossSessionResult(
+            BossSessionStatus.ok,
+            snapshot.hours[dateKey] ?? 0,
+          );
+        }
+      }
+      query.revision = StorageService.bossHoursRevision;
+      final result = await _loadDay(date);
+      if (!await _isCurrent(identity)) {
+        return const BossSessionResult(BossSessionStatus.failed);
+      }
+      final hours = result.value;
+      if (!result.isOk || hours == null || !hours.isFinite || hours < 0) {
+        final reason = result.status == BossSessionStatus.noSession
+            ? BossSessionStatus.noSession
+            : BossSessionStatus.failed;
+        _dayFailures[key] = _QueryFailure(_now(), reason);
+        return BossSessionResult(reason);
       }
       await _storage.saveBossHoursForDate(
-        key,
+        dateKey,
         hours,
-        expectedRevision: revision,
+        refreshedAt: _now(),
+        expectedRevision: query.revision,
+        expectedAuthRevision: identity.authRevision,
+        expectedScope: identity.scope,
       );
-      // 若请求期间已更新该日，返回最终缓存，避免调用页面再展示陈旧回包。
-      // 若旧请求已失效且还没有新值，缺席键表示未知，不能凭空补成0。
-      if (!await _storage.hasBossHoursForDate(key)) {
+      if (!await _isCurrent(identity)) {
         return const BossSessionResult(BossSessionStatus.failed);
       }
-      final cached = await _storage.loadBossHours(key.substring(0, 7));
-      return BossSessionResult(BossSessionStatus.ok, cached[key] ?? 0);
+      final snapshot = await _snapshot(identity, dateKey.substring(0, 7));
+      if (!snapshot.isValid ||
+          !snapshot.consistent ||
+          !snapshot.knownDates.contains(dateKey)) {
+        return const BossSessionResult(BossSessionStatus.failed);
+      }
+      query.revision = snapshot.revision;
+      _dayFailures.remove(key);
+      return BossSessionResult(
+        BossSessionStatus.ok,
+        snapshot.hours[dateKey] ?? 0,
+      );
     } catch (_) {
+      _dayFailures[key] = _QueryFailure(_now(), BossSessionStatus.failed);
       return const BossSessionResult(BossSessionStatus.failed);
     }
   }
@@ -245,4 +414,29 @@ class BossHoursAutoRefreshService {
       hours,
     );
   });
+}
+
+class _QueryIdentity {
+  _QueryIdentity(this.authRevision, this.scope);
+  final int authRevision;
+  final String? scope;
+  String get key => jsonEncode([authRevision, scope]);
+}
+
+class _DayQuery {
+  _DayQuery(this.forced, this.revision);
+  final bool forced;
+  int revision;
+  late final Future<BossSessionResult<double>> future;
+}
+
+class _MonthQuery {
+  bool networkStarted = false;
+  late final Future<BossHoursAutoRefreshResult> future;
+}
+
+class _QueryFailure {
+  _QueryFailure(this.at, this.reason);
+  final DateTime at;
+  final BossSessionStatus reason;
 }

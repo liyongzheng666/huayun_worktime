@@ -14,6 +14,18 @@ import 'package:shared_preferences/shared_preferences.dart';
 
 final _reportedHours = find.byKey(const ValueKey('reported-boss-hours'));
 
+class _CountingWorkLogRepository extends WorkLogRepository {
+  _CountingWorkLogRepository({super.loadWorkHours});
+
+  int weekCalls = 0;
+
+  @override
+  Future<List<WorkLogDaySummary>> loadWeek(DateTime date) {
+    weekCalls++;
+    return super.loadWeek(date);
+  }
+}
+
 // 测试需检查监听是否真正移除，仅断言“不抛错”无法发现静默泄漏。
 bool get _hasBossListeners =>
     // ignore: invalid_use_of_protected_member
@@ -57,6 +69,11 @@ void main() {
 
   setUp(() async {
     SharedPreferences.setMockInitialValues({});
+    await StorageService().saveToken('test-token');
+    await StorageService().saveTeamContext(
+      teamNo: 'test-team',
+      personNo: 'test-person',
+    );
     await HapticUtils.setMode(HapticMode.off);
     today = DateHelper.getWorkDate();
     dateKey = DateHelper.formatDate(today);
@@ -71,7 +88,7 @@ void main() {
     var bossRequests = 0;
     final active = ValueNotifier(false);
     addTearDown(active.dispose);
-    final repository = WorkLogRepository(
+    final repository = _CountingWorkLogRepository(
       loadWorkHours: (_) async {
         workHoursRequests++;
         return const WorkLogHours(hours: 8);
@@ -100,11 +117,13 @@ void main() {
     await tester.pumpAndSettle();
     expect(workHoursRequests, 0);
     expect(bossRequests, 0);
+    expect(repository.weekCalls, 0);
 
     active.value = true;
     await tester.pumpAndSettle();
     expect(workHoursRequests, 0);
     expect(bossRequests, 0);
+    expect(repository.weekCalls, 0);
 
     await tester
         .state<WorkLogScreenState>(find.byType(WorkLogScreen))
@@ -131,6 +150,35 @@ void main() {
     expect(find.text('8.00'), findsOneWidget);
     expect(find.text('已填报 · 打开 BOSS 查看'), findsOneWidget);
     expect(find.text('提交 ${today.month}月${today.day}日 日志'), findsNothing);
+  });
+
+  testWidgets('BOSS 单日刷新成功仅通知周条重新读取一次', (tester) async {
+    final reply = Completer<BossSessionResult<double>>();
+    final repository = _CountingWorkLogRepository(
+      loadWorkHours: (_) async => const WorkLogHours(hours: 8),
+    );
+    await tester.binding.setSurfaceSize(const Size(900, 1300));
+    addTearDown(() => tester.binding.setSurfaceSize(null));
+    await tester.pumpWidget(
+      MaterialApp(
+        home: WorkLogScreen(
+          repository: repository,
+          bossAutoRefresh: BossHoursAutoRefreshService(
+            loadDay: (_) => reply.future,
+          ),
+        ),
+      ),
+    );
+    // 先让周条完成初次缓存读取，保留尚未完成的 BOSS 查询。
+    for (var i = 0; i < 8; i++) {
+      await tester.pump(const Duration(milliseconds: 10));
+    }
+    final initialWeekCalls = repository.weekCalls;
+    expect(initialWeekCalls, greaterThan(0));
+    reply.complete(const BossSessionResult(BossSessionStatus.ok, 6.5));
+    await tester.pumpAndSettle();
+    expect(repository.weekCalls, initialWeekCalls + 1);
+    expect(reportedText(tester), '6.50 小时');
   });
 
   testWidgets('其他页面更新单日缓存后立即复读，不再发起网络查询', (tester) async {

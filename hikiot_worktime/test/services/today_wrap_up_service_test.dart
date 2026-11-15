@@ -73,6 +73,8 @@ void main() {
   });
 
   test('默认共享刷新路径把今日查询结果同步给日志页缓存且不伪造全月确认', () async {
+    await storage.saveToken('test-token');
+    await storage.saveTeamContext(teamNo: 'test-team', personNo: 'test-person');
     final refresh = BossHoursAutoRefreshService(
       storage: storage,
       loadDay: (_) async => const BossSessionResult(BossSessionStatus.ok, 6.5),

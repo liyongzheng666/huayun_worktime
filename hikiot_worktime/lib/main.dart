@@ -102,7 +102,6 @@ class SplashScreen extends StatefulWidget {
 
 class _SplashScreenState extends State<SplashScreen>
     with TickerProviderStateMixin {
-  bool _disclaimerChecked = false;
   late AnimationController _fadeController;
   late AnimationController _pulseController;
   late Animation<double> _fadeAnimation;
@@ -138,9 +137,6 @@ class _SplashScreenState extends State<SplashScreen>
 
     WidgetsBinding.instance.addPostFrameCallback((_) {
       DisclaimerDialog.showIfNeeded(context, () {
-        setState(() {
-          _disclaimerChecked = true;
-        });
         _checkLoginStatus();
       });
     });
@@ -154,11 +150,7 @@ class _SplashScreenState extends State<SplashScreen>
   }
 
   Future<void> _checkLoginStatus() async {
-    // 延迟1秒显示启动画面（如果不是首次打开，已确认免责声明）
-    if (_disclaimerChecked) {
-      await Future.delayed(const Duration(seconds: 1));
-    }
-
+    // 本地状态准备好就进入工作台，不为启动动画额外阻塞一秒。
     final token = await StorageService().loadToken();
 
     // 根据Token判断跳转

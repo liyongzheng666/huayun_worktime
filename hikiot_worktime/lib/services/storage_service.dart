@@ -8,7 +8,33 @@ import '../utils/date_helper.dart';
 import '../utils/decimal_hours.dart';
 
 class _BossHoursChanges extends ChangeNotifier {
-  void changed() => notifyListeners();
+  String? lastMonth;
+
+  void changed(String month) {
+    lastMonth = month;
+    notifyListeners();
+  }
+}
+
+/// 一次读取的月度金额与确认证明，不在实例之间缓存结果。
+class BossMonthSnapshot {
+  const BossMonthSnapshot({
+    required this.hours,
+    required this.confirmedDates,
+    required this.knownDates,
+    required this.isValid,
+    required this.consistent,
+    required this.revision,
+    this.ownedDates = const {},
+  });
+
+  final Map<String, double> hours;
+  final Set<String> confirmedDates;
+  final Set<String> knownDates;
+  final bool isValid;
+  final bool consistent;
+  final int revision;
+  final Set<String> ownedDates;
 }
 
 class ReminderSettings {
@@ -193,8 +219,12 @@ class StorageService {
         prefs.getString(StorageKeys.userName) ??
         prefs.getString(_legacyCurrentUserName);
     if (userName != null && userName.isNotEmpty) {
-      await prefs.setString(StorageKeys.userName, userName);
-      await prefs.setString(_legacyCurrentUserName, userName);
+      await _migrateStringPair(
+        prefs,
+        StorageKeys.userName,
+        _legacyCurrentUserName,
+        userName,
+      );
     }
     return userName;
   }
@@ -241,8 +271,12 @@ class StorageService {
         prefs.getString(StorageKeys.teamNo) ??
         prefs.getString(_legacyCurrentTeamNo);
     if (teamNo != null && teamNo.isNotEmpty) {
-      await prefs.setString(StorageKeys.teamNo, teamNo);
-      await prefs.setString(_legacyCurrentTeamNo, teamNo);
+      await _migrateStringPair(
+        prefs,
+        StorageKeys.teamNo,
+        _legacyCurrentTeamNo,
+        teamNo,
+      );
     }
     return teamNo;
   }
@@ -253,10 +287,27 @@ class StorageService {
         prefs.getString(StorageKeys.teamName) ??
         prefs.getString(_legacyCurrentTeamName);
     if (teamName != null && teamName.isNotEmpty) {
-      await prefs.setString(StorageKeys.teamName, teamName);
-      await prefs.setString(_legacyCurrentTeamName, teamName);
+      await _migrateStringPair(
+        prefs,
+        StorageKeys.teamName,
+        _legacyCurrentTeamName,
+        teamName,
+      );
     }
     return teamName;
+  }
+
+  /// 旧键迁移只补差异；热路径读取不再次跨平台持久化相同内容。
+  Future<void> _migrateStringPair(
+    SharedPreferences prefs,
+    String key,
+    String legacyKey,
+    String value,
+  ) async {
+    if (prefs.getString(key) != value) await prefs.setString(key, value);
+    if (prefs.getString(legacyKey) != value) {
+      await prefs.setString(legacyKey, value);
+    }
   }
 
   Future<String?> loadPersonNo() async {
@@ -693,12 +744,151 @@ class StorageService {
   /// 工时或确认证明变化后通知；页面监听时只重新读取本地数据。
   static final _bossHoursChanges = _BossHoursChanges();
   static ChangeNotifier get bossHoursChanges => _bossHoursChanges;
+  static String? get bossHoursChangedMonth => _bossHoursChanges.lastMonth;
   static int _bossHoursRevision = 0;
   static final Map<String, int> _bossDayRevisions = {};
   static Future<void>? _bossWriteTail;
 
   /// 网络请求开始前捕获，回写时防止旧请求覆盖期间更新的日期。
   static int get bossHoursRevision => _bossHoursRevision;
+
+  static String _bossHoursOwnersKey(String month) => 'boss_hours_owners_$month';
+
+  Map<String, String> _readBossHoursOwners(
+    SharedPreferences prefs,
+    String month,
+  ) {
+    try {
+      final raw = prefs.getString(_bossHoursOwnersKey(month));
+      final decoded = jsonDecode(raw ?? '{}');
+      if (decoded is! Map) return {};
+      return {
+        for (final entry in decoded.entries)
+          if (entry.key is String && entry.value is String)
+            entry.key as String: entry.value as String,
+      };
+    } catch (_) {
+      return {};
+    }
+  }
+
+  /// 完整月份的每一天均由同一身份确认过时才返回owner。
+  Future<String?> loadBossHoursOwner(String monthKey) async {
+    final snapshot = await loadBossMonthSnapshot(monthKey);
+    if (!snapshot.isValid || !snapshot.consistent) return null;
+    final prefs = await SharedPreferences.getInstance();
+    final owners = _readBossHoursOwners(prefs, monthKey);
+    final month = DateTime.tryParse('$monthKey-01');
+    if (month == null) return null;
+    String? result;
+    for (
+      var day = 1;
+      day <= DateTime(month.year, month.month + 1, 0).day;
+      day++
+    ) {
+      final owner = owners['$monthKey-${day.toString().padLeft(2, '0')}'];
+      if (owner == null || (result != null && result != owner)) return null;
+      result = owner;
+    }
+    return snapshot.revision == _bossHoursRevision && _bossWriteTail == null
+        ? result
+        : null;
+  }
+
+  Future<({int revision, String? scope, bool trusted})?> _bossWriteIdentity(
+    String? expectedScope,
+    int? expectedAuthRevision,
+  ) async {
+    final revision = await loadAuthRevision();
+    final scope = await loadBossCredentialScope();
+    final expected = expectedScope != null || expectedAuthRevision != null;
+    if (expected &&
+        (scope != expectedScope ||
+            (expectedAuthRevision != null &&
+                revision != expectedAuthRevision))) {
+      return null;
+    }
+    return (
+      revision: revision,
+      scope: scope,
+      trusted: expectedScope != null && expectedAuthRevision != null,
+    );
+  }
+
+  Future<bool> _sameBossIdentity(
+    ({int revision, String? scope, bool trusted}) identity,
+  ) async =>
+      identity.revision == await loadAuthRevision() &&
+      identity.scope == await loadBossCredentialScope();
+
+  Future<void> _writeBossHoursOwners(
+    SharedPreferences prefs,
+    String month,
+    Iterable<String> dates,
+    String? scope,
+  ) async {
+    final owners = _readBossHoursOwners(prefs, month);
+    for (final date in dates) {
+      if (scope == null) {
+        owners.remove(date);
+      } else {
+        owners[date] = scope;
+      }
+    }
+    final key = _bossHoursOwnersKey(month);
+    if (owners.isEmpty) {
+      if (prefs.containsKey(key)) await prefs.remove(key);
+    } else {
+      final encoded = jsonEncode(owners);
+      if (prefs.getString(key) != encoded &&
+          !await prefs.setString(key, encoded)) {
+        throw StateError('工时所属账号保存失败');
+      }
+    }
+  }
+
+  Future<void> _invalidateBossMonthProofs(
+    SharedPreferences prefs,
+    String month,
+  ) async {
+    final date = DateTime.parse('$month-01');
+    for (
+      var day = 1;
+      day <= DateTime(date.year, date.month + 1, 0).day;
+      day++
+    ) {
+      await prefs.remove(
+        StorageKeys.bossHoursDateConfirmedAtKey(
+          '$month-${day.toString().padLeft(2, '0')}',
+        ),
+      );
+    }
+    await prefs.remove(StorageKeys.bossHoursRefreshedAtKey(month));
+    await prefs.remove(StorageKeys.bossHoursProofVersionKey(month));
+    await prefs.remove(_bossHoursOwnersKey(month));
+  }
+
+  /// owner只属于发起请求时已验证且直到写入结束仍一致的账号。
+  Future<void> _finishBossIdentityWrite(
+    SharedPreferences prefs,
+    String month,
+    Iterable<String> dates,
+    ({int revision, String? scope, bool trusted}) identity,
+  ) async {
+    if (!await _sameBossIdentity(identity)) {
+      await _invalidateBossMonthProofs(prefs, month);
+      return;
+    }
+    await _writeBossHoursOwners(
+      prefs,
+      month,
+      dates,
+      identity.trusted ? identity.scope : null,
+    );
+    if (!await _sameBossIdentity(identity)) {
+      await _invalidateBossMonthProofs(prefs, month);
+    }
+  }
 
   Future<String?> _monthReportScope() async {
     final team = await loadTeamNo();
@@ -761,7 +951,8 @@ class StorageService {
       await prefs.remove(
         StorageKeys.bossHoursRefreshedAtKey(date.substring(0, 7)),
       );
-      if (wasConfirmed) _bossHoursChanges.changed();
+      await _writeBossHoursOwners(prefs, date.substring(0, 7), [date], null);
+      if (wasConfirmed) _bossHoursChanges.changed(date.substring(0, 7));
     });
   }
 
@@ -771,6 +962,8 @@ class StorageService {
     double hours, {
     int? expectedRevision,
     DateTime? refreshedAt,
+    String? expectedScope,
+    int? expectedAuthRevision,
   }) {
     final parsed = DateTime.tryParse(date);
     if (parsed == null || !hours.isFinite || hours < 0) {
@@ -778,6 +971,11 @@ class StorageService {
     }
     final monthKey = date.substring(0, 7);
     return _queueBossWrite(() async {
+      final identity = await _bossWriteIdentity(
+        expectedScope,
+        expectedAuthRevision,
+      );
+      if (identity == null) return;
       if (expectedRevision != null &&
           (_bossDayRevisions[date] ?? 0) > expectedRevision) {
         return;
@@ -790,8 +988,9 @@ class StorageService {
         StorageKeys.bossHoursDateConfirmedAtKey(date),
         (refreshedAt ?? DateTime.now()).toIso8601String(),
       );
+      await _finishBossIdentityWrite(prefs, monthKey, [date], identity);
       _bossDayRevisions[date] = ++_bossHoursRevision;
-      _bossHoursChanges.changed();
+      _bossHoursChanges.changed(monthKey);
     });
   }
 
@@ -801,7 +1000,14 @@ class StorageService {
     Map<String, double> hours, {
     DateTime? refreshedAt,
     int? expectedRevision,
+    String? expectedScope,
+    int? expectedAuthRevision,
   }) => _queueBossWrite(() async {
+    final identity = await _bossWriteIdentity(
+      expectedScope,
+      expectedAuthRevision,
+    );
+    if (identity == null) return;
     final merged = Map<String, double>.from(hours);
     var completeMonth = true;
     final protectedDates = <String>{};
@@ -846,13 +1052,20 @@ class StorageService {
       await prefs.remove(StorageKeys.bossHoursRefreshedAtKey(monthKey));
       await prefs.remove(StorageKeys.bossHoursProofVersionKey(monthKey));
     }
+    await _finishBossIdentityWrite(prefs, monthKey, [
+      for (var day = 1; day <= days; day++)
+        if (!protectedDates.contains(
+          '$monthKey-${day.toString().padLeft(2, '0')}',
+        ))
+          '$monthKey-${day.toString().padLeft(2, '0')}',
+    ], identity);
     final revision = ++_bossHoursRevision;
     // 月份回包处理过的日期统一抬升版本，阻止更早的请求再次回写。
     for (var day = 1; day <= days; day++) {
       _bossDayRevisions['$monthKey-${day.toString().padLeft(2, '0')}'] =
           revision;
     }
-    _bossHoursChanges.changed();
+    _bossHoursChanges.changed(monthKey);
   });
 
   Future<void> _writeBossHours(
@@ -912,39 +1125,107 @@ class StorageService {
         await loadBossHoursRefreshedAt(monthKey) != null;
   }
 
-  /// 校验原始缓存，避免宽松读取器丢弃污染值后把它误当成已确认的0。
-  /// 空表合法，但仍须由调用者逐日检查确认时间，才能用于完整月份判断。
-  Future<bool> hasValidBossHoursCache(String monthKey) async {
-    if (!RegExp(r'^\d{4}-\d{2}$').hasMatch(monthKey)) return false;
+  /// 等待已排队的写入后，一次解析月度JSON并同步读取所有日期证明。
+  /// 不复用上次结果；提交前核对、跨日与15分钟失效仍读取当前数据。
+  Future<BossMonthSnapshot> loadBossMonthSnapshot(
+    String monthKey, {
+    DateTime? now,
+    Duration maxAge = const Duration(minutes: 15),
+    String? expectedScope,
+  }) async {
+    final pending = _bossWriteTail;
+    if (pending != null) await pending;
+    final revision = _bossHoursRevision;
+    final prefs = await SharedPreferences.getInstance();
+    final hours = _decodeValidBossHours(
+      monthKey,
+      prefs.getString(StorageKeys.bossHoursKey(monthKey)),
+    );
+    final knownDates = <String>{};
+    final confirmedDates = <String>{};
+    final ownedDates = <String>{};
+    final owners = expectedScope == null
+        ? const <String, String>{}
+        : _readBossHoursOwners(prefs, monthKey);
+    final month = DateTime.tryParse('$monthKey-01');
+    if (hours != null && month != null) {
+      final days = DateTime(month.year, month.month + 1, 0).day;
+      final moment = now ?? DateTime.now();
+      for (var day = 1; day <= days; day++) {
+        final date = '$monthKey-${day.toString().padLeft(2, '0')}';
+        final confirmedAt = DateTime.tryParse(
+          prefs.getString(StorageKeys.bossHoursDateConfirmedAtKey(date)) ?? '',
+        );
+        if (confirmedAt == null) continue;
+        knownDates.add(date);
+        if (expectedScope != null && owners[date] == expectedScope) {
+          ownedDates.add(date);
+        }
+        final age = moment.difference(confirmedAt);
+        if (!age.isNegative && age < maxAge) confirmedDates.add(date);
+      }
+    }
+    return BossMonthSnapshot(
+      hours: Map.unmodifiable(hours ?? const <String, double>{}),
+      confirmedDates: Set.unmodifiable(confirmedDates),
+      knownDates: Set.unmodifiable(knownDates),
+      isValid: hours != null,
+      consistent: revision == _bossHoursRevision && _bossWriteTail == null,
+      revision: revision,
+      ownedDates: Set.unmodifiable(ownedDates),
+    );
+  }
+
+  static Map<String, double>? _decodeValidBossHours(
+    String monthKey,
+    String? raw,
+  ) {
+    if (raw == null || !RegExp(r'^\d{4}-\d{2}$').hasMatch(monthKey)) {
+      return null;
+    }
     final month = DateTime.tryParse('$monthKey-01');
     if (month == null || DateHelper.formatMonth(month) != monthKey) {
-      return false;
+      return null;
     }
     try {
-      final prefs = await SharedPreferences.getInstance();
-      final raw = prefs.getString(StorageKeys.bossHoursKey(monthKey));
-      if (raw == null) return false;
       final decoded = jsonDecode(raw);
-      if (decoded is! Map) return false;
+      if (decoded is! Map) return null;
+      final result = <String, double>{};
       for (final entry in decoded.entries) {
         final key = entry.key;
         if (key is! String ||
             key.length != 10 ||
             !key.startsWith('$monthKey-')) {
-          return false;
+          return null;
         }
         final date = DateTime.tryParse(key);
-        if (date == null || DateHelper.formatDate(date) != key) return false;
+        if (date == null || DateHelper.formatDate(date) != key) return null;
         final value = entry.value;
         final parsed = value is String ? num.tryParse(value) : value;
         if (parsed is! num ||
             !parsed.isFinite ||
             parsed < 0 ||
             DecimalHours.tryHundredths(parsed) == null) {
-          return false;
+          return null;
         }
+        result[key] = parsed.toDouble();
       }
-      return true;
+      return result;
+    } catch (_) {
+      return null;
+    }
+  }
+
+  /// 校验原始缓存，避免宽松读取器丢弃污染值后把它误当成已确认的0。
+  /// 空表合法，但仍须由调用者逐日检查确认时间，才能用于完整月份判断。
+  Future<bool> hasValidBossHoursCache(String monthKey) async {
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      return _decodeValidBossHours(
+            monthKey,
+            prefs.getString(StorageKeys.bossHoursKey(monthKey)),
+          ) !=
+          null;
     } catch (_) {
       return false;
     }
@@ -1134,16 +1415,23 @@ class StorageService {
     SharedPreferences prefs,
     Map<String, dynamic> settings,
   ) async {
-    await prefs.setString(StorageKeys.settings, jsonEncode(settings));
-    await prefs.setString(
+    await _writeChangedPreference(
+      prefs,
+      StorageKeys.settings,
+      jsonEncode(settings),
+    );
+    await _writeChangedPreference(
+      prefs,
       StorageKeys.lunchStartTime,
       settings[StorageKeys.lunchStartTime] as String,
     );
-    await prefs.setString(
+    await _writeChangedPreference(
+      prefs,
       StorageKeys.lunchEndTime,
       settings[StorageKeys.lunchEndTime] as String,
     );
-    await prefs.setInt(
+    await _writeChangedPreference(
+      prefs,
       StorageKeys.crossDayMinutes,
       settings[StorageKeys.crossDayMinutes] as int,
     );
@@ -1219,23 +1507,73 @@ class StorageService {
       settings.eveningMinute,
     );
 
-    await prefs.setBool(
+    await _writeChangedPreference(
+      prefs,
       StorageKeys.morningReminderEnabled,
       settings.morningEnabled,
     );
-    await prefs.setString(StorageKeys.morningReminderTime, morningTime);
-    await prefs.setBool(
+    await _writeChangedPreference(
+      prefs,
+      StorageKeys.morningReminderTime,
+      morningTime,
+    );
+    await _writeChangedPreference(
+      prefs,
       StorageKeys.eveningReminderEnabled,
       settings.eveningEnabled,
     );
-    await prefs.setString(StorageKeys.eveningReminderTime, eveningTime);
+    await _writeChangedPreference(
+      prefs,
+      StorageKeys.eveningReminderTime,
+      eveningTime,
+    );
 
-    await prefs.setBool(_legacyMorningEnabled, settings.morningEnabled);
-    await prefs.setInt(_legacyMorningHour, settings.morningHour);
-    await prefs.setInt(_legacyMorningMinute, settings.morningMinute);
-    await prefs.setBool(_legacyEveningEnabled, settings.eveningEnabled);
-    await prefs.setInt(_legacyEveningHour, settings.eveningHour);
-    await prefs.setInt(_legacyEveningMinute, settings.eveningMinute);
+    await _writeChangedPreference(
+      prefs,
+      _legacyMorningEnabled,
+      settings.morningEnabled,
+    );
+    await _writeChangedPreference(
+      prefs,
+      _legacyMorningHour,
+      settings.morningHour,
+    );
+    await _writeChangedPreference(
+      prefs,
+      _legacyMorningMinute,
+      settings.morningMinute,
+    );
+    await _writeChangedPreference(
+      prefs,
+      _legacyEveningEnabled,
+      settings.eveningEnabled,
+    );
+    await _writeChangedPreference(
+      prefs,
+      _legacyEveningHour,
+      settings.eveningHour,
+    );
+    await _writeChangedPreference(
+      prefs,
+      _legacyEveningMinute,
+      settings.eveningMinute,
+    );
+  }
+
+  /// 首次规范化仍持久化缺失项，随后读取只写变化字段。
+  Future<void> _writeChangedPreference(
+    SharedPreferences prefs,
+    String key,
+    Object value,
+  ) async {
+    if (prefs.get(key) == value) return;
+    if (value is String) {
+      await prefs.setString(key, value);
+    } else if (value is int) {
+      await prefs.setInt(key, value);
+    } else if (value is bool) {
+      await prefs.setBool(key, value);
+    }
   }
 
   String _formatReminderTime(int hour, int minute) {

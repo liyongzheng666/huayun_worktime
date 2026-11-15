@@ -232,10 +232,13 @@ void main() {
     service.respond = () => calls++ == 0 ? first.future : second.future;
     await open(tester);
     final refresh = key.currentState!.refresh();
+    expect(calls, 1);
+    first.complete(snapshot());
+    await tester.pumpAndSettle();
+    expect(calls, 2);
+    expect(find.textContaining('0.06 小时尾差'), findsNothing);
     second.complete(snapshot(unavailableReason: '最新状态待同步'));
     await refresh;
-    await tester.pumpAndSettle();
-    first.complete(snapshot());
     await tester.pumpAndSettle();
     expect(find.text('最新状态待同步'), findsOneWidget);
     expect(find.textContaining('0.06 小时尾差'), findsNothing);

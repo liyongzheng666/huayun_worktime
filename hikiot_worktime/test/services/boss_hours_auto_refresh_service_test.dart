@@ -12,21 +12,23 @@ class _ChangingProofStorage extends StorageService {
   bool changed = false;
 
   @override
-  Future<bool> hasFreshBossHoursForDate(
-    String date, {
+  Future<BossMonthSnapshot> loadBossMonthSnapshot(
+    String monthKey, {
     DateTime? now,
     Duration maxAge = const Duration(minutes: 15),
+    String? expectedScope,
   }) async {
-    final fresh = await super.hasFreshBossHoursForDate(
-      date,
+    final snapshot = await super.loadBossMonthSnapshot(
+      monthKey,
       now: now,
       maxAge: maxAge,
+      expectedScope: expectedScope,
     );
     if (!changed) {
       changed = true;
       await saveBossHoursForDate('2026-09-03', 9, refreshedAt: now);
     }
-    return fresh;
+    return snapshot;
   }
 }
 
@@ -35,11 +37,16 @@ void main() {
     SharedPreferences.setMockInitialValues({});
     final storage = StorageService();
     final gate = Completer<BossSessionResult<double>>();
+    final started = Completer<void>();
     final service = BossHoursAutoRefreshService(
       storage: storage,
-      loadDay: (_) => gate.future,
+      loadDay: (_) {
+        started.complete();
+        return gate.future;
+      },
     );
     final pending = service.refreshDate(DateTime(2026, 9, 12));
+    await started.future;
     await storage.markBossHoursDateChanged('2026-09-12');
     gate.complete(const BossSessionResult(BossSessionStatus.ok, 0));
     expect((await pending).status, BossSessionStatus.failed);
@@ -48,8 +55,11 @@ void main() {
   final now = DateTime(2026, 9, 4, 9);
   final month = DateTime(2026, 9);
 
-  setUp(() {
+  setUp(() async {
     SharedPreferences.setMockInitialValues({});
+    final storage = StorageService();
+    await storage.saveToken('test-token');
+    await storage.saveTeamContext(teamNo: 'test-team', personNo: 'test-person');
   });
 
   test('整月会话不可用保留noSession原因，允许月度入口引导登录且不覆盖旧值', () async {
@@ -74,6 +84,11 @@ void main() {
       StorageKeys.bossHoursKey('2026-09'): jsonEncode({}),
       StorageKeys.bossHoursRefreshedAtKey('2026-09'): now.toIso8601String(),
     });
+    await StorageService().saveToken('test-token');
+    await StorageService().saveTeamContext(
+      teamNo: 'test-team',
+      personNo: 'test-person',
+    );
     var loadCount = 0;
     final storage = StorageService();
     final service = BossHoursAutoRefreshService(
@@ -97,9 +112,13 @@ void main() {
 
   test('15 分钟内的缓存直接使用，不启动隐藏 WebView', () async {
     final storage = StorageService();
-    await storage.saveBossHours('2026-09', {
-      '2026-09-03': 8,
-    }, refreshedAt: now.subtract(const Duration(minutes: 5)));
+    await storage.saveBossHours(
+      '2026-09',
+      {'2026-09-03': 8},
+      refreshedAt: now.subtract(const Duration(minutes: 5)),
+      expectedAuthRevision: await storage.loadAuthRevision(),
+      expectedScope: await storage.loadBossCredentialScope(),
+    );
     var loadCount = 0;
     final service = BossHoursAutoRefreshService(
       storage: storage,
@@ -120,11 +139,21 @@ void main() {
   test('完整31日证明仍新鲜时，单日变更并确认后不重新查询整月', () async {
     final storage = StorageService();
     final moment = DateTime(2026, 10, 31, 18);
-    await storage.saveBossHours('2026-10', {
-      '2026-10-01': 10.2,
-    }, refreshedAt: moment.subtract(const Duration(minutes: 5)));
+    await storage.saveBossHours(
+      '2026-10',
+      {'2026-10-01': 10.2},
+      refreshedAt: moment.subtract(const Duration(minutes: 5)),
+      expectedAuthRevision: await storage.loadAuthRevision(),
+      expectedScope: await storage.loadBossCredentialScope(),
+    );
     await storage.markBossHoursDateChanged('2026-10-31');
-    await storage.saveBossHoursForDate('2026-10-31', 8, refreshedAt: moment);
+    await storage.saveBossHoursForDate(
+      '2026-10-31',
+      8,
+      refreshedAt: moment,
+      expectedAuthRevision: await storage.loadAuthRevision(),
+      expectedScope: await storage.loadBossCredentialScope(),
+    );
     expect(await storage.hasBossHoursSynced('2026-10'), isFalse);
     var loadCount = 0;
     final service = BossHoursAutoRefreshService(
@@ -321,7 +350,6 @@ void main() {
 
     final first = service.refreshIfStale(month);
     final second = service.refreshIfStale(DateTime(2026, 9, 20));
-    expect(identical(first, second), isTrue);
     gate.complete({'2026-09-03': 8});
 
     await Future.wait([first, second]);
@@ -349,9 +377,11 @@ void main() {
   test('单日并发合并，强制刷新等待旧的 0 回包再查询提交后的新值', () async {
     final old = Completer<BossSessionResult<double>>();
     var count = 0;
+    final started = Completer<void>();
     final service = BossHoursAutoRefreshService(
       loadDay: (_) {
         count++;
+        if (count == 1) started.complete();
         return count == 1
             ? old.future
             : Future.value(const BossSessionResult(BossSessionStatus.ok, 8));
@@ -359,11 +389,13 @@ void main() {
     );
     final date = DateTime(2026, 9, 12);
     final first = service.refreshDate(date);
-    expect(identical(first, service.refreshDate(date)), isTrue);
+    await started.future;
+    final shared = service.refreshDate(date);
     final forced = service.refreshDate(date, force: true);
     expect(count, 1);
     old.complete(const BossSessionResult(BossSessionStatus.ok, 0));
     expect((await first).value, 0);
+    expect((await shared).value, 0);
     expect((await forced).value, 8);
     expect(count, 2);
     expect((await StorageService().loadBossHours('2026-09'))['2026-09-12'], 8);
@@ -371,12 +403,17 @@ void main() {
 
   test('单日旧回包不会覆盖期间提交，返回最终缓存值', () async {
     final pending = Completer<BossSessionResult<double>>();
+    final started = Completer<void>();
     final storage = StorageService();
     final service = BossHoursAutoRefreshService(
       storage: storage,
-      loadDay: (_) => pending.future,
+      loadDay: (_) {
+        started.complete();
+        return pending.future;
+      },
     );
     final request = service.refreshDate(DateTime(2026, 9, 12));
+    await started.future;
     await storage.saveBossHoursForDate('2026-09-12', 8);
     pending.complete(const BossSessionResult(BossSessionStatus.ok, 0));
     expect((await request).value, 8);

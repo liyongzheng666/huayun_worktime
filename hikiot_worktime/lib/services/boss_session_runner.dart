@@ -279,6 +279,7 @@ class BossSessionRunner {
   }) async {
     try {
       var deadline = DateTime.now().add(timeout);
+      final polling = Stopwatch()..start();
       var started = false;
       var phase = 'pageLoading';
       while (DateTime.now().isBefore(deadline)) {
@@ -336,6 +337,7 @@ class BossSessionRunner {
                 started = true;
                 phase = 'authenticating';
                 deadline = DateTime.now().add(timeout);
+                polling.reset();
               }
             }
           } on TimeoutException {
@@ -344,7 +346,7 @@ class BossSessionRunner {
             /* 导航时可暂不可用，不打印含密码的源码异常。 */
           }
         }
-        await Future.delayed(const Duration(milliseconds: 500));
+        await _waitForNextProbe(deadline, polling.elapsed);
       }
       return BossLoginResult(
         ok: false,
@@ -403,6 +405,7 @@ class BossSessionRunner {
     String? expectedUserName,
   }) async {
     final deadline = DateTime.now().add(timeout);
+    final polling = Stopwatch()..start();
     while (DateTime.now().isBefore(deadline)) {
       final controller = headless.webViewController;
       if (controller != null) {
@@ -429,9 +432,22 @@ class BossSessionRunner {
           /* 页面加载期间继续等待。 */
         }
       }
-      await Future.delayed(const Duration(milliseconds: 500));
+      await _waitForNextProbe(deadline, polling.elapsed);
     }
     return const _BossSessionProbe();
+  }
+
+  /// 首秒快速观察网页异步就绪，之后退避；只改变观察间隔，不重放业务操作。
+  static Future<void> _waitForNextProbe(
+    DateTime deadline,
+    Duration elapsed,
+  ) async {
+    final remaining = deadline.difference(DateTime.now());
+    if (remaining <= Duration.zero) return;
+    final interval = elapsed < const Duration(seconds: 1)
+        ? const Duration(milliseconds: 100)
+        : const Duration(milliseconds: 500);
+    await Future<void>.delayed(remaining < interval ? remaining : interval);
   }
 }
 

@@ -1,5 +1,6 @@
 import 'dart:async';
 
+import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:intl/intl.dart';
@@ -82,6 +83,7 @@ class MonthlyCalendarScreenState extends State<MonthlyCalendarScreen> {
   Map<String, double> get _bossHours => _bossHoursState.value;
   Set<String> _confirmedBossDates = {};
   int _bossReadSeq = 0;
+  String? _bossDisplayMonth;
 
   // 是否包含今日工时数据（适用于第二天上班只打了上班卡想看之前数据的情况）
   bool _includeTodayData = true;
@@ -94,6 +96,7 @@ class MonthlyCalendarScreenState extends State<MonthlyCalendarScreen> {
 
   /// 目标进度列表的起点，可在设置里调整
   int _minTarget = AppConstants.defaultMinTarget;
+  bool _startupForceMonthRefresh = false;
 
   @override
   void initState() {
@@ -119,7 +122,20 @@ class MonthlyCalendarScreenState extends State<MonthlyCalendarScreen> {
     }
   }
 
-  Future<void> initializeUserContext() => _initializeUser();
+  /// 主框架先建立身份，再独立加载今日与月度，避免今日等整月请求。
+  Future<void> initializeUserContext() => _initializeUser(loadMonth: false);
+
+  /// 月度数据来自 API 时已经刷新；缓存来源才补一次智能更新。
+  Future<void> refreshStartupMonth() async {
+    if (!mounted || !_isUserContextReady) return;
+    final source = await _loadMonthlyData(
+      forceRefresh: _startupForceMonthRefresh,
+      refreshCached: false,
+    );
+    _startupForceMonthRefresh = false;
+    if (!mounted || !_isUserContextReady || source == null) return;
+    if (source != MonthlyAttendanceLoadSource.api) await smartUpdate();
+  }
 
   /// 初始化可能已展示错误而正常返回，不能据 Future 完成推断登录有效。
   bool get isUserContextReady => _isUserContextReady;
@@ -132,30 +148,45 @@ class MonthlyCalendarScreenState extends State<MonthlyCalendarScreen> {
   }
 
   // 日报写入后只复读缓存，不让每个页面另发一次整月查询。
-  void _onBossHoursChanged() => unawaited(_readBossHoursCache());
+  void _onBossHoursChanged() {
+    if (!widget.isActive) return;
+    final changedMonth = StorageService.bossHoursChangedMonth;
+    if (changedMonth != null &&
+        changedMonth != DateHelper.formatMonth(_selectedMonth)) {
+      return;
+    }
+    unawaited(_readBossHoursCache());
+  }
 
   Future<void> _readBossHoursCache() async {
     final seq = ++_bossReadSeq;
     final monthKey = DateHelper.formatMonth(_selectedMonth);
-    try {
-      final hours = await _storage.loadBossHours(monthKey);
-      final confirmedDates = <String>{};
-      final month = DateTime.parse('$monthKey-01');
-      final days = DateTime(month.year, month.month + 1, 0).day;
-      for (var day = 1; day <= days; day++) {
-        final date = '$monthKey-${day.toString().padLeft(2, '0')}';
-        if (await _storage.hasFreshBossHoursForDate(date)) {
-          confirmedDates.add(date);
-        }
+    if (_bossDisplayMonth != monthKey) {
+      _bossDisplayMonth = monthKey;
+      // 切月时旧月份的值不能留在新月份；同月读取失败才保留旧显示。
+      if (_bossHoursState.value.isNotEmpty || _confirmedBossDates.isNotEmpty) {
+        setState(() {
+          _confirmedBossDates = {};
+          _bossHoursState.value = {};
+        });
       }
+    }
+    try {
+      final snapshot = await _storage.loadBossMonthSnapshot(monthKey);
       if (!mounted ||
+          !snapshot.consistent ||
+          !snapshot.isValid ||
           seq != _bossReadSeq ||
           monthKey != DateHelper.formatMonth(_selectedMonth)) {
         return;
       }
+      if (mapEquals(_bossHoursState.value, snapshot.hours) &&
+          setEquals(_confirmedBossDates, snapshot.confirmedDates)) {
+        return;
+      }
       setState(() {
-        _confirmedBossDates = confirmedDates;
-        _bossHoursState.value = hours;
+        _confirmedBossDates = snapshot.confirmedDates;
+        _bossHoursState.value = snapshot.hours;
       });
     } catch (_) {
       // 读取失败保留已有显示，不用空表冒充新的填报结果。
@@ -185,7 +216,7 @@ class MonthlyCalendarScreenState extends State<MonthlyCalendarScreen> {
   }
 
   /// 初始化用户信息
-  Future<void> _initializeUser() async {
+  Future<void> _initializeUser({bool loadMonth = true}) async {
     if (!mounted) return;
     setState(() {
       _isUserContextReady = false;
@@ -209,9 +240,14 @@ class MonthlyCalendarScreenState extends State<MonthlyCalendarScreen> {
       }
 
       _isUserContextReady = true;
+      _startupForceMonthRefresh = teamContext.teamChanged;
 
       // 加载月度数据（只有切换团队时才强制刷新，否则用缓存秒开）
-      await _loadMonthlyData(forceRefresh: teamContext.teamChanged);
+      if (loadMonth) {
+        await _loadMonthlyData(forceRefresh: teamContext.teamChanged);
+      } else {
+        setState(() => _isLoading = false);
+      }
     } catch (e) {
       if (!mounted) return;
       _isUserContextReady = false;
@@ -339,8 +375,11 @@ class MonthlyCalendarScreenState extends State<MonthlyCalendarScreen> {
   }
 
   /// 加载月度数据 (forceRefresh=true时强制刷新)
-  Future<void> _loadMonthlyData({bool forceRefresh = false}) async {
-    if (_personNo == null || _teamNo == null) return;
+  Future<MonthlyAttendanceLoadSource?> _loadMonthlyData({
+    bool forceRefresh = false,
+    bool refreshCached = true,
+  }) async {
+    if (_personNo == null || _teamNo == null) return null;
 
     final monthStr = DateFormat('yyyy-MM').format(_selectedMonth);
 
@@ -351,7 +390,7 @@ class MonthlyCalendarScreenState extends State<MonthlyCalendarScreen> {
 
     // 先用本地缓存秒开；过期刷新在下面静默启动，读不到不影响主流程。
     await _readBossHoursCache();
-    if (!mounted) return;
+    if (!mounted) return null;
     unawaited(refreshBossHoursSilently(month: _selectedMonth));
 
     try {
@@ -361,6 +400,7 @@ class MonthlyCalendarScreenState extends State<MonthlyCalendarScreen> {
         selectedMonth: _selectedMonth,
         forceRefresh: forceRefresh,
       );
+      if (!mounted) return null;
 
       setState(() {
         _monthlyData = result.monthlyData;
@@ -371,7 +411,8 @@ class MonthlyCalendarScreenState extends State<MonthlyCalendarScreen> {
         _isLoading = false;
       });
 
-      if (result.source == MonthlyAttendanceLoadSource.persistentCache) {
+      if (refreshCached &&
+          result.source == MonthlyAttendanceLoadSource.persistentCache) {
         final updateTeamNo = _teamNo!;
         final updatePersonNo = _personNo!;
         _monthlyRepository
@@ -401,8 +442,9 @@ class MonthlyCalendarScreenState extends State<MonthlyCalendarScreen> {
               });
             });
       }
+      return result.source;
     } catch (e) {
-      if (!mounted) return;
+      if (!mounted) return null;
       setState(() {
         if (TokenExpiredService.isTokenExpiredError(e)) {
           _isUserContextReady = false;
@@ -410,6 +452,7 @@ class MonthlyCalendarScreenState extends State<MonthlyCalendarScreen> {
         _error = '加载数据失败: $e';
         _isLoading = false;
       });
+      return null;
     }
   }
 

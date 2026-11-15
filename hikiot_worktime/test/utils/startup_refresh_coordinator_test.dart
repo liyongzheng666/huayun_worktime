@@ -1,8 +1,31 @@
+import 'dart:async';
+
 import 'package:flutter_test/flutter_test.dart';
 import 'package:hikiot_worktime/utils/startup_refresh_coordinator.dart';
 
 void main() {
   group('StartupRefreshCoordinator', () {
+    test('身份就绪后两页并发，月度无需等待每日网络完成', () async {
+      final dailyDone = Completer<void>();
+      final events = <String>[];
+      final startup = StartupRefreshCoordinator.run(
+        initializeSession: () async => events.add('identity'),
+        refreshDaily: () async {
+          events.add('daily-start');
+          await dailyDone.future;
+          events.add('daily-end');
+        },
+        refreshMonthly: () async => events.add('monthly'),
+        isMounted: () => true,
+        isSessionReady: () => true,
+      );
+      await Future<void>.delayed(Duration.zero);
+      expect(events, ['identity', 'daily-start', 'monthly']);
+      dailyDone.complete();
+      await startup;
+      expect(events.last, 'daily-end');
+    });
+
     test('已处理过期提示但会话未就绪时，不再继续刷新并重复弹窗', () async {
       final events = <String>[];
 

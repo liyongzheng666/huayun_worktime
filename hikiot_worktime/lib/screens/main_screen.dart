@@ -43,6 +43,8 @@ class _MainScreenState extends State<MainScreen> with WidgetsBindingObserver {
   bool _startupReady = false;
   bool _startupRefreshing = true;
   final AppUpdateService _appUpdateService = AppUpdateService();
+  late final HikiotApiClient _apiClient;
+  late final DailyAttendanceRepository _dailyRepository;
 
   final GlobalKey<MonthlyCalendarScreenState> _monthlyKey = GlobalKey();
   final GlobalKey<DailyHoursScreenState> _dailyKey = GlobalKey();
@@ -52,6 +54,19 @@ class _MainScreenState extends State<MainScreen> with WidgetsBindingObserver {
   @override
   void initState() {
     super.initState();
+    final sessionToken = widget.token;
+    _apiClient = widget.apiClient ?? HikiotApiClient(token: sessionToken);
+    _dailyRepository =
+        widget.dailyRepository ??
+        DailyAttendanceRepository(
+          loadDailyAttendance: (token, date, personNo) {
+            // 每日与月度共享当前会话的在途请求；其它身份不复用此 client。
+            final api = token == sessionToken
+                ? _apiClient
+                : HikiotApiClient(token: token);
+            return api.getDailyAttendance(date, personNo);
+          },
+        );
     WidgetsBinding.instance.addObserver(this);
     // 应用启动时自动刷新数据
     WidgetsBinding.instance.addPostFrameCallback((_) {
@@ -111,10 +126,15 @@ class _MainScreenState extends State<MainScreen> with WidgetsBindingObserver {
         },
         refreshDaily: () async {
           await _dailyKey.currentState?.refreshData();
-          if (mounted) setState(() => _startupReady = true);
+          if (mounted) {
+            setState(() {
+              _startupReady =
+                  _monthlyKey.currentState?.isUserContextReady ?? false;
+            });
+          }
         },
         refreshMonthly: () async {
-          await _monthlyKey.currentState?.smartUpdate();
+          await _monthlyKey.currentState?.refreshStartupMonth();
         },
         isMounted: () => mounted,
         isSessionReady: () =>
@@ -122,6 +142,7 @@ class _MainScreenState extends State<MainScreen> with WidgetsBindingObserver {
       );
       if (!mounted) return;
       if (!(_monthlyKey.currentState?.isUserContextReady ?? false)) {
+        setState(() => _startupReady = false);
         // 首次资料加载失败时展示已有错误和重试入口，避免留在空白首页。
         if (_currentIndex == 0 && ModalRoute.of(context)?.isCurrent == true) {
           setState(() => _currentIndex = 1);
@@ -136,7 +157,9 @@ class _MainScreenState extends State<MainScreen> with WidgetsBindingObserver {
   }
 
   Future<void> _onTabTap(int index) async {
-    if (index != _currentIndex && PlatformCapabilities.supportsTodayWrapUp) {
+    // 当前页已有独立的下拉刷新入口；重复选中导航无需重新加载所有数据。
+    if (index == _currentIndex) return;
+    if (PlatformCapabilities.supportsTodayWrapUp) {
       unawaited(HapticUtils.selectionClick());
     }
     setState(() {
@@ -147,12 +170,13 @@ class _MainScreenState extends State<MainScreen> with WidgetsBindingObserver {
     });
 
     // 切换到每日页面时,刷新数据（包括从月度页面修改的手动标记）
-    if (index == 0 && _dailyKey.currentState != null) {
+    // 启动流程负责首次加载，导航只负责后续回到首页时同步修改。
+    if (index == 0 && !_startupRefreshing && _dailyKey.currentState != null) {
       _dailyKey.currentState!.refreshData();
     }
 
     // 切换到每月页面时,从存储刷新数据（包括从每日页面修改的手动标记）
-    if (index == 1 && _monthlyKey.currentState != null) {
+    if (index == 1 && !_startupRefreshing && _monthlyKey.currentState != null) {
       final selectedDate = _dailyKey.currentState?.selectedDate;
       await _monthlyKey.currentState!.refreshFromStorage();
       if (selectedDate != null) {
@@ -203,7 +227,7 @@ class _MainScreenState extends State<MainScreen> with WidgetsBindingObserver {
                 child: DailyHoursScreen(
                   key: _dailyKey,
                   autoLoad: false,
-                  dailyRepository: widget.dailyRepository,
+                  dailyRepository: _dailyRepository,
                   isActive: _currentIndex == 0 && _startupReady,
                   onWrapUpAction: _openWrapUpTask,
                 ),
@@ -215,7 +239,7 @@ class _MainScreenState extends State<MainScreen> with WidgetsBindingObserver {
                   isActive: _currentIndex == 1,
                   token: widget.token,
                   autoInitialize: false,
-                  apiClient: widget.apiClient,
+                  apiClient: _apiClient,
                 ),
               ),
               TickerMode(

@@ -70,6 +70,7 @@ class WorkLogScreenState extends State<WorkLogScreen> {
   String? _sourceName;
   DateTime? _importedAt;
   int _totalCount = 0;
+  bool _hasStartedLoading = false;
   bool _loading = true;
 
   /// App 创建成功后记住的 BOSS 记录 ID；有它才能保证编辑的是原记录。
@@ -196,7 +197,7 @@ class WorkLogScreenState extends State<WorkLogScreen> {
         return;
       }
       await _readReportedHours();
-      _weekStripKey.currentState?.refresh();
+      // 成功写入已通过 bossHoursChanges 通知周条；此处再刷新会重复读整周。
     } catch (_) {
       available = false;
     } finally {
@@ -213,7 +214,10 @@ class WorkLogScreenState extends State<WorkLogScreen> {
 
   Future<void> _reload({bool forceBoss = false, bool queryBoss = true}) async {
     final seq = ++_loadSeq;
-    setState(() => _loading = true);
+    setState(() {
+      _hasStartedLoading = true;
+      _loading = true;
+    });
 
     // 固定本次要加载的日期：等待期间用户可能又翻了一页
     final date = _selectedDate;
@@ -826,7 +830,10 @@ class WorkLogScreenState extends State<WorkLogScreen> {
           ),
         ],
       ),
-      body: _loading
+      // 未访问的隐藏页不构建周条，避免它在 initState 中读取整周缓存。
+      body: !_hasStartedLoading
+          ? const SizedBox.shrink()
+          : _loading
           ? const Center(child: CircularProgressIndicator())
           : RefreshIndicator(
               onRefresh: _reload,

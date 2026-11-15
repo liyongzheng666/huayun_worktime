@@ -13,6 +13,7 @@ class _StartupApi extends HikiotApiClient {
   Object? monthError;
   String? personNo = 'person-1';
   int monthCalls = 0;
+  int dailyCalls = 0;
 
   @override
   Future<Map<String, dynamic>?> getAccountDetail() async {
@@ -42,7 +43,10 @@ class _StartupApi extends HikiotApiClient {
   Future<Map<String, dynamic>?> getDailyAttendance(
     String date,
     String personNo,
-  ) async => null;
+  ) async {
+    dailyCalls++;
+    return null;
+  }
 }
 
 void main() {
@@ -61,7 +65,7 @@ void main() {
     );
   });
 
-  Future<void> open(WidgetTester tester) async {
+  Future<void> open(WidgetTester tester, {bool autoInitialize = false}) async {
     await tester.binding.setSurfaceSize(const Size(900, 1300));
     addTearDown(() => tester.binding.setSurfaceSize(null));
     await tester.pumpWidget(
@@ -69,7 +73,7 @@ void main() {
         home: MonthlyCalendarScreen(
           key: key,
           token: 'test-token',
-          autoInitialize: false,
+          autoInitialize: autoInitialize,
           apiClient: api,
         ),
       ),
@@ -77,7 +81,29 @@ void main() {
     await tester.pump();
   }
 
-  testWidgets('账户与员工信息完整后标记启动就绪', (tester) async {
+  testWidgets('主框架启动使用月缓存时只进行一次智能日查询', (tester) async {
+    final storage = StorageService();
+    final now = DateTime.now();
+    final month = DateHelper.formatMonth(now);
+    await storage.saveSelectedTeam('team-1');
+    await storage.saveMonthlyData('team-1', month, {
+      DateHelper.formatDate(now): {'type': '工作日', 'hours': 8.0},
+    });
+    await storage.saveMonthlyHoursCalculationVersion('team-1', month);
+    await open(tester);
+    final startup = StartupRefreshCoordinator.run(
+      initializeSession: key.currentState!.initializeUserContext,
+      refreshDaily: () async {},
+      refreshMonthly: key.currentState!.refreshStartupMonth,
+      isMounted: () => true,
+    );
+    await tester.pumpAndSettle();
+    await startup;
+    expect(api.monthCalls, 0);
+    expect(api.dailyCalls, 1);
+  });
+
+  testWidgets('身份初始化不请求月度数据，首次API月刷新不追加智能日查询', (tester) async {
     await open(tester);
     expect(key.currentState!.isUserContextReady, isFalse);
 
@@ -86,7 +112,22 @@ void main() {
     await initialization;
 
     expect(key.currentState!.isUserContextReady, isTrue);
+    expect(api.monthCalls, 0);
+    expect(api.dailyCalls, 0);
+    final refresh = key.currentState!.refreshStartupMonth();
+    await tester.pumpAndSettle();
+    await refresh;
     expect(api.monthCalls, 1);
+    expect(api.dailyCalls, 0);
+    expect(tester.takeException(), isNull);
+  });
+
+  testWidgets('独立月度页面自动初始化仍加载月数据', (tester) async {
+    await open(tester, autoInitialize: true);
+    await tester.pumpAndSettle();
+    expect(key.currentState!.isUserContextReady, isTrue);
+    expect(api.monthCalls, 1);
+    expect(api.dailyCalls, 0);
     expect(tester.takeException(), isNull);
   });
 
@@ -120,7 +161,9 @@ void main() {
     await initialization;
 
     expect(key.currentState!.isUserContextReady, isFalse);
+    await key.currentState!.refreshStartupMonth();
     expect(api.monthCalls, 0);
+    expect(api.dailyCalls, 0);
     expect(find.text('重试'), findsOneWidget);
   });
 
@@ -147,6 +190,10 @@ void main() {
     final initialization = key.currentState!.initializeUserContext();
     await tester.pumpAndSettle();
     await initialization;
+    expect(key.currentState!.isUserContextReady, isTrue);
+    final refresh = key.currentState!.refreshStartupMonth();
+    await tester.pumpAndSettle();
+    await refresh;
 
     expect(key.currentState!.isUserContextReady, isFalse);
     expect(find.text('重新登录'), findsOneWidget);

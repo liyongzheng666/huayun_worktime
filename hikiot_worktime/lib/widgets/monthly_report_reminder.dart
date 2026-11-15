@@ -39,6 +39,8 @@ class MonthlyReportReminderState extends State<MonthlyReportReminder>
   MonthlyReportSnapshot? _snapshot;
   String? _dismissedFingerprint;
   int _refreshSequence = 0;
+  Future<void>? _refreshInFlight;
+  bool _refreshRequested = false;
   bool _reviewing = false;
   bool _prompting = false;
   String? _deferredSignature;
@@ -88,18 +90,45 @@ class MonthlyReportReminderState extends State<MonthlyReportReminder>
     }
   }
 
-  void _onBossHoursChanged() => unawaited(refresh());
+  void _onBossHoursChanged() {
+    final changedMonth = StorageService.bossHoursChangedMonth;
+    if (changedMonth != null &&
+        changedMonth != DateHelper.formatMonth(_service.now)) {
+      return;
+    }
+    unawaited(refresh());
+  }
 
   /// 主页面完成月度考勤刷新后调用，保持提醒与实际缓存一致。
-  Future<void> refresh() async {
-    final sequence = ++_refreshSequence;
-    try {
-      final snapshot = await _service.load(_service.now);
-      if (!mounted || sequence != _refreshSequence) return;
-      setState(() => _snapshot = snapshot);
-      unawaited(_maybePrompt());
-    } catch (_) {
-      // 正常未知状态由服务层明确返回；意外读取异常不阻塞主页面。
+  Future<void> refresh() {
+    if (!mounted) return Future<void>.value();
+    _refreshSequence++;
+    _refreshRequested = true;
+    final running = _refreshInFlight;
+    if (running != null) return running;
+    final future = _drainRefreshes();
+    _refreshInFlight = future;
+    future.then((_) {
+      if (identical(_refreshInFlight, future)) _refreshInFlight = null;
+    });
+    return future;
+  }
+
+  /// 通知风暴只标记需要重读；保持一次计算在运行，末尾再读最新数据。
+  /// 这里只合并展示刷新，提交前服务层校验仍独立读取当前存储。
+  Future<void> _drainRefreshes() async {
+    while (mounted && _refreshRequested) {
+      _refreshRequested = false;
+      final sequence = _refreshSequence;
+      try {
+        final snapshot = await _service.load(_service.now);
+        if (!mounted) return;
+        if (sequence != _refreshSequence) continue;
+        setState(() => _snapshot = snapshot);
+        unawaited(_maybePrompt());
+      } catch (_) {
+        // 正常未知状态由服务层明确返回；意外读取异常不阻塞主页面。
+      }
     }
   }
 

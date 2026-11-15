@@ -140,6 +140,23 @@ void main() {
     await disposeScreen(tester);
   });
 
+  testWidgets('首页静置十秒不按秒重建整页或重复查询', (tester) async {
+    final repository = _AttendanceRepository();
+    await pumpScreen(tester, repository: repository);
+    var pageBuilds = 0;
+    debugOnRebuildDirtyWidget = (element, _) {
+      if (element.widget is DailyHoursScreen) pageBuilds++;
+    };
+    addTearDown(() => debugOnRebuildDirtyWidget = null);
+    for (var second = 0; second < 10; second++) {
+      await tester.pump(const Duration(seconds: 1));
+    }
+    expect(pageBuilds, 0);
+    expect(repository.loadedDates, hasLength(1));
+    expect(service.queryCalls, 1);
+    await disposeScreen(tester);
+  });
+
   for (final platform in ['Android', 'iOS']) {
     testWidgets('$platform 今日 CTA 传递当前日期，等待处理期间不重复调用', (tester) async {
       PlatformCapabilities.debugOverride = platform == 'Android'

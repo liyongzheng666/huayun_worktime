@@ -13,15 +13,17 @@ class _ChangingStorage extends StorageService {
   bool changed = false;
 
   @override
-  Future<bool> hasFreshBossHoursForDate(
-    String date, {
+  Future<BossMonthSnapshot> loadBossMonthSnapshot(
+    String month, {
     DateTime? now,
     Duration maxAge = const Duration(minutes: 15),
+    String? expectedScope,
   }) async {
-    final fresh = await super.hasFreshBossHoursForDate(
-      date,
+    final fresh = await super.loadBossMonthSnapshot(
+      month,
       now: now,
       maxAge: maxAge,
+      expectedScope: expectedScope,
     );
     if (!changed) {
       changed = true;

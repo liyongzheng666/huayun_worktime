@@ -193,10 +193,19 @@ class MonthlyReportBalanceService {
       }
 
       // 原有读取器会滤掉无法解析的值；平衡不能把被滤掉的污染记录当成0。
-      if (!await _storage.hasValidBossHoursCache(monthKey)) {
+      final verifiedScope = await _storage.loadBossCredentialScope();
+      final bossSnapshot = await _storage.loadBossMonthSnapshot(
+        monthKey,
+        now: moment,
+        expectedScope: verifiedScope,
+      );
+      if (!bossSnapshot.consistent) {
+        return unavailable('读取期间华天工时已更新，请刷新建议');
+      }
+      if (!bossSnapshot.isValid) {
         return unavailable('华天已填工时缓存不完整或异常，请重新同步本月工时');
       }
-      final boss = await _storage.loadBossHours(monthKey);
+      final boss = bossSnapshot.hours;
       if (boss.keys.any((key) => !_isDateInMonth(key, monthKey))) {
         return unavailable('华天已填报日期异常，请重新同步本月工时');
       }
@@ -247,8 +256,11 @@ class MonthlyReportBalanceService {
           return unavailable('$key 的实际工时异常，请核对考勤');
         }
         actual[key] = _isWorkingType(type) ? hours : 0;
-        if (!await _storage.hasFreshBossHoursForDate(key, now: moment)) {
+        if (!bossSnapshot.confirmedDates.contains(key)) {
           return unavailable('$key 的华天已填报状态待确认，请刷新本月华天工时');
+        }
+        if (verifiedScope != null && !bossSnapshot.ownedDates.contains(key)) {
+          return unavailable('$key 的华天工时尚未与当前账号核对，请刷新本月华天工时');
         }
         // 0 小时的已知记录也属于已填日志，不能推荐再创建一条。
         if (reportedValue > 0 || objectIds.containsKey(key)) {

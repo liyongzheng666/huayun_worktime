@@ -3,9 +3,11 @@ import 'dart:async';
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:hikiot_worktime/core/error/exceptions.dart';
+import 'package:hikiot_worktime/screens/daily_hours_screen.dart';
 import 'package:hikiot_worktime/screens/main_screen.dart';
 import 'package:hikiot_worktime/screens/monthly_calendar_screen.dart';
 import 'package:hikiot_worktime/screens/settings_screen.dart';
+import 'package:hikiot_worktime/screens/work_log_screen.dart';
 import 'package:hikiot_worktime/services/daily_attendance_repository.dart';
 import 'package:hikiot_worktime/services/hikiot_api_client.dart';
 import 'package:hikiot_worktime/services/platform_capabilities.dart';
@@ -13,12 +15,16 @@ import 'package:hikiot_worktime/services/storage_service.dart';
 import 'package:hikiot_worktime/utils/date_helper.dart';
 import 'package:hikiot_worktime/utils/haptic_utils.dart';
 import 'package:hikiot_worktime/widgets/pull_refresh_guide.dart';
+import 'package:hikiot_worktime/widgets/monthly_report_reminder.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
 class _StartupApi extends HikiotApiClient {
   Completer<void>? accountGate;
   Object? accountError;
   int accountCalls = 0;
+  int dailyCalls = 0;
+  Completer<void>? monthGate;
+  int monthCalls = 0;
 
   @override
   Future<Map<String, dynamic>?> getAccountDetail() async {
@@ -40,13 +46,20 @@ class _StartupApi extends HikiotApiClient {
   Future<Map<String, dynamic>?> getMonthlyAttendance(
     String month,
     String personNo,
-  ) async => {'dailyRecords': <dynamic>[]};
+  ) async {
+    monthCalls++;
+    await monthGate?.future;
+    return {'dailyRecords': <dynamic>[]};
+  }
 
   @override
   Future<Map<String, dynamic>?> getDailyAttendance(
     String date,
     String personNo,
-  ) async => null;
+  ) async {
+    dailyCalls++;
+    return null;
+  }
 }
 
 class _DailyAttendance extends DailyAttendanceRepository {
@@ -103,7 +116,10 @@ void main() {
     }
   }
 
-  Future<void> open(WidgetTester tester) async {
+  Future<void> open(
+    WidgetTester tester, {
+    bool useInjectedDailyRepository = true,
+  }) async {
     await tester.binding.setSurfaceSize(const Size(900, 1300));
     addTearDown(() => tester.binding.setSurfaceSize(null));
     await tester.pumpWidget(
@@ -112,7 +128,7 @@ void main() {
         home: MainScreen(
           token: 'test-token',
           apiClient: api,
-          dailyRepository: attendance,
+          dailyRepository: useInjectedDailyRepository ? attendance : null,
         ),
       ),
     );
@@ -127,6 +143,109 @@ void main() {
     await flush(tester);
     expect(tester.takeException(), isNull);
   }
+
+  testWidgets('重复点击当前今日不重复请求考勤或重建隐藏日志页，切回仍会刷新', (tester) async {
+    await storage.saveOnboardingCompleted(true);
+    await open(tester);
+    expect(attendance.calls, 1);
+    var hiddenLogBuilds = 0;
+    debugOnRebuildDirtyWidget = (element, _) {
+      if (element.widget is WorkLogScreen) hiddenLogBuilds++;
+    };
+    addTearDown(() => debugOnRebuildDirtyWidget = null);
+    for (var i = 0; i < 5; i++) {
+      await tester.tap(find.text('今日'));
+      await flush(tester);
+    }
+    expect(attendance.calls, 1);
+    expect(hiddenLogBuilds, 0);
+    await tester.tap(find.text('我的'));
+    await flush(tester);
+    await tester.tap(find.text('今日'));
+    await flush(tester);
+    expect(attendance.calls, 2);
+    await dispose(tester);
+  });
+
+  testWidgets('默认每日仓储复用主框架传给月度页的当前会话client', (tester) async {
+    await storage.saveOnboardingCompleted(true);
+    await storage.saveToken('test-token');
+    await open(tester, useInjectedDailyRepository: false);
+    final daily = tester.widget<DailyHoursScreen>(
+      find.byType(DailyHoursScreen),
+    );
+    final monthly = tester.widget<MonthlyCalendarScreen>(
+      find.byType(MonthlyCalendarScreen, skipOffstage: false),
+    );
+    expect(monthly.apiClient, same(api));
+    expect(daily.dailyRepository, isNotNull);
+    final previousCalls = api.dailyCalls;
+    await daily.dailyRepository!.load(DateHelper.getWorkDate());
+    expect(api.dailyCalls, previousCalls + 1);
+    expect(attendance.calls, 0);
+    await dispose(tester);
+  });
+
+  testWidgets('冷启动月请求未返回时每日先可用，月完成后不追加日查询', (tester) async {
+    final monthGate = Completer<void>();
+    api.monthGate = monthGate;
+    await open(tester);
+    final dailyCallsBeforeMonth = attendance.calls;
+    final guideVisibleBeforeMonth = find
+        .byType(PullRefreshGuide)
+        .evaluate()
+        .isNotEmpty;
+    final promptEnabledBeforeMonth = tester
+        .widget<MonthlyReportReminder>(find.byType(MonthlyReportReminder))
+        .autoPromptEnabled;
+    await tester.tap(find.text('月度'));
+    await flush(tester);
+    monthGate.complete();
+    await flush(tester);
+    expect(dailyCallsBeforeMonth, 1);
+    expect(guideVisibleBeforeMonth, isTrue);
+    expect(promptEnabledBeforeMonth, isFalse);
+    expect(attendance.calls, 1);
+    expect(api.monthCalls, 1);
+    expect(api.dailyCalls, 0);
+    expect(
+      tester
+          .widget<MonthlyReportReminder>(find.byType(MonthlyReportReminder))
+          .autoPromptEnabled,
+      isTrue,
+    );
+    await dispose(tester);
+  });
+
+  testWidgets('初始化期间从设置返回今日只由启动流程加载一次', (tester) async {
+    final gate = Completer<void>();
+    api.accountGate = gate;
+    await open(tester);
+    await tester.tap(find.text('我的'));
+    await flush(tester);
+    await tester.tap(find.text('今日'));
+    await flush(tester);
+    expect(selectedTab(tester), 0);
+    expect(attendance.calls, 0);
+    gate.complete();
+    await flush(tester);
+    expect(attendance.calls, 1);
+    await dispose(tester);
+  });
+
+  testWidgets('启动资料等待时点击当前今日不抢跑考勤初始化', (tester) async {
+    final gate = Completer<void>();
+    api.accountGate = gate;
+    await open(tester);
+    expect(attendance.calls, 0);
+    await tester.tap(find.text('今日'));
+    await flush(tester);
+    expect(attendance.calls, 0);
+    gate.complete();
+    await flush(tester);
+    expect(attendance.calls, 1);
+    await dispose(tester);
+  });
 
   testWidgets('首次初始化失败后月度重试成功，设置重放会激活首页引导', (tester) async {
     await storage.saveOnboardingCompleted(true);
