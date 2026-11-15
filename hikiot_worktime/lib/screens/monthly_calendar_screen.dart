@@ -7,6 +7,7 @@ import 'package:intl/intl.dart';
 import '../core/theme/legacy_theme_colors.dart';
 import '../core/constants/constants.dart';
 import '../core/theme/theme.dart';
+import '../models/boss_report_status.dart';
 import '../services/hikiot_api_client.dart';
 import '../services/monthly_attendance_repository.dart';
 import '../services/storage_service.dart';
@@ -82,6 +83,7 @@ class MonthlyCalendarScreenState extends State<MonthlyCalendarScreen> {
   final _bossHoursState = ValueNotifier<Map<String, double>>({});
   Map<String, double> get _bossHours => _bossHoursState.value;
   Set<String> _confirmedBossDates = {};
+  Set<String> _knownBossRecordDates = {};
   int _bossReadSeq = 0;
   String? _bossDisplayMonth;
 
@@ -164,29 +166,40 @@ class MonthlyCalendarScreenState extends State<MonthlyCalendarScreen> {
     if (_bossDisplayMonth != monthKey) {
       _bossDisplayMonth = monthKey;
       // 切月时旧月份的值不能留在新月份；同月读取失败才保留旧显示。
-      if (_bossHoursState.value.isNotEmpty || _confirmedBossDates.isNotEmpty) {
+      if (_bossHoursState.value.isNotEmpty ||
+          _confirmedBossDates.isNotEmpty ||
+          _knownBossRecordDates.isNotEmpty) {
         setState(() {
           _confirmedBossDates = {};
+          _knownBossRecordDates = {};
           _bossHoursState.value = {};
         });
       }
     }
     try {
       final snapshot = await _storage.loadBossMonthSnapshot(monthKey);
+      final recordIds = await _storage.loadWorkLogObjectIds();
+      final recordDates = recordIds.keys
+          .where((date) => date.startsWith('$monthKey-'))
+          .toSet();
       if (!mounted ||
           !snapshot.consistent ||
           !snapshot.isValid ||
+          snapshot.revision != StorageService.bossHoursRevision ||
           seq != _bossReadSeq ||
           monthKey != DateHelper.formatMonth(_selectedMonth)) {
         return;
       }
       if (mapEquals(_bossHoursState.value, snapshot.hours) &&
-          setEquals(_confirmedBossDates, snapshot.confirmedDates)) {
+          setEquals(_confirmedBossDates, snapshot.confirmedDates) &&
+          setEquals(_knownBossRecordDates, recordDates)) {
         return;
       }
       setState(() {
         _confirmedBossDates = snapshot.confirmedDates;
-        _bossHoursState.value = snapshot.hours;
+        _knownBossRecordDates = recordDates;
+        // 记录ID或确认证明变化时，已打开的详情也需要通知，即使金额未变。
+        _bossHoursState.value = Map<String, double>.of(snapshot.hours);
       });
     } catch (_) {
       // 读取失败保留已有显示，不用空表冒充新的填报结果。
@@ -1528,29 +1541,47 @@ class MonthlyCalendarScreenState extends State<MonthlyCalendarScreen> {
 
   /// 单日详情里的 BOSS 已填工时行。
   ///
-  /// 只在该日确实同步到了 BOSS 数据时出现；未同步过就不显示，
-  /// 避免把「没同步」误看成「没填报」——这两件事完全不同。
+  /// 明确区分未填报、待确认与已填金额；历史记录 ID 仅作为需要核对的线索。
   Widget _buildBossHoursRow(String dateStr, double punchHours) {
     final confirmed = _confirmedBossDates.contains(dateStr);
     final bossHours = _bossHours[dateStr] ?? (confirmed ? 0.0 : null);
-    if (bossHours == null) return const SizedBox.shrink();
+    final status = BossReportStatus(
+      hours: bossHours,
+      confirmed: confirmed,
+      hasKnownRecord: _knownBossRecordDates.contains(dateStr),
+    );
 
     final consistent =
-        !confirmed ||
+        status.state != BossReportState.reported ||
         punchHours <= 0 ||
-        WorkTimeCalculator.isBossHoursConsistent(punchHours, bossHours);
+        WorkTimeCalculator.isBossHoursConsistent(punchHours, bossHours!);
+    final needsAttention =
+        status.state == BossReportState.recordNeedsReview || !consistent;
+    final text = switch (status.state) {
+      BossReportState.unknown =>
+        status.hasPositiveHours
+            ? '上次 BOSS 已填 ${WorkTimeCalculator.formatHours(bossHours!)}h，当前待确认'
+            : 'BOSS 填报状态待确认',
+      BossReportState.unreported => 'BOSS ${status.statusText}',
+      BossReportState.recordNeedsReview => status.statusText,
+      BossReportState.reported =>
+        consistent
+            ? 'BOSS 已填 ${WorkTimeCalculator.formatHours(bossHours!)}h'
+            : 'BOSS 已填 ${WorkTimeCalculator.formatHours(bossHours)}h，'
+                  '与打卡差 ${WorkTimeCalculator.formatHours((punchHours - bossHours).abs())}h',
+    };
 
     return Padding(
       padding: const EdgeInsets.only(bottom: 16),
       child: Container(
         padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
         decoration: BoxDecoration(
-          color: consistent
+          color: !needsAttention
               ? LegacyThemeColors.surface(context, Colors.grey[100]!)
               : LegacyThemeColors.panel(context, AppColors.warningLight),
           borderRadius: BorderRadius.circular(8),
           border: Border.all(
-            color: consistent
+            color: !needsAttention
                 ? LegacyThemeColors.border(context, Colors.grey[300]!)
                 : AppColors.warning,
           ),
@@ -1558,30 +1589,32 @@ class MonthlyCalendarScreenState extends State<MonthlyCalendarScreen> {
         child: Row(
           children: [
             Icon(
-              !confirmed
+              status.state == BossReportState.unknown
                   ? Icons.schedule
-                  : consistent
+                  : needsAttention
+                  ? Icons.error_outline
+                  : status.state == BossReportState.reported
                   ? Icons.check_circle_outline
-                  : Icons.error_outline,
+                  : Icons.edit_note,
               size: 18,
-              color: consistent ? Colors.green[600] : AppColors.warningDark,
+              color: needsAttention
+                  ? AppColors.warningDark
+                  : status.state == BossReportState.reported
+                  ? Colors.green[600]
+                  : LegacyThemeColors.muted(context, Colors.grey[700]!),
             ),
             const SizedBox(width: 8),
             Expanded(
               child: Text(
-                !confirmed
-                    ? '上次 BOSS 已填 ${WorkTimeCalculator.formatHours(bossHours)}h，当前待确认'
-                    : consistent
-                    ? 'BOSS 已填 ${WorkTimeCalculator.formatHours(bossHours)}h'
-                    : 'BOSS 已填 ${WorkTimeCalculator.formatHours(bossHours)}h，'
-                          '与打卡差 '
-                          '${WorkTimeCalculator.formatHours((punchHours - bossHours).abs())}h',
+                text,
                 style: TextStyle(
                   fontSize: 12,
-                  color: consistent
+                  color: !needsAttention
                       ? LegacyThemeColors.muted(context, Colors.grey[700]!)
                       : AppColors.warningDark,
-                  fontWeight: consistent ? FontWeight.normal : FontWeight.w600,
+                  fontWeight: needsAttention
+                      ? FontWeight.w600
+                      : FontWeight.normal,
                 ),
               ),
             ),

@@ -212,13 +212,84 @@ void main() {
     expect(tester.takeException(), isNull);
   });
 
-  testWidgets('服务端确认零工时后明细不能残留旧的正数', (tester) async {
+  testWidgets('确认当日未填报时显示未填报，不把零当成已填金额', (tester) async {
     await open(tester);
     await detail(tester);
     await storage.saveBossHoursForDate(date, 0);
     await tester.pumpAndSettle();
-    expect(find.textContaining('BOSS 已填 0.00h'), findsOneWidget);
+    expect(
+      find.descendant(
+        of: find.byType(AlertDialog),
+        matching: find.textContaining('未填报'),
+      ),
+      findsOneWidget,
+    );
+    expect(find.textContaining('BOSS 已填 0.00h'), findsNothing);
     expect(find.textContaining('BOSS 已填 6.50h'), findsNothing);
+  });
+
+  testWidgets('完整月查询确认无该日记录时显示未填报，不补出已填0.00h', (tester) async {
+    await open(tester);
+    await storage.saveBossHours(month, {});
+    await tester.pumpAndSettle();
+    await detail(tester);
+    expect(
+      find.descendant(
+        of: find.byType(AlertDialog),
+        matching: find.textContaining('未填报'),
+      ),
+      findsOneWidget,
+    );
+    expect(find.textContaining('BOSS 已填 0.00h'), findsNothing);
+  });
+
+  testWidgets('零合计新增历史记录ID后，已打开详情改为核对记录而非未填报', (tester) async {
+    await storage.saveBossHoursForDate(date, 0);
+    await open(tester);
+    await detail(tester);
+    expect(find.text('BOSS 未填报'), findsOneWidget);
+    await storage.saveWorkLogObjectId(date, 'WORKLOG_history');
+    await screenKey.currentState!.refreshFromStorage();
+    await tester.pumpAndSettle();
+    expect(find.text('已有日报记录，工时待核对'), findsOneWidget);
+    expect(find.text('BOSS 未填报'), findsNothing);
+    expect(find.textContaining('BOSS 已填 0.00h'), findsNothing);
+  });
+
+  testWidgets('过期的零合计只显示待确认，不显示已填零或未填报', (tester) async {
+    await storage.saveBossHoursForDate(
+      date,
+      0,
+      refreshedAt: DateTime.now().subtract(const Duration(days: 1)),
+    );
+    await open(tester);
+    await detail(tester);
+    expect(
+      find.descendant(
+        of: find.byType(AlertDialog),
+        matching: find.textContaining('待确认'),
+      ),
+      findsOneWidget,
+    );
+    expect(find.textContaining('BOSS 已填 0.00h'), findsNothing);
+    expect(find.text('BOSS 未填报'), findsNothing);
+  });
+
+  testWidgets('没有日报查询缓存时详情明确显示待确认', (tester) async {
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.remove(StorageKeys.bossHoursKey(month));
+    await prefs.remove(StorageKeys.bossHoursDateConfirmedAtKey(date));
+    await open(tester);
+    await detail(tester);
+    expect(
+      find.descendant(
+        of: find.byType(AlertDialog),
+        matching: find.textContaining('待确认'),
+      ),
+      findsOneWidget,
+    );
+    expect(find.textContaining('BOSS 已填 0.00h'), findsNothing);
+    expect(find.text('BOSS 未填报'), findsNothing);
   });
 
   testWidgets('安卓一次真实提交编排贯通缓存、日志时长和月度明细，保持打卡工时独立', (tester) async {

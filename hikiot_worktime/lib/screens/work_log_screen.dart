@@ -1,4 +1,5 @@
 import 'dart:async';
+import '../models/boss_report_status.dart';
 import 'dart:convert';
 import 'dart:io';
 
@@ -58,6 +59,8 @@ class WorkLogScreenState extends State<WorkLogScreen> {
   late final WorkLogRepository _repository;
   late final BossHoursAutoRefreshService _bossAutoRefresh;
   double? _reportedHours;
+  bool _reportedConfirmed = false;
+  bool _reportedRecordKnown = false;
   bool _bossRefreshing = false;
   bool _bossUnavailable = false;
   bool _balanceLoading = false;
@@ -157,14 +160,26 @@ class WorkLogScreenState extends State<WorkLogScreen> {
     final key = DateHelper.formatDate(date);
     try {
       final storage = StorageService();
-      final hours = await storage.loadBossHours(DateHelper.formatMonth(date));
-      final known = await storage.hasBossHoursForDate(key);
+      final snapshot = await storage.loadBossMonthSnapshot(
+        DateHelper.formatMonth(date),
+      );
+      final recordId = await storage.loadWorkLogObjectId(key);
       if (!mounted ||
           seq != _bossReadSeq ||
           !DateHelper.isSameDay(date, _selectedDate)) {
         return;
       }
-      setState(() => _reportedHours = known ? hours[key] ?? 0 : null);
+      setState(() {
+        _reportedHours = snapshot.knownDates.contains(key)
+            ? snapshot.hours[key] ?? 0
+            : snapshot.hours[key];
+        _reportedConfirmed =
+            snapshot.isValid &&
+            snapshot.consistent &&
+            snapshot.revision == StorageService.bossHoursRevision &&
+            snapshot.confirmedDates.contains(key);
+        _reportedRecordKnown = recordId != null;
+      });
     } catch (_) {
       if (mounted &&
           seq == _bossReadSeq &&
@@ -224,6 +239,8 @@ class WorkLogScreenState extends State<WorkLogScreen> {
     if (_draft?.date != DateHelper.formatDate(date)) {
       _draft = null;
       _reportedHours = null;
+      _reportedConfirmed = false;
+      _reportedRecordKnown = false;
       _bossUnavailable = false;
       _submittedObjectId = null;
       _submittedRecord = null;
@@ -1152,6 +1169,11 @@ class WorkLogScreenState extends State<WorkLogScreen> {
   /// 工作时长卡片，数据来自打卡记录，与「每日工时」页同一口径、同一种呈现：
   /// 大号彩色数字加单位，下面跟打卡区间。
   Widget _buildHoursCard() {
+    final report = BossReportStatus(
+      hours: _reportedHours,
+      confirmed: _reportedConfirmed && !_bossUnavailable && !_bossRefreshing,
+      hasKnownRecord: _reportedRecordKnown,
+    );
     final hours = _draft?.hours;
     final hasHours = hours?.hasData == true;
     // 复用工时计算器的格式化规则（浮点截断两位，不四舍五入）。
@@ -1182,13 +1204,17 @@ class WorkLogScreenState extends State<WorkLogScreen> {
             spacing: 8,
             children: [
               Text(
-                _bossUnavailable || _bossRefreshing ? '上次已填报' : 'BOSS 已填报',
+                report.hasPositiveHours
+                    ? report.state == BossReportState.reported
+                          ? 'BOSS 已填报'
+                          : '上次已填报'
+                    : '华天日报',
                 style: Theme.of(context).textTheme.labelLarge,
               ),
               Text(
-                _reportedHours == null
-                    ? '待确认'
-                    : '${WorkTimeCalculator.formatHours(_reportedHours!)} 小时',
+                report.hasPositiveHours
+                    ? '${WorkTimeCalculator.formatHours(_reportedHours!)} 小时'
+                    : report.statusText,
                 key: const ValueKey('reported-boss-hours'),
                 style: TextStyle(
                   fontWeight: FontWeight.w600,
@@ -1202,6 +1228,9 @@ class WorkLogScreenState extends State<WorkLogScreen> {
                 ),
             ],
           ),
+          if (report.state == BossReportState.unknown &&
+              report.hasPositiveHours)
+            Text('当前填报状态待确认', style: Theme.of(context).textTheme.bodySmall),
           if (_bossUnavailable)
             Text(
               '本次未能更新，保留上次记录；可登录 BOSS 后重试。',

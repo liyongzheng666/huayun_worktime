@@ -198,7 +198,7 @@ void main() {
     expect(requests, 1);
     await StorageService().saveBossHoursForDate(dateKey, 0);
     await tester.pumpAndSettle();
-    expect(reportedText(tester), '0.00 小时');
+    expect(reportedText(tester), '未填报');
     expect(find.text('已填报 · 打开 BOSS 查看'), findsNothing);
     expect(find.text('提交 ${today.month}月${today.day}日 日志'), findsOneWidget);
   });
@@ -214,6 +214,47 @@ void main() {
     expect(reportedText(tester), '6.50 小时');
     expect(find.text('上次已填报'), findsOneWidget);
     expect(find.textContaining('本次未能更新'), findsOneWidget);
+    expect(find.text('0.00 小时'), findsNothing);
+  });
+
+  testWidgets('确认未填报显示文字状态，打卡时长仍正常显示', (tester) async {
+    await pumpLog(
+      tester,
+      (_) async => const BossSessionResult(BossSessionStatus.ok, 0),
+    );
+    await tester.pumpAndSettle();
+    expect(reportedText(tester), '未填报');
+    expect(find.text('华天日报'), findsOneWidget);
+    expect(find.text('BOSS 已填报'), findsNothing);
+    expect(find.text('0.00 小时'), findsNothing);
+    expect(find.text('8.00'), findsOneWidget);
+  });
+
+  testWidgets('旧零合计本次查询失败显示待确认，不能显示已填0或当前未填', (tester) async {
+    await StorageService().saveBossHoursForDate(
+      dateKey,
+      0,
+      refreshedAt: DateTime.now().subtract(const Duration(hours: 1)),
+    );
+    await pumpLog(
+      tester,
+      (_) async => const BossSessionResult(BossSessionStatus.failed),
+    );
+    await tester.pumpAndSettle();
+    expect(reportedText(tester), '待确认');
+    expect(find.text('BOSS 已填报'), findsNothing);
+    expect(find.text('上次已填报'), findsNothing);
+    expect(find.text('0.00 小时'), findsNothing);
+  });
+
+  testWidgets('已有历史日报ID但查询零合计提示核对，不冒充未填报', (tester) async {
+    await StorageService().saveWorkLogObjectId(dateKey, 'WORKLOG_known');
+    await pumpLog(
+      tester,
+      (_) async => const BossSessionResult(BossSessionStatus.ok, 0),
+    );
+    await tester.pumpAndSettle();
+    expect(reportedText(tester), '已有日报记录，工时待核对');
     expect(find.text('0.00 小时'), findsNothing);
   });
 
