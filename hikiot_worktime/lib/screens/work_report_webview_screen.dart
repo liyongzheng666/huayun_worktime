@@ -476,7 +476,7 @@ class _WorkReportWebViewScreenState extends State<WorkReportWebViewScreen> {
     // 出差、补录、打卡异常这些场景本来就该由用户自己定工时。
 
     final service = WorkLogSubmitService(controller);
-    final existingHours = await service.queryExistingHours(draft.date);
+    final existingHours = await service.queryAndCacheExistingHours(draft.date);
     if (!mounted) return;
     if (existingHours == null) {
       _notify('网络通信不稳定，未能确认 ${draft.date} 是否已提交，本次已暂缓');
@@ -630,12 +630,19 @@ class _WorkReportWebViewScreenState extends State<WorkReportWebViewScreen> {
     _rememberViewedLogsStarted = true;
 
     String? lastObjectId;
-    for (var attempt = 0; attempt < 60 && mounted; attempt++) {
+    while (mounted) {
       final controller = _controller;
       if (controller != null) {
-        final reference = await WorkLogSubmitService(
-          controller,
-        ).rememberLatestViewedLog();
+        final service = WorkLogSubmitService(controller);
+        final saves = await service.readConfirmedWebSaves();
+        if (!mounted) return;
+        // 同一轮在同一天连续保存，只回读一次最终合计；每个抓包事件只消费一次。
+        for (final date in saves.map((save) => save.date).toSet()) {
+          await service.refreshReportedHoursAfterSave(date);
+          if (!mounted) return;
+        }
+        final reference = await service.rememberLatestViewedLog();
+        if (!mounted) return;
         if (reference != null && reference.objectId != lastObjectId) {
           lastObjectId = reference.objectId;
           debugPrint('[日志编辑] 已记住 ${reference.date} 的 ${reference.objectId}');

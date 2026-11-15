@@ -32,12 +32,14 @@ class MonthlyCalendarScreen extends StatefulWidget {
   final String token;
   final bool autoInitialize;
   final HikiotApiClient? apiClient;
+  final BossHoursAutoRefreshService? bossAutoRefresh;
 
   const MonthlyCalendarScreen({
     super.key,
     required this.token,
     this.autoInitialize = true,
     this.apiClient,
+    this.bossAutoRefresh,
   });
 
   @override
@@ -47,8 +49,7 @@ class MonthlyCalendarScreen extends StatefulWidget {
 class MonthlyCalendarScreenState extends State<MonthlyCalendarScreen> {
   late final HikiotApiClient _apiClient;
   final StorageService _storage = StorageService();
-  final BossHoursAutoRefreshService _bossAutoRefresh =
-      BossHoursAutoRefreshService.shared;
+  late final BossHoursAutoRefreshService _bossAutoRefresh;
   late final TeamContextService _teamContextService;
   late final MonthlyAttendanceRepository _monthlyRepository;
   bool _isLoading = true;
@@ -75,7 +76,10 @@ class MonthlyCalendarScreenState extends State<MonthlyCalendarScreen> {
 
   // BOSS 已填报工时: {日期字符串: 工时}
   // 由「工作日志 → 日志系统 → 同步本月 BOSS 工时」写入，本页只读展示。
-  Map<String, double> _bossHours = {};
+  final _bossHoursState = ValueNotifier<Map<String, double>>({});
+  Map<String, double> get _bossHours => _bossHoursState.value;
+  Set<String> _confirmedBossDates = {};
+  int _bossReadSeq = 0;
 
   // 是否包含今日工时数据（适用于第二天上班只打了上班卡想看之前数据的情况）
   bool _includeTodayData = true;
@@ -92,6 +96,9 @@ class MonthlyCalendarScreenState extends State<MonthlyCalendarScreen> {
   @override
   void initState() {
     super.initState();
+    _bossAutoRefresh =
+        widget.bossAutoRefresh ?? BossHoursAutoRefreshService.shared;
+    StorageService.bossHoursChanges.addListener(_onBossHoursChanged);
     _apiClient = widget.apiClient ?? HikiotApiClient();
     _apiClient.setToken(widget.token);
     _teamContextService = TeamContextService(
@@ -114,6 +121,44 @@ class MonthlyCalendarScreenState extends State<MonthlyCalendarScreen> {
 
   /// 初始化可能已展示错误而正常返回，不能据 Future 完成推断登录有效。
   bool get isUserContextReady => _isUserContextReady;
+
+  @override
+  void dispose() {
+    StorageService.bossHoursChanges.removeListener(_onBossHoursChanged);
+    _bossHoursState.dispose();
+    super.dispose();
+  }
+
+  // 日报写入后只复读缓存，不让每个页面另发一次整月查询。
+  void _onBossHoursChanged() => unawaited(_readBossHoursCache());
+
+  Future<void> _readBossHoursCache() async {
+    final seq = ++_bossReadSeq;
+    final monthKey = DateHelper.formatMonth(_selectedMonth);
+    try {
+      final hours = await _storage.loadBossHours(monthKey);
+      final confirmedDates = <String>{};
+      final month = DateTime.parse('$monthKey-01');
+      final days = DateTime(month.year, month.month + 1, 0).day;
+      for (var day = 1; day <= days; day++) {
+        final date = '$monthKey-${day.toString().padLeft(2, '0')}';
+        if (await _storage.hasFreshBossHoursForDate(date)) {
+          confirmedDates.add(date);
+        }
+      }
+      if (!mounted ||
+          seq != _bossReadSeq ||
+          monthKey != DateHelper.formatMonth(_selectedMonth)) {
+        return;
+      }
+      setState(() {
+        _confirmedBossDates = confirmedDates;
+        _bossHoursState.value = hours;
+      });
+    } catch (_) {
+      // 读取失败保留已有显示，不用空表冒充新的填报结果。
+    }
+  }
 
   /// 加载置顶目标
   Future<void> _loadPinnedTarget() async {
@@ -252,6 +297,7 @@ class MonthlyCalendarScreenState extends State<MonthlyCalendarScreen> {
   /// 从存储刷新显示数据(不调用API,仅重新应用手动标记)
   /// 用于从其他页面返回时同步显示最新的手动修改
   Future<void> refreshFromStorage() async {
+    await _readBossHoursCache();
     if (_personNo == null || _teamNo == null) return;
 
     // 重新加载设置，确保目标相关配置是最新的
@@ -283,10 +329,11 @@ class MonthlyCalendarScreenState extends State<MonthlyCalendarScreen> {
   Future<void> refreshBossHoursSilently({DateTime? month}) async {
     final target = month ?? _selectedMonth;
     final monthKey = DateFormat('yyyy-MM').format(target);
-    final result = await _bossAutoRefresh.refreshIfStale(target);
-    if (!mounted || result.status != BossHoursAutoRefreshStatus.updated) return;
+    await _bossAutoRefresh.refreshIfStale(target);
+    if (!mounted) return;
     if (DateFormat('yyyy-MM').format(_selectedMonth) != monthKey) return;
-    setState(() => _bossHours = result.hours);
+    // fresh/失败也可能已有其它页面刚写入的值，始终以最终缓存为准。
+    await _readBossHoursCache();
   }
 
   /// 加载月度数据 (forceRefresh=true时强制刷新)
@@ -301,10 +348,8 @@ class MonthlyCalendarScreenState extends State<MonthlyCalendarScreen> {
     });
 
     // 先用本地缓存秒开；过期刷新在下面静默启动，读不到不影响主流程。
-    final bossHours = await _storage.loadBossHours(monthStr);
-    if (mounted) {
-      setState(() => _bossHours = bossHours);
-    }
+    await _readBossHoursCache();
+    if (!mounted) return;
     unawaited(refreshBossHoursSilently(month: _selectedMonth));
 
     try {
@@ -485,8 +530,9 @@ class MonthlyCalendarScreenState extends State<MonthlyCalendarScreen> {
 
     // 查询期间切月或提交时，以对应月份的最终合并缓存为准。
     if (DateFormat('yyyy-MM').format(_selectedMonth) == monthKey) {
-      setState(() => _bossHours = savedHours);
+      await _readBossHoursCache();
     }
+    if (!mounted) return;
     ScaffoldMessenger.of(context).showSnackBar(
       SnackBar(
         content: Text(
@@ -512,11 +558,7 @@ class MonthlyCalendarScreenState extends State<MonthlyCalendarScreen> {
         ),
       );
       if (!mounted) return;
-      final bossHours = await _storage.loadBossHours(
-        DateFormat('yyyy-MM').format(_selectedMonth),
-      );
-      if (!mounted) return;
-      setState(() => _bossHours = bossHours);
+      await _readBossHoursCache();
     },
   );
 
@@ -1248,7 +1290,10 @@ class MonthlyCalendarScreenState extends State<MonthlyCalendarScreen> {
         : LegacyThemeColors.muted(context, Colors.grey.shade500);
 
     final Color barColor;
-    if (mismatch) {
+    if (!_confirmedBossDates.contains(dateStr)) {
+      // 旧金额或未确认不能冒充当前已填/欠报状态。
+      barColor = textColor.withValues(alpha: 0.22);
+    } else if (mismatch) {
       barColor = _mismatchColor;
     } else if (hasBoss) {
       barColor = consistentColor;
@@ -1305,7 +1350,7 @@ class MonthlyCalendarScreenState extends State<MonthlyCalendarScreen> {
   /// 格子里的细条是自造的视觉语言，不解释没人看得懂，因此图例用
   /// 同样的图形把三种状态画出来，而不是只用文字描述。
   Widget _buildHoursLegend() {
-    if (_bossHours.isEmpty) {
+    if (_confirmedBossDates.isEmpty) {
       return Container(
         padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
         decoration: BoxDecoration(
@@ -1413,10 +1458,12 @@ class MonthlyCalendarScreenState extends State<MonthlyCalendarScreen> {
   /// 只在该日确实同步到了 BOSS 数据时出现；未同步过就不显示，
   /// 避免把「没同步」误看成「没填报」——这两件事完全不同。
   Widget _buildBossHoursRow(String dateStr, double punchHours) {
-    final bossHours = _bossHours[dateStr];
-    if (bossHours == null || bossHours <= 0) return const SizedBox.shrink();
+    final confirmed = _confirmedBossDates.contains(dateStr);
+    final bossHours = _bossHours[dateStr] ?? (confirmed ? 0.0 : null);
+    if (bossHours == null) return const SizedBox.shrink();
 
     final consistent =
+        !confirmed ||
         punchHours <= 0 ||
         WorkTimeCalculator.isBossHoursConsistent(punchHours, bossHours);
 
@@ -1438,14 +1485,20 @@ class MonthlyCalendarScreenState extends State<MonthlyCalendarScreen> {
         child: Row(
           children: [
             Icon(
-              consistent ? Icons.check_circle_outline : Icons.error_outline,
+              !confirmed
+                  ? Icons.schedule
+                  : consistent
+                  ? Icons.check_circle_outline
+                  : Icons.error_outline,
               size: 18,
               color: consistent ? Colors.green[600] : AppColors.warningDark,
             ),
             const SizedBox(width: 8),
             Expanded(
               child: Text(
-                consistent
+                !confirmed
+                    ? '上次 BOSS 已填 ${WorkTimeCalculator.formatHours(bossHours)}h，当前待确认'
+                    : consistent
                     ? 'BOSS 已填 ${WorkTimeCalculator.formatHours(bossHours)}h'
                     : 'BOSS 已填 ${WorkTimeCalculator.formatHours(bossHours)}h，'
                           '与打卡差 '
@@ -1631,7 +1684,11 @@ class MonthlyCalendarScreenState extends State<MonthlyCalendarScreen> {
 
                     // BOSS 已填工时。格子里只剩一条状态细条，具体数值放这里，
                     // 否则不一致时用户看得见警示却查不到差在哪。
-                    _buildBossHoursRow(dateStr, hours),
+                    ValueListenableBuilder<Map<String, double>>(
+                      valueListenable: _bossHoursState,
+                      builder: (context, value, child) =>
+                          _buildBossHoursRow(dateStr, hours),
+                    ),
 
                     if (hasCrossDayPunch) ...[
                       _buildCrossDayPunchDialogReminder(dayData),

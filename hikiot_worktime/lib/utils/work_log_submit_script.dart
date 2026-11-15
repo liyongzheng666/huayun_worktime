@@ -273,8 +273,7 @@ class WorkLogSubmitScript {
         if (objectId && objectId.indexOf('WORKLOG_') === 0) {
           return JSON.stringify({
             ok: true,
-            objectId: objectId,
-            existingHours: parseFloat(WORKLOG_DATA.ACTWORK)
+            objectId: objectId
           });
         }
 

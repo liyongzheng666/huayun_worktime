@@ -462,7 +462,9 @@ class WorkLogScreenState extends State<WorkLogScreen> {
       controller,
     ) async {
       final service = WorkLogSubmitService(controller);
-      final existingHours = await service.queryExistingHours(draft.date);
+      final existingHours = await service.queryAndCacheExistingHours(
+        draft.date,
+      );
       if (existingHours == null || existingHours > 0) {
         return _SubmitPreparation.preflightBlocked(existingHours);
       }

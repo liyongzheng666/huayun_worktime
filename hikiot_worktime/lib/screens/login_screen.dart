@@ -18,6 +18,7 @@ class LoginScreen extends StatefulWidget {
 }
 
 class _LoginScreenState extends State<LoginScreen> {
+  static const _loginUrl = 'https://www.hikiot.com/portal/login';
   InAppWebViewController? webViewController;
   double progress = 0;
   bool isLoading = true;
@@ -25,6 +26,8 @@ class _LoginScreenState extends State<LoginScreen> {
   bool _isClearingCookies = false;
   bool _cookieClearFailed = false;
   bool _isSavingToken = false;
+  bool _pageLoadFailed = false;
+  WebUri? _failedPageUrl;
 
   @override
   void initState() {
@@ -53,6 +56,32 @@ class _LoginScreenState extends State<LoginScreen> {
       setState(() => _cookieClearFailed = true);
     } finally {
       _isClearingCookies = false;
+    }
+  }
+
+  Future<void> _retryPageLoad() async {
+    final controller = webViewController;
+    if (controller == null) return;
+    setState(() {
+      _pageLoadFailed = false;
+      isLoading = true;
+      progress = 0;
+    });
+    final failedUrl = _failedPageUrl;
+    final url =
+        failedUrl != null &&
+            (failedUrl.scheme == 'https' || failedUrl.scheme == 'http')
+        ? failedUrl
+        : WebUri(_loginUrl);
+    try {
+      // 首次页面未载入成功时 WKWebView.reload 可能没有可重载的文档。
+      await controller.loadUrl(urlRequest: URLRequest(url: url));
+    } catch (_) {
+      if (!mounted) return;
+      setState(() {
+        _pageLoadFailed = true;
+        isLoading = false;
+      });
     }
   }
 
@@ -98,9 +127,7 @@ class _LoginScreenState extends State<LoginScreen> {
             tooltip: '返回登录页',
             onPressed: () {
               webViewController?.loadUrl(
-                urlRequest: URLRequest(
-                  url: WebUri('https://www.hikiot.com/portal/login'),
-                ),
+                urlRequest: URLRequest(url: WebUri(_loginUrl)),
               );
             },
           ),
@@ -114,11 +141,10 @@ class _LoginScreenState extends State<LoginScreen> {
         ],
       ),
       body: Stack(
+        fit: StackFit.expand,
         children: [
           InAppWebView(
-            initialUrlRequest: URLRequest(
-              url: WebUri('https://www.hikiot.com/portal/login'),
-            ),
+            initialUrlRequest: URLRequest(url: WebUri(_loginUrl)),
             initialSettings: InAppWebViewSettings(
               // 基础设置
               javaScriptEnabled: true,
@@ -179,12 +205,16 @@ class _LoginScreenState extends State<LoginScreen> {
               debugPrint('WebView已创建');
             },
             onLoadStart: (controller, url) {
+              if (!mounted) return;
               setState(() {
                 isLoading = true;
+                progress = 0;
+                _pageLoadFailed = false;
               });
               debugPrint('开始加载: ${url?.toString()}');
             },
             onLoadStop: (controller, url) async {
+              if (!mounted || _pageLoadFailed) return;
               setState(() {
                 isLoading = false;
               });
@@ -239,6 +269,7 @@ class _LoginScreenState extends State<LoginScreen> {
               }
             },
             onProgressChanged: (controller, progress) {
+              if (!mounted) return;
               setState(() {
                 this.progress = progress / 100;
               });
@@ -249,14 +280,43 @@ class _LoginScreenState extends State<LoginScreen> {
             },
             onReceivedError: (controller, request, error) {
               debugPrint('加载错误: ${error.description}');
-              ScaffoldMessenger.of(context).showSnackBar(
-                SnackBar(
-                  content: Text('加载错误: ${error.description}'),
-                  backgroundColor: AppColors.error,
-                ),
-              );
+              // iOS 导航失败没有 mainFrame 标志；Android 子资源失败不能遮住表单。
+              if (!mounted ||
+                  request.isForMainFrame == false ||
+                  error.type == WebResourceErrorType.CANCELLED) {
+                return;
+              }
+              setState(() {
+                _failedPageUrl = request.url;
+                _pageLoadFailed = true;
+                isLoading = false;
+              });
             },
           ),
+          if (_pageLoadFailed)
+            Positioned.fill(
+              child: ColoredBox(
+                color: Theme.of(context).colorScheme.surface,
+                child: Center(
+                  child: SingleChildScrollView(
+                    padding: const EdgeInsets.all(24),
+                    child: Column(
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        const Text('登录页面加载失败'),
+                        const SizedBox(height: 8),
+                        const Text('请检查网络连接后重试。'),
+                        const SizedBox(height: 16),
+                        FilledButton(
+                          onPressed: _retryPageLoad,
+                          child: const Text('重试'),
+                        ),
+                      ],
+                    ),
+                  ),
+                ),
+              ),
+            ),
           if (isLoading)
             Center(
               child: Column(

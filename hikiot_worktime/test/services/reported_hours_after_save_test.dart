@@ -12,8 +12,11 @@ class _UnusedController implements InAppWebViewController {
 }
 
 class _SubmitService extends WorkLogSubmitService {
-  _SubmitService({required this.submitReply, required this.query})
-    : super(_UnusedController());
+  _SubmitService({
+    required this.submitReply,
+    required this.query,
+    StorageService? storage,
+  }) : super(_UnusedController(), storage: storage);
 
   final String submitReply;
   final Future<double?> Function(String date) query;
@@ -30,6 +33,13 @@ class _SubmitService extends WorkLogSubmitService {
   Future<double?> queryExistingHours(String dateStr) {
     queriedDates.add(dateStr);
     return query(dateStr);
+  }
+}
+
+class _FailingObjectIdStorage extends StorageService {
+  @override
+  Future<void> saveWorkLogObjectId(String date, String objectId) async {
+    throw StateError('本地记录 ID 保存失败');
   }
 }
 
@@ -51,6 +61,22 @@ Future<WorkLogSubmitResult> _submit(_SubmitService service) => service.submit(
 
 void main() {
   setUp(() => SharedPreferences.setMockInitialValues({}));
+
+  test('服务端已确认提交时，本地记录ID保存失败不改变结果且仍回读合计', () async {
+    final service = _SubmitService(
+      submitReply: '{"ok":true,"objectId":"WORKLOG_1"}',
+      query: (_) async => 7.25,
+      storage: _FailingObjectIdStorage(),
+    );
+    final result = await _submit(service);
+    expect(result.status, WorkLogSubmitStatus.submitted);
+    expect(service.submitCalls, 1);
+    expect(service.queriedDates, [_entry.date]);
+    expect(
+      (await StorageService().loadBossHours('2026-09'))[_entry.date],
+      7.25,
+    );
+  });
 
   test('确认提交后复读日志实际日期的合计，不使用提交输入或覆盖同月其他日期', () async {
     final storage = StorageService();

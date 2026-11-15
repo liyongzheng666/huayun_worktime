@@ -12,6 +12,7 @@ import '../utils/work_log_edit_script.dart';
 import '../utils/work_log_history_lookup.dart';
 import '../utils/work_log_project_list_lookup.dart';
 import '../utils/work_log_request_capture.dart';
+import '../utils/work_log_saved_capture.dart';
 import '../utils/work_log_submit_script.dart';
 import 'storage_service.dart';
 
@@ -613,6 +614,34 @@ class WorkLogSubmitService {
     return WorkLogBossHours.parseSingleDay(raw);
   }
 
+  /// 提交前已查到的服务端合计也要通知各页面，迟到查询不能覆盖新保存。
+  Future<double?> queryAndCacheExistingHours(String dateStr) async {
+    final revision = StorageService.bossHoursRevision;
+    final hours = await queryExistingHours(dateStr);
+    if (hours != null && hours.isFinite && hours >= 0) {
+      try {
+        await _storage.saveBossHoursForDate(
+          dateStr,
+          hours,
+          expectedRevision: revision,
+        );
+      } catch (_) {
+        // 本地缓存失败不改变去重查询结果，不能因此再次提交已有日志。
+      }
+    }
+    return hours;
+  }
+
+  /// 增量读取网页保存成功事件，查询动作本身不向 BOSS 写入任何日志。
+  Future<List<BossWorkLogReference>> readConfirmedWebSaves() async {
+    return WorkLogSavedCapture.parse(
+      await runScript(
+        WorkLogSavedCapture.build(captureStoreName: _store),
+        logResult: false,
+      ),
+    );
+  }
+
   /// 发起提交。
   Future<WorkLogSubmitResult> submit({
     required WorkLogEntry entry,
@@ -641,7 +670,11 @@ class WorkLogSubmitService {
       if (result.status == WorkLogSubmitStatus.submitted) {
         final objectId = result.objectId;
         if (objectId != null) {
-          await _storage.saveWorkLogObjectId(entry.date, objectId);
+          try {
+            await _storage.saveWorkLogObjectId(entry.date, objectId);
+          } catch (_) {
+            // 服务端已确认保存；本地编辑索引失败不能改成失败或阻断合计回读。
+          }
         }
       }
       if (result.status == WorkLogSubmitStatus.submitted ||
