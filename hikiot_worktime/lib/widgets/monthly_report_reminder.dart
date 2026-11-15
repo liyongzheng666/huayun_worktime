@@ -5,20 +5,29 @@ import 'package:flutter/material.dart';
 import '../models/monthly_report_balance.dart';
 import '../services/monthly_report_balance_service.dart';
 import '../services/storage_service.dart';
+import '../services/boss_hours_auto_refresh_service.dart';
+import '../utils/date_helper.dart';
 import 'monthly_report_balance_dialog.dart';
+import 'month_end_report_review_dialog.dart';
 
-/// 打开或返回 App 时展示月底核对提示；读取缓存，不主动弹窗或提交日报。
+/// 打开或返回App时读取月底快照；会话准备好后弹出月度差额核对，不提交日报。
 class MonthlyReportReminder extends StatefulWidget {
   const MonthlyReportReminder({
     super.key,
     required this.child,
     this.service,
     this.onReview,
+    this.autoPromptEnabled = false,
+    this.reviewStorage,
+    this.synchronizeMonth,
   });
 
   final Widget child;
   final MonthlyReportBalanceService? service;
   final Future<void> Function(MonthlyReportSnapshot snapshot)? onReview;
+  final bool autoPromptEnabled;
+  final StorageService? reviewStorage;
+  final Future<void> Function(DateTime month)? synchronizeMonth;
 
   @override
   State<MonthlyReportReminder> createState() => MonthlyReportReminderState();
@@ -31,11 +40,16 @@ class MonthlyReportReminderState extends State<MonthlyReportReminder>
   String? _dismissedFingerprint;
   int _refreshSequence = 0;
   bool _reviewing = false;
+  bool _prompting = false;
+  String? _deferredSignature;
+  final Set<String> _reviewedInSession = {};
+  late StorageService _reviewStorage;
 
   @override
   void initState() {
     super.initState();
     _service = widget.service ?? MonthlyReportBalanceService();
+    _reviewStorage = widget.reviewStorage ?? StorageService();
     WidgetsBinding.instance.addObserver(this);
     StorageService.bossHoursChanges.addListener(_onBossHoursChanged);
     WidgetsBinding.instance.addPostFrameCallback((_) {
@@ -50,6 +64,12 @@ class MonthlyReportReminderState extends State<MonthlyReportReminder>
       _service = widget.service ?? MonthlyReportBalanceService();
       unawaited(refresh());
     }
+    if (oldWidget.reviewStorage != widget.reviewStorage) {
+      _reviewStorage = widget.reviewStorage ?? StorageService();
+    }
+    if (!oldWidget.autoPromptEnabled && widget.autoPromptEnabled) {
+      unawaited(refresh());
+    }
   }
 
   @override
@@ -62,7 +82,10 @@ class MonthlyReportReminderState extends State<MonthlyReportReminder>
 
   @override
   void didChangeAppLifecycleState(AppLifecycleState state) {
-    if (state == AppLifecycleState.resumed) unawaited(refresh());
+    if (state == AppLifecycleState.resumed) {
+      _deferredSignature = null;
+      unawaited(refresh());
+    }
   }
 
   void _onBossHoursChanged() => unawaited(refresh());
@@ -74,13 +97,104 @@ class MonthlyReportReminderState extends State<MonthlyReportReminder>
       final snapshot = await _service.load(_service.now);
       if (!mounted || sequence != _refreshSequence) return;
       setState(() => _snapshot = snapshot);
+      unawaited(_maybePrompt());
     } catch (_) {
       // 正常未知状态由服务层明确返回；意外读取异常不阻塞主页面。
     }
   }
 
+  /// 月末即使差额为零也弹出核对；仅缓存版本更新不会重复打扰已核对摘要。
+  Future<void> _maybePrompt() async {
+    var snapshot = _snapshot;
+    if (!mounted ||
+        !widget.autoPromptEnabled ||
+        _prompting ||
+        _reviewing ||
+        snapshot == null ||
+        !snapshot.isMonthEnd ||
+        ModalRoute.of(context)?.isCurrent != true) {
+      return;
+    }
+    final signature = snapshot.reviewSignature;
+    if (_deferredSignature == signature ||
+        _reviewedInSession.contains(signature)) {
+      return;
+    }
+    _prompting = true;
+    var handled = signature;
+    try {
+      final saved = await _reviewStorage.loadMonthReportReview(
+        DateHelper.formatMonth(snapshot.month),
+      );
+      if (!mounted ||
+          !widget.autoPromptEnabled ||
+          ModalRoute.of(context)?.isCurrent != true) {
+        return;
+      }
+      final latest = _snapshot;
+      if (latest == null || latest.reviewSignature != signature) return;
+      snapshot = latest;
+      if (saved == signature) {
+        _reviewedInSession.add(signature);
+        return;
+      }
+      final reviewed = await MonthEndReportReviewDialog.show(
+        context: context,
+        snapshot: snapshot,
+        onRefresh: () async {
+          final synchronize = widget.synchronizeMonth;
+          if (synchronize != null) {
+            await synchronize(snapshot!.month);
+          } else {
+            await BossHoursAutoRefreshService.shared.refreshIfStale(
+              snapshot!.month,
+              force: true,
+            );
+          }
+          return _service.load(snapshot.month);
+        },
+        validate: (seen) async {
+          final current = await _service.load(seen.month);
+          return current.isReady &&
+              current.reviewSignature == seen.reviewSignature;
+        },
+      );
+      if (!mounted) return;
+      if (reviewed == null) {
+        _deferredSignature = signature;
+      } else {
+        handled = reviewed.reviewSignature;
+        await _reviewStorage.saveMonthReportReview(
+          DateHelper.formatMonth(reviewed.month),
+          handled,
+        );
+        if (!mounted) return;
+        _reviewedInSession.add(handled);
+      }
+      await refresh();
+    } catch (_) {
+      if (mounted) {
+        _deferredSignature = signature;
+        ScaffoldMessenger.maybeOf(
+          context,
+        )?.showSnackBar(const SnackBar(content: Text('月末核对暂未完成，稍后仍会提醒')));
+      }
+    } finally {
+      _prompting = false;
+      final latest = _snapshot;
+      if (mounted &&
+          widget.autoPromptEnabled &&
+          latest != null &&
+          latest.reviewSignature != handled &&
+          _deferredSignature != latest.reviewSignature &&
+          ModalRoute.of(context)?.isCurrent == true) {
+        unawaited(_maybePrompt());
+      }
+    }
+  }
+
   Future<void> _review() async {
-    if (_reviewing) return;
+    if (_reviewing || _prompting) return;
     setState(() => _reviewing = true);
     try {
       // 点开时重新核对，避免用刚过期或已变化的提示打开旧建议。

@@ -17,6 +17,7 @@ import '../utils/work_log_submit_script.dart';
 import 'storage_service.dart';
 import 'monthly_report_balance_service.dart';
 import '../models/monthly_report_balance.dart';
+import '../utils/perf_frame_probe.dart';
 
 /// 提交配置的解析结果
 class BossConstantsResolution {
@@ -613,15 +614,16 @@ class WorkLogSubmitService {
   }
 
   /// 查询该日在 BOSS 已填报的工时，取不到返回 null（未知，不等于 0）。
-  Future<double?> queryExistingHours(String dateStr) async {
-    final raw = await runScript(
-      WorkLogBossHours.buildFetchSingleDayScript(
-        dateStr: dateStr,
-        captureStoreName: _store,
-      ),
-    );
-    return WorkLogBossHours.parseSingleDay(raw);
-  }
+  Future<double?> queryExistingHours(String dateStr) =>
+      PerfFrameProbe.measure('boss.used_hours', () async {
+        final raw = await runScript(
+          WorkLogBossHours.buildFetchSingleDayScript(
+            dateStr: dateStr,
+            captureStoreName: _store,
+          ),
+        );
+        return WorkLogBossHours.parseSingleDay(raw);
+      });
 
   /// 提交前已查到的服务端合计也要通知各页面，迟到查询不能覆盖新保存。
   Future<double?> queryAndCacheExistingHours(String dateStr) async {

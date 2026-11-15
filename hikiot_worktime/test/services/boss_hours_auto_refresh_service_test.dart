@@ -8,6 +8,28 @@ import 'package:hikiot_worktime/services/storage_service.dart';
 import 'package:hikiot_worktime/services/boss_session_runner.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
+class _ChangingProofStorage extends StorageService {
+  bool changed = false;
+
+  @override
+  Future<bool> hasFreshBossHoursForDate(
+    String date, {
+    DateTime? now,
+    Duration maxAge = const Duration(minutes: 15),
+  }) async {
+    final fresh = await super.hasFreshBossHoursForDate(
+      date,
+      now: now,
+      maxAge: maxAge,
+    );
+    if (!changed) {
+      changed = true;
+      await saveBossHoursForDate('2026-09-03', 9, refreshedAt: now);
+    }
+    return fresh;
+  }
+}
+
 void main() {
   test('失效的旧单日查询不能把无缓存日期伪装为确认零工时', () async {
     SharedPreferences.setMockInitialValues({});
@@ -76,6 +98,142 @@ void main() {
     expect(result.status, BossHoursAutoRefreshStatus.fresh);
     expect(result.hours['2026-09-03'], 8);
     expect(loadCount, 0);
+  });
+
+  test('完整31日证明仍新鲜时，单日变更并确认后不重新查询整月', () async {
+    final storage = StorageService();
+    final moment = DateTime(2026, 10, 31, 18);
+    await storage.saveBossHours('2026-10', {
+      '2026-10-01': 10.2,
+    }, refreshedAt: moment.subtract(const Duration(minutes: 5)));
+    await storage.markBossHoursDateChanged('2026-10-31');
+    await storage.saveBossHoursForDate('2026-10-31', 8, refreshedAt: moment);
+    expect(await storage.hasBossHoursSynced('2026-10'), isFalse);
+    var loadCount = 0;
+    final service = BossHoursAutoRefreshService(
+      storage: storage,
+      now: () => moment,
+      loadMonth: (_) async {
+        loadCount++;
+        return {};
+      },
+    );
+
+    final result = await service.refreshIfStale(DateTime(2026, 10));
+
+    expect(loadCount, 0);
+    expect(result.status, BossHoursAutoRefreshStatus.fresh);
+    expect(result.hours, {'2026-10-01': 10.2, '2026-10-31': 8});
+  });
+
+  for (final state in ['unknown', 'expired', 'future']) {
+    test('整月最后一天证明$state时不能复用其他日期的新鲜证明', () async {
+      final storage = StorageService();
+      await storage.saveBossHours('2026-09', {}, refreshedAt: now);
+      final prefs = await SharedPreferences.getInstance();
+      final key = StorageKeys.bossHoursDateConfirmedAtKey('2026-09-30');
+      if (state == 'unknown') {
+        await prefs.remove(key);
+      } else {
+        await prefs.setString(
+          key,
+          (state == 'expired'
+                  ? now.subtract(const Duration(minutes: 15))
+                  : now.add(const Duration(seconds: 1)))
+              .toIso8601String(),
+        );
+      }
+      var loadCount = 0;
+      final service = BossHoursAutoRefreshService(
+        storage: storage,
+        now: () => now,
+        loadMonth: (_) async {
+          loadCount++;
+          return {};
+        },
+      );
+
+      expect(
+        (await service.refreshIfStale(month)).status,
+        BossHoursAutoRefreshStatus.updated,
+      );
+      expect(loadCount, 1);
+    });
+  }
+
+  for (final raw in [
+    '{broken',
+    jsonEncode({'2026-09-03': 'invalid'}),
+    jsonEncode({'2026-09-31': 8}),
+    jsonEncode({'2026-08-31': 8}),
+    jsonEncode({'2026-09-03': -1}),
+    jsonEncode({'2026-09-03': null}),
+    jsonEncode({'2026-09-03': 'NaN'}),
+    jsonEncode({'2026-09-03': 1e30}),
+  ]) {
+    test('原始缓存污染即使有新鲜整月证明也必须重查：$raw', () async {
+      final storage = StorageService();
+      await storage.saveBossHours('2026-09', {}, refreshedAt: now);
+      final prefs = await SharedPreferences.getInstance();
+      await prefs.setString(StorageKeys.bossHoursKey('2026-09'), raw);
+      var loadCount = 0;
+      final service = BossHoursAutoRefreshService(
+        storage: storage,
+        now: () => now,
+        loadMonth: (_) async {
+          loadCount++;
+          return {};
+        },
+      );
+
+      expect(
+        (await service.refreshIfStale(month)).status,
+        BossHoursAutoRefreshStatus.updated,
+      );
+      expect(loadCount, 1);
+    });
+  }
+
+  test('读取完整逐日证明期间版本变化不能返回旧缓存为fresh', () async {
+    final storage = _ChangingProofStorage();
+    await storage.saveBossHours('2026-09', {'2026-09-03': 8}, refreshedAt: now);
+    var loadCount = 0;
+    final service = BossHoursAutoRefreshService(
+      storage: storage,
+      now: () => now,
+      loadMonth: (_) async {
+        loadCount++;
+        return {'2026-09-03': 9};
+      },
+    );
+
+    final result = await service.refreshIfStale(month);
+
+    expect(result.status, BossHoursAutoRefreshStatus.updated);
+    expect(result.hours['2026-09-03'], 9);
+    expect(loadCount, 1);
+  });
+
+  test('整月标记失效但逐日证明仍完整时force仍查询网络', () async {
+    final storage = StorageService();
+    await storage.saveBossHours('2026-09', {}, refreshedAt: now);
+    await storage.markBossHoursDateChanged('2026-09-03');
+    await storage.saveBossHoursForDate('2026-09-03', 8, refreshedAt: now);
+    var loadCount = 0;
+    final service = BossHoursAutoRefreshService(
+      storage: storage,
+      now: () => now,
+      loadMonth: (_) async {
+        loadCount++;
+        return {'2026-09-03': 10.2};
+      },
+    );
+
+    final result = await service.refreshIfStale(month, force: true);
+
+    expect(result.status, BossHoursAutoRefreshStatus.updated);
+    expect(result.hours['2026-09-03'], 10.2);
+    expect(loadCount, 1);
   });
 
   test('过期后静默刷新并写回缓存与刷新时间', () async {

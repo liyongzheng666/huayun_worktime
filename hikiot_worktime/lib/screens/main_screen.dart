@@ -1,6 +1,7 @@
 import 'dart:async';
 
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import '../core/theme/theme.dart';
 import '../services/app_update_service.dart';
 import '../services/daily_attendance_repository.dart';
@@ -40,6 +41,7 @@ class MainScreen extends StatefulWidget {
 class _MainScreenState extends State<MainScreen> with WidgetsBindingObserver {
   int _currentIndex = 0;
   bool _startupReady = false;
+  bool _startupRefreshing = true;
   final AppUpdateService _appUpdateService = AppUpdateService();
 
   final GlobalKey<MonthlyCalendarScreenState> _monthlyKey = GlobalKey();
@@ -72,10 +74,9 @@ class _MainScreenState extends State<MainScreen> with WidgetsBindingObserver {
   }
 
   Future<void> _refreshVisibleBossData() async {
-    unawaited(
-      _workLogKey.currentState?.refreshBossHoursSilently() ??
-          Future<void>.value(),
-    );
+    if (_currentIndex == 2) {
+      await _workLogKey.currentState?.refreshBossHoursSilently();
+    }
     if (_currentIndex == 1) {
       await _monthlyKey.currentState?.refreshBossHoursSilently();
     }
@@ -86,43 +87,52 @@ class _MainScreenState extends State<MainScreen> with WidgetsBindingObserver {
     try {
       await _appUpdateService.cleanupStaleDownloads();
       final update = await _appUpdateService.checkForUpdate();
-      if (!mounted || update == null) return;
+      if (!mounted ||
+          update == null ||
+          ModalRoute.of(context)?.isCurrent != true) {
+        return;
+      }
       await showAppUpdateDialog(
         context: context,
         service: _appUpdateService,
         update: update,
       );
+      if (mounted) await _reportReminderKey.currentState?.refresh();
     } catch (_) {
       // 启动期检查失败必须静默，不能让 GitHub 网络影响核心功能。
     }
   }
 
   Future<void> _runStartupRefresh() async {
-    await StartupRefreshCoordinator.run(
-      initializeSession: () async {
-        await _monthlyKey.currentState?.initializeUserContext();
-      },
-      refreshDaily: () async {
-        await _dailyKey.currentState?.refreshData();
-        if (mounted) setState(() => _startupReady = true);
-      },
-      refreshMonthly: () async {
-        await _monthlyKey.currentState?.smartUpdate();
-      },
-      isMounted: () => mounted,
-      isSessionReady: () =>
-          _monthlyKey.currentState?.isUserContextReady ?? false,
-    );
-    if (!mounted) return;
-    if (!(_monthlyKey.currentState?.isUserContextReady ?? false)) {
-      // 首次资料加载失败时展示已有错误和重试入口，避免留在空白首页。
-      if (_currentIndex == 0 && ModalRoute.of(context)?.isCurrent == true) {
-        setState(() => _currentIndex = 1);
+    try {
+      await StartupRefreshCoordinator.run(
+        initializeSession: () async {
+          await _monthlyKey.currentState?.initializeUserContext();
+        },
+        refreshDaily: () async {
+          await _dailyKey.currentState?.refreshData();
+          if (mounted) setState(() => _startupReady = true);
+        },
+        refreshMonthly: () async {
+          await _monthlyKey.currentState?.smartUpdate();
+        },
+        isMounted: () => mounted,
+        isSessionReady: () =>
+            _monthlyKey.currentState?.isUserContextReady ?? false,
+      );
+      if (!mounted) return;
+      if (!(_monthlyKey.currentState?.isUserContextReady ?? false)) {
+        // 首次资料加载失败时展示已有错误和重试入口，避免留在空白首页。
+        if (_currentIndex == 0 && ModalRoute.of(context)?.isCurrent == true) {
+          setState(() => _currentIndex = 1);
+        }
+        return;
       }
-      return;
+      await _dailyKey.currentState?.refreshMonthCache();
+      await _reportReminderKey.currentState?.refresh();
+    } finally {
+      if (mounted) setState(() => _startupRefreshing = false);
     }
-    await _dailyKey.currentState?.refreshMonthCache();
-    await _reportReminderKey.currentState?.refresh();
   }
 
   Future<void> _onTabTap(int index) async {
@@ -168,74 +178,101 @@ class _MainScreenState extends State<MainScreen> with WidgetsBindingObserver {
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
 
-    return Scaffold(
-      body: MonthlyReportReminder(
-        key: _reportReminderKey,
-        service: widget.monthlyBalanceService,
-        child: IndexedStack(
-          index: _currentIndex,
-          children: [
-            DailyHoursScreen(
-              key: _dailyKey,
-              autoLoad: false,
-              dailyRepository: widget.dailyRepository,
-              isActive: _currentIndex == 0 && _startupReady,
-              onWrapUpAction: _openWrapUpTask,
-            ),
-            MonthlyCalendarScreen(
-              key: _monthlyKey,
-              token: widget.token,
-              autoInitialize: false,
-              apiClient: widget.apiClient,
-            ),
-            WorkLogScreen(
-              key: _workLogKey,
-              monthlyBalanceService: widget.monthlyBalanceService,
-            ),
-            SettingsScreen(
-              onRestartOnboarding: () {
-                unawaited(_onTabTap(0));
-                _dailyKey.currentState?.showOnboarding();
-              },
-            ),
-          ],
-        ),
+    final dark = theme.brightness == Brightness.dark;
+    return AnnotatedRegion<SystemUiOverlayStyle>(
+      key: const ValueKey('workbench-system-bars'),
+      value: SystemUiOverlayStyle(
+        statusBarColor: Colors.transparent,
+        statusBarBrightness: dark ? Brightness.dark : Brightness.light,
+        statusBarIconBrightness: dark ? Brightness.light : Brightness.dark,
+        systemNavigationBarColor: theme.colorScheme.surface,
+        systemNavigationBarIconBrightness: dark
+            ? Brightness.light
+            : Brightness.dark,
       ),
-      bottomNavigationBar: PlatformCapabilities.supportsTodayWrapUp
-          ? _buildIosNavigation()
-          : Container(
-              decoration: BoxDecoration(
-                color: theme.colorScheme.surface,
-                boxShadow: [
-                  BoxShadow(
-                    color: AppColors.shadow,
-                    blurRadius: 8,
-                    offset: const Offset(0, -2),
-                  ),
-                ],
+      child: Scaffold(
+        body: MonthlyReportReminder(
+          key: _reportReminderKey,
+          service: widget.monthlyBalanceService,
+          autoPromptEnabled: _startupReady && !_startupRefreshing,
+          child: IndexedStack(
+            index: _currentIndex,
+            children: [
+              TickerMode(
+                enabled: _currentIndex == 0,
+                child: DailyHoursScreen(
+                  key: _dailyKey,
+                  autoLoad: false,
+                  dailyRepository: widget.dailyRepository,
+                  isActive: _currentIndex == 0 && _startupReady,
+                  onWrapUpAction: _openWrapUpTask,
+                ),
               ),
-              child: SafeArea(
-                child: Padding(
-                  padding: const EdgeInsets.symmetric(
-                    horizontal: 8,
-                    vertical: 8,
-                  ),
-                  child: Row(
-                    mainAxisAlignment: MainAxisAlignment.spaceAround,
-                    children: [
-                      _buildNavItem(0, Icons.today, '每日工时'),
-                      _buildNavItem(1, Icons.calendar_month, '月度统计'),
-                      _buildNavItem(2, Icons.edit_note, '工作日志'),
-                      _buildNavItem(3, Icons.settings, '设置'),
-                    ],
+              TickerMode(
+                enabled: _currentIndex == 1,
+                child: MonthlyCalendarScreen(
+                  key: _monthlyKey,
+                  token: widget.token,
+                  autoInitialize: false,
+                  apiClient: widget.apiClient,
+                ),
+              ),
+              TickerMode(
+                enabled: _currentIndex == 2,
+                child: WorkLogScreen(
+                  key: _workLogKey,
+                  isActive: _currentIndex == 2,
+                  monthlyBalanceService: widget.monthlyBalanceService,
+                ),
+              ),
+              TickerMode(
+                enabled: _currentIndex == 3,
+                child: SettingsScreen(
+                  onRestartOnboarding: () {
+                    unawaited(_onTabTap(0));
+                    _dailyKey.currentState?.showOnboarding();
+                  },
+                ),
+              ),
+            ],
+          ),
+        ),
+        bottomNavigationBar: PlatformCapabilities.supportsTodayWrapUp
+            ? _buildWorkbenchNavigation()
+            : Container(
+                decoration: BoxDecoration(
+                  color: theme.colorScheme.surface,
+                  boxShadow: [
+                    BoxShadow(
+                      color: AppColors.shadow,
+                      blurRadius: 8,
+                      offset: const Offset(0, -2),
+                    ),
+                  ],
+                ),
+                child: SafeArea(
+                  child: Padding(
+                    padding: const EdgeInsets.symmetric(
+                      horizontal: 8,
+                      vertical: 8,
+                    ),
+                    child: Row(
+                      mainAxisAlignment: MainAxisAlignment.spaceAround,
+                      children: [
+                        _buildNavItem(0, Icons.today, '每日工时'),
+                        _buildNavItem(1, Icons.calendar_month, '月度统计'),
+                        _buildNavItem(2, Icons.edit_note, '工作日志'),
+                        _buildNavItem(3, Icons.settings, '设置'),
+                      ],
+                    ),
                   ),
                 ),
               ),
-            ),
+      ),
     );
   }
 
-  Widget _buildIosNavigation() {
+  Widget _buildWorkbenchNavigation() {
     final colors = Theme.of(context).colorScheme;
     const labels = ['今日', '月度', '日志', '我的'];
     const icons = [

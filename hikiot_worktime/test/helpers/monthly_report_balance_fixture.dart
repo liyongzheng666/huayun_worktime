@@ -24,6 +24,7 @@ class MonthlyBalanceFixture {
           'checkOut': '19:00',
         },
     });
+    await storage.saveMonthlyHoursCalculationVersion('test-team', '2026-09');
     await storage.saveBossHours('2026-09', {}, refreshedAt: now);
   }
 }

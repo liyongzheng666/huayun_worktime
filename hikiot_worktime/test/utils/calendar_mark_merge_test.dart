@@ -1,9 +1,33 @@
 import 'package:flutter_test/flutter_test.dart';
 import 'package:hikiot_worktime/core/constants/constants.dart';
 import 'package:hikiot_worktime/utils/calendar_mark_merge.dart';
+import 'package:hikiot_worktime/utils/smart_day_type_helper.dart';
 
 void main() {
   group('CalendarMarkMerge', () {
+    test('已确认API工时和类型优先于旧自动标记，包括明确的零工时', () {
+      for (final hours in [10.2, 0.0]) {
+        final type = hours > 0
+            ? AppConstants.typeOvertime
+            : AppConstants.typeLeave;
+        final apiDay = <String, dynamic>{
+          'hours': hours,
+          'apiHours': hours,
+          'type': type,
+          SmartDayTypeHelper.dataSourceStatusKey:
+              SmartDayTypeHelper.dataSourceStatusApiConfirmed,
+        };
+        final result = CalendarMarkMerge.applyMark(apiDay, {
+          'type': AppConstants.typeWorkday,
+          'hours': 10.19,
+          'isManual': false,
+        });
+        expect(result['hours'], hours);
+        expect(result['type'], type);
+        expect(result['isManual'], isFalse);
+      }
+    });
+
     test(
       'keeps an automatic leave mark when API still has no work evidence',
       () {

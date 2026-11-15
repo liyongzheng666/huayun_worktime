@@ -3,6 +3,7 @@ import 'dart:convert';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:hikiot_worktime/core/constants/constants.dart';
 import 'package:hikiot_worktime/models/monthly_report_balance.dart';
+import 'package:hikiot_worktime/services/monthly_attendance_repository.dart';
 import 'package:hikiot_worktime/services/monthly_report_balance_service.dart';
 import 'package:hikiot_worktime/services/storage_service.dart';
 import 'package:hikiot_worktime/utils/date_helper.dart';
@@ -68,11 +69,87 @@ void main() {
   Future<void> seed({Map<String, double> reported = const {}}) async {
     await storage.saveTeamContext(teamNo: team);
     await storage.saveMonthlyData(team, '2026-09', actual);
+    await storage.saveMonthlyHoursCalculationVersion(team, '2026-09');
     await storage.saveBossHours('2026-09', reported, refreshedAt: now);
   }
 
   MonthlyReportBalanceService service() =>
       MonthlyReportBalanceService(storage: storage, clock: () => now);
+
+  test('旧精度考勤缓存不用于推荐，并明确要求全量同步', () async {
+    hours(1, 10.19);
+    await storage.saveTeamContext(teamNo: team);
+    await storage.saveMonthlyData(team, '2026-09', actual);
+    await storage.saveBossHours('2026-09', {}, refreshedAt: now);
+
+    final result = await service().load(month);
+
+    expect(result.isReady, isFalse);
+    expect(result.plan, isNull);
+    expect(result.unavailableReason, '精度已升级，请全量同步本月考勤后再核对');
+    expect(
+      (await storage.loadMonthlyData(team, '2026-09'))!['2026-09-01']!['hours'],
+      10.19,
+    );
+  });
+
+  test('完整重算和建议复读都不让旧自动标记10.19覆盖新API10.20，手工覆盖保留', () async {
+    await storage.saveTeamContext(teamNo: team);
+    hours(1, 10.19);
+    await storage.saveMonthlyData(team, '2026-09', actual);
+    await storage.saveSingleCalendarMark(team, '2026-09-01', {
+      'type': AppConstants.typeOvertime,
+      'isManual': false,
+      'hours': 10.19,
+    });
+    await storage.saveSingleCalendarMark(team, '2026-09-02', {
+      'type': AppConstants.typeWorkday,
+      'isManual': true,
+      'hours': 7.5,
+    });
+    await storage.saveBossHours('2026-09', {}, refreshedAt: now);
+    final repository = MonthlyAttendanceRepository(
+      storage: storage,
+      loadMonthlyAttendance: (_, _) async => {
+        'dailyRecords': [
+          {
+            'date': '2026-09-01',
+            'hours': 10.2,
+            'checkIn': '08:00',
+            'checkOut': '19:12',
+            'isRestDay': true,
+          },
+          {
+            'date': '2026-09-02',
+            'hours': 8.0,
+            'checkIn': '09:00',
+            'checkOut': '18:00',
+          },
+          {'date': '2026-09-03', 'hours': 0.0},
+        ],
+      },
+      loadDailyAttendance: (_, _) async => null,
+    );
+
+    final recalculated = await repository.loadMonth(
+      teamNo: team,
+      personNo: 'test-person',
+      selectedMonth: month,
+    );
+    final snapshot = await service().load(month);
+
+    expect(snapshot.isReady, isTrue, reason: snapshot.unavailableReason);
+    expect(snapshot.plan!.actualTotal, 1770);
+    expect(recalculated.monthlyData['2026-09-01']!['hours'], 10.2);
+    expect(recalculated.monthlyData['2026-09-01']!['apiHours'], 10.2);
+    expect(recalculated.monthlyData['2026-09-02']!['hours'], 7.5);
+    expect(recalculated.monthlyData['2026-09-02']!['isManual'], isTrue);
+    expect(
+      (await storage.loadCalendarMarks(team))['2026-09-01']!['hours'],
+      10.19,
+      reason: '无需删除旧标记，所有复读路径均须遵守最新API事实',
+    );
+  });
 
   test('真实缓存汇总三个待填日期，整数口径给出10.40且不改考勤', () async {
     hours(1, 10.42);
@@ -138,6 +215,7 @@ void main() {
     hours(1, 10);
     await storage.saveTeamContext(teamNo: team);
     await storage.saveMonthlyData(team, '2026-09', actual);
+    await storage.saveMonthlyHoursCalculationVersion(team, '2026-09');
     await storage.saveBossHoursForDate('2026-09-01', 0, refreshedAt: now);
     expect((await service().load(month)).unavailableReason, contains('状态待确认'));
     await storage.saveBossHours(

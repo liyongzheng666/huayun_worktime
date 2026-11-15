@@ -130,46 +130,51 @@ void main() {
     expect(tester.takeException(), isNull);
   }
 
-  testWidgets('Android 首页不展示今日卡，也不读取素材或查询 BOSS', (tester) async {
+  testWidgets('Android 首页展示统一工作台并只查询当前日汇总', (tester) async {
     PlatformCapabilities.debugOverride =
         const PlatformCapabilitiesOverride.android();
     await pumpScreen(tester);
-    expect(find.byType(IosWorkbench), findsNothing);
-    expect(service.cacheCalls, 0);
-    expect(service.queryCalls, 0);
+    expect(find.byType(IosWorkbench), findsOneWidget);
+    expect(service.cacheCalls, 1);
+    expect(service.queryCalls, 1);
     await disposeScreen(tester);
   });
 
-  testWidgets('iOS 今日 CTA 传递当前日期，等待处理期间不重复调用', (tester) async {
-    service.hours = 0;
-    final actionDone = Completer<void>();
-    final actions = <TodayWrapUpAction>[];
-    final dates = <DateTime>[];
-    await pumpScreen(
-      tester,
-      onAction: (action, date) {
-        actions.add(action);
-        dates.add(date);
-        return actionDone.future;
-      },
-    );
-    expect(find.byType(IosWorkbench), findsOneWidget);
-    expect(find.text('检查并提交'), findsOneWidget);
-    final button = find.descendant(
-      of: find.byType(IosWorkbench),
-      matching: find.byType(FilledButton),
-    );
-    await tester.tap(button);
-    await tester.pump();
-    await tester.tap(button);
-    expect(actions, [TodayWrapUpAction.reviewLog]);
-    expect(DateHelper.isSameDay(dates.single, now), isTrue);
-    expect(tester.widget<FilledButton>(button).onPressed, isNull);
-    actionDone.complete();
-    await flush(tester);
-    expect(service.queryCalls, 2);
-    await disposeScreen(tester);
-  });
+  for (final platform in ['Android', 'iOS']) {
+    testWidgets('$platform 今日 CTA 传递当前日期，等待处理期间不重复调用', (tester) async {
+      PlatformCapabilities.debugOverride = platform == 'Android'
+          ? const PlatformCapabilitiesOverride.android()
+          : const PlatformCapabilitiesOverride.ios();
+      service.hours = 0;
+      final actionDone = Completer<void>();
+      final actions = <TodayWrapUpAction>[];
+      final dates = <DateTime>[];
+      await pumpScreen(
+        tester,
+        onAction: (action, date) {
+          actions.add(action);
+          dates.add(date);
+          return actionDone.future;
+        },
+      );
+      expect(find.byType(IosWorkbench), findsOneWidget);
+      expect(find.text('检查并提交'), findsOneWidget);
+      final button = find.descendant(
+        of: find.byType(IosWorkbench),
+        matching: find.byType(FilledButton),
+      );
+      await tester.tap(button);
+      await tester.pump();
+      await tester.tap(button);
+      expect(actions, [TodayWrapUpAction.reviewLog]);
+      expect(DateHelper.isSameDay(dates.single, now), isTrue);
+      expect(tester.widget<FilledButton>(button).onPressed, isNull);
+      actionDone.complete();
+      await flush(tester);
+      expect(service.queryCalls, 2);
+      await disposeScreen(tester);
+    });
+  }
 
   testWidgets('首页静置 15 分钟后主动将已提交状态降为待确认', (tester) async {
     await pumpScreen(tester);

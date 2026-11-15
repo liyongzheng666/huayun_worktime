@@ -114,7 +114,7 @@ class DailyHoursScreenState extends State<DailyHoursScreen>
 
   @override
   void didChangeAppLifecycleState(AppLifecycleState state) {
-    if (state == AppLifecycleState.resumed) {
+    if (state == AppLifecycleState.resumed && widget.isActive) {
       _loadDailyData();
     }
   }

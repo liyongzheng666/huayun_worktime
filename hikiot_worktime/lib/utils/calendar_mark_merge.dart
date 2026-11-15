@@ -1,4 +1,5 @@
 import '../core/constants/constants.dart';
+import 'smart_day_type_helper.dart';
 import 'work_time_calculator.dart';
 
 class CalendarMarkMerge {
@@ -13,6 +14,17 @@ class CalendarMarkMerge {
     final isManual = markData.containsKey('isManual')
         ? markData['isManual'] == true
         : true;
+
+    // 自动标记只是旧API事实的派生缓存。已有明确确认的新API行时，
+    // 类型和工时均以该行为准，不能让旧算法的10.19再次覆盖重算后的10.20。
+    if (!isManual &&
+        SmartDayTypeHelper.parseDataSourceStatus(
+              result[SmartDayTypeHelper.dataSourceStatusKey],
+            ) ==
+            DayDataSourceStatus.apiConfirmed) {
+      result['isManual'] = false;
+      return result;
+    }
 
     // 自动请假只是根据当时的空打卡事实推断出来的缓存结论。
     // 后续 API 如果已经确认有工时或打卡，必须以最新 API 事实为准。

@@ -66,6 +66,56 @@ void main() {
     await HapticUtils.setMode(HapticMode.advanced);
   });
 
+  testWidgets('隐藏日志页不预加载，激活后由主框架刷新才各查询一次', (tester) async {
+    var workHoursRequests = 0;
+    var bossRequests = 0;
+    final active = ValueNotifier(false);
+    addTearDown(active.dispose);
+    final repository = WorkLogRepository(
+      loadWorkHours: (_) async {
+        workHoursRequests++;
+        return const WorkLogHours(hours: 8);
+      },
+    );
+    final bossRefresh = BossHoursAutoRefreshService(
+      loadDay: (_) async {
+        bossRequests++;
+        return const BossSessionResult(BossSessionStatus.ok, 6.5);
+      },
+    );
+    await tester.binding.setSurfaceSize(const Size(900, 1300));
+    addTearDown(() => tester.binding.setSurfaceSize(null));
+    await tester.pumpWidget(
+      MaterialApp(
+        home: ValueListenableBuilder<bool>(
+          valueListenable: active,
+          builder: (context, isActive, child) => WorkLogScreen(
+            isActive: isActive,
+            repository: repository,
+            bossAutoRefresh: bossRefresh,
+          ),
+        ),
+      ),
+    );
+    await tester.pumpAndSettle();
+    expect(workHoursRequests, 0);
+    expect(bossRequests, 0);
+
+    active.value = true;
+    await tester.pumpAndSettle();
+    expect(workHoursRequests, 0);
+    expect(bossRequests, 0);
+
+    await tester
+        .state<WorkLogScreenState>(find.byType(WorkLogScreen))
+        .refreshData();
+    await tester.pumpAndSettle();
+    expect(workHoursRequests, 1);
+    expect(bossRequests, 1);
+    expect(reportedText(tester), '6.50 小时');
+    expect(tester.takeException(), isNull);
+  });
+
   testWidgets('打开日志自动核对所选日期，已填报与打卡工时分别展示', (tester) async {
     final requested = <String>[];
     await pumpLog(tester, (date) async {

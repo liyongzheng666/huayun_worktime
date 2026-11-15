@@ -1,6 +1,7 @@
 import '../utils/date_helper.dart';
 import '../utils/work_log_boss_hours.dart';
 import '../utils/work_log_request_capture.dart';
+import '../utils/perf_frame_probe.dart';
 import 'boss_session_runner.dart';
 import 'storage_service.dart';
 import 'work_log_submit_service.dart';
@@ -75,16 +76,13 @@ class BossHoursAutoRefreshService {
     var cached = <String, double>{};
     try {
       final now = _now();
+      final cachedRevision = StorageService.bossHoursRevision;
       cached = await _storage.loadBossHours(monthKey);
       if (!force) {
-        final refreshedAt = await _storage.loadBossHoursRefreshedAt(monthKey);
-        final cacheAge = refreshedAt == null
-            ? null
-            : now.difference(refreshedAt);
-        if (await _storage.hasBossHoursSynced(monthKey) &&
-            cacheAge != null &&
-            !cacheAge.isNegative &&
-            cacheAge < maxAge) {
+        // 单日提交会撤销整月标记，但重新确认后逐日证明仍可能完整有效。
+        // 不依赖宽松解析后的空表或旧月份时间戳，逐日确认后才复用缓存。
+        if (await _hasFreshMonthProofs(month, monthKey, now) &&
+            cachedRevision == StorageService.bossHoursRevision) {
           return BossHoursAutoRefreshResult(
             status: BossHoursAutoRefreshStatus.fresh,
             hours: cached,
@@ -131,6 +129,26 @@ class BossHoursAutoRefreshService {
         hours: cached,
       );
     }
+  }
+
+  Future<bool> _hasFreshMonthProofs(
+    DateTime month,
+    String monthKey,
+    DateTime now,
+  ) async {
+    if (!await _storage.hasValidBossHoursCache(monthKey)) return false;
+    final days = DateTime(month.year, month.month + 1, 0).day;
+    for (var day = 1; day <= days; day++) {
+      final date = '$monthKey-${day.toString().padLeft(2, '0')}';
+      if (!await _storage.hasFreshBossHoursForDate(
+        date,
+        now: now,
+        maxAge: maxAge,
+      )) {
+        return false;
+      }
+    }
+    return true;
   }
 
   /// 打开日志或提交后查询指定日期。强制刷新等待旧查询结束，再启动新查询。
@@ -189,18 +207,19 @@ class BossHoursAutoRefreshService {
         ).queryExistingHours(DateHelper.formatDate(date)),
       );
 
-  static Future<Map<String, double>?> _defaultLoadMonth(DateTime month) async {
-    final result = await BossSessionRunner.run<String>((controller) async {
-      final raw = await controller.evaluateJavascript(
-        source: WorkLogBossHours.buildFetchMonthScript(
-          year: month.year,
-          month: month.month,
-          captureStoreName: WorkLogRequestCapture.storeName,
-        ),
-      );
-      return raw?.toString();
-    }, timeout: const Duration(seconds: 25));
-    if (!result.isOk) return null;
-    return WorkLogBossHours.parseSuccessfulResult(result.value);
-  }
+  static Future<Map<String, double>?> _defaultLoadMonth(DateTime month) =>
+      PerfFrameProbe.measure('boss.month.query', () async {
+        final result = await BossSessionRunner.run<String>((controller) async {
+          final raw = await controller.evaluateJavascript(
+            source: WorkLogBossHours.buildFetchMonthScript(
+              year: month.year,
+              month: month.month,
+              captureStoreName: WorkLogRequestCapture.storeName,
+            ),
+          );
+          return raw?.toString();
+        }, timeout: const Duration(seconds: 25));
+        if (!result.isOk) return null;
+        return WorkLogBossHours.parseSuccessfulResult(result.value);
+      });
 }

@@ -5,10 +5,226 @@ import 'package:hikiot_worktime/services/storage_service.dart';
 import 'package:hikiot_worktime/utils/smart_day_type_helper.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
+class _FailingMonthlyStorage extends StorageService {
+  @override
+  Future<void> saveMonthlyData(
+    String teamNo,
+    String monthKey,
+    Map<String, Map<String, dynamic>> data,
+  ) async {
+    throw StateError('test persistence failed');
+  }
+}
+
 void main() {
   group('MonthlyAttendanceRepository', () {
     setUp(() {
       SharedPreferences.setMockInitialValues({});
+    });
+
+    test('旧精度缓存惰性重算，不能把10.19当新版10.20继续复用', () async {
+      final storage = StorageService();
+      await storage.saveMonthlyData('team-1', '2026-06', {
+        '2026-06-01': {
+          'hours': 10.19,
+          'apiHours': 10.19,
+          'type': AppConstants.typeWorkday,
+        },
+      });
+      await storage.saveSingleCalendarMark('team-1', '2026-06-02', {
+        'type': AppConstants.typeBusinessTrip,
+        'isManual': true,
+      });
+      var apiCalls = 0;
+      final repository = MonthlyAttendanceRepository(
+        storage: storage,
+        loadMonthlyAttendance: (_, _) async {
+          apiCalls++;
+          return {
+            'dailyRecords': [
+              {'date': '2026-06-01', 'hours': 10.2},
+            ],
+          };
+        },
+        loadDailyAttendance: (_, _) async => null,
+      );
+
+      final result = await repository.loadMonth(
+        teamNo: 'team-1',
+        personNo: 'person-1',
+        selectedMonth: DateTime(2026, 6),
+      );
+
+      expect(apiCalls, 1);
+      expect(result.source, MonthlyAttendanceLoadSource.api);
+      expect(result.monthlyData['2026-06-01']?['hours'], 10.2);
+      expect(result.monthlyData['2026-06-01']?['apiHours'], 10.2);
+      expect(result.monthlyData.length, 30);
+      expect(result.monthlyData['2026-06-02']?['isManual'], isTrue);
+      expect(
+        result.monthlyData['2026-06-02']?['hours'],
+        AppConstants.businessTripHours,
+      );
+      expect(
+        await storage.loadMonthlyHoursCalculationVersion('team-1', '2026-06'),
+        StorageService.monthlyHoursCalculationVersion,
+      );
+      expect(
+        (await storage.loadMonthlyData(
+          'team-1',
+          '2026-06',
+        ))?['2026-06-01']?['hours'],
+        10.2,
+      );
+      expect(
+        (await repository.loadMonth(
+          teamNo: 'team-1',
+          personNo: 'person-1',
+          selectedMonth: DateTime(2026, 6),
+        )).source,
+        MonthlyAttendanceLoadSource.memoryCache,
+      );
+      expect(apiCalls, 1);
+    });
+
+    test('旧版本迁移网络失败保留原月缓存、登录和手工标记', () async {
+      final storage = StorageService();
+      final old = {
+        '2026-06-01': {'hours': 10.19, 'apiHours': 10.19},
+      };
+      final mark = {'type': AppConstants.typeBusinessTrip, 'isManual': true};
+      await storage.saveMonthlyData('team-1', '2026-06', old);
+      await storage.saveMonthlyHoursCalculationVersion(
+        'team-1',
+        '2026-06',
+        version: 1,
+      );
+      await storage.saveSingleCalendarMark('team-1', '2026-06-02', mark);
+      final prefs = await SharedPreferences.getInstance();
+      await prefs.setString(StorageKeys.token, 'test-login-kept');
+      var calls = 0;
+      final repository = MonthlyAttendanceRepository(
+        storage: storage,
+        loadMonthlyAttendance: (_, _) async {
+          calls++;
+          expect(await storage.loadMonthlyData('team-1', '2026-06'), old);
+          return null;
+        },
+        loadDailyAttendance: (_, _) async => null,
+      );
+
+      await expectLater(
+        repository.loadMonth(
+          teamNo: 'team-1',
+          personNo: 'person-1',
+          selectedMonth: DateTime(2026, 6),
+        ),
+        throwsException,
+      );
+
+      expect(calls, 1);
+      expect(await storage.loadMonthlyData('team-1', '2026-06'), old);
+      expect(
+        await storage.loadMonthlyHoursCalculationVersion('team-1', '2026-06'),
+        1,
+      );
+      expect((await storage.loadCalendarMarks('team-1'))['2026-06-02'], mark);
+      expect(prefs.getString(StorageKeys.token), 'test-login-kept');
+    });
+
+    test('单日手工写入和内存缓存不把旧月份其余日升级为新版', () async {
+      final storage = StorageService();
+      final old = {
+        '2026-06-01': {'hours': 10.19, 'apiHours': 10.19},
+        '2026-06-02': {'hours': 8.0, 'apiHours': 8.0},
+      };
+      await storage.saveMonthlyData('team-1', '2026-06', old);
+      var calls = 0;
+      final repository = MonthlyAttendanceRepository(
+        storage: storage,
+        loadMonthlyAttendance: (_, _) async {
+          calls++;
+          return {'dailyRecords': <dynamic>[]};
+        },
+        loadDailyAttendance: (_, _) async => null,
+      );
+      await repository.saveDaySettings(
+        teamNo: 'team-1',
+        selectedMonth: DateTime(2026, 6),
+        currentData: old,
+        dateStr: '2026-06-02',
+        type: AppConstants.typeBusinessTrip,
+        isOvertime: false,
+        isCustomHours: false,
+        customCheckIn: '09:00',
+        customCheckOut: '18:00',
+      );
+      expect(
+        await storage.loadMonthlyHoursCalculationVersion('team-1', '2026-06'),
+        isNull,
+      );
+      expect(
+        (await storage.loadMonthlyData(
+          'team-1',
+          '2026-06',
+        ))?['2026-06-01']?['hours'],
+        10.19,
+      );
+
+      final result = await repository.loadMonth(
+        teamNo: 'team-1',
+        personNo: 'person-1',
+        selectedMonth: DateTime(2026, 6),
+      );
+
+      expect(calls, 1);
+      expect(result.source, MonthlyAttendanceLoadSource.api);
+      expect(result.monthlyData['2026-06-02']?['isManual'], isTrue);
+    });
+
+    test('全月重算落盘失败不得先升级版本或缓存到内存', () async {
+      final seedStorage = StorageService();
+      final old = {
+        '2026-06-01': {'hours': 10.19, 'apiHours': 10.19},
+      };
+      await seedStorage.saveMonthlyData('team-1', '2026-06', old);
+      await seedStorage.saveMonthlyHoursCalculationVersion(
+        'team-1',
+        '2026-06',
+        version: 1,
+      );
+      final storage = _FailingMonthlyStorage();
+      var calls = 0;
+      final repository = MonthlyAttendanceRepository(
+        storage: storage,
+        loadMonthlyAttendance: (_, _) async {
+          calls++;
+          return {
+            'dailyRecords': [
+              {'date': '2026-06-01', 'hours': 10.2},
+            ],
+          };
+        },
+        loadDailyAttendance: (_, _) async => null,
+      );
+
+      for (var attempt = 0; attempt < 2; attempt++) {
+        await expectLater(
+          repository.loadMonth(
+            teamNo: 'team-1',
+            personNo: 'person-1',
+            selectedMonth: DateTime(2026, 6),
+          ),
+          throwsStateError,
+        );
+      }
+
+      expect(calls, 2);
+      expect(await storage.loadMonthlyData('team-1', '2026-06'), old);
+      expect(
+        await storage.loadMonthlyHoursCalculationVersion('team-1', '2026-06'),
+        1,
+      );
     });
 
     test(
@@ -22,6 +238,8 @@ void main() {
             'isManual': false,
           },
         });
+
+        await storage.saveMonthlyHoursCalculationVersion('team-1', '2026-06');
 
         var apiCalled = false;
         final repository = MonthlyAttendanceRepository(
@@ -261,6 +479,10 @@ void main() {
 
         final cached = await storage.loadMonthlyData('team-1', '2026-06');
         expect(cached?['2026-06-08']?['hours'], 8.5);
+        expect(
+          await storage.loadMonthlyHoursCalculationVersion('team-1', '2026-06'),
+          isNull,
+        );
       },
     );
 

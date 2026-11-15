@@ -11,6 +11,7 @@
 
 ## 发布与升级约束
 
+- Android 与 iOS 统一工作台、导航、主题与工时业务规则；仅后台提醒、保活、安装更新等必要系统能力按平台区分，不再维护两套产品界面。
 - 源码长期维护在公开 GitHub 仓库 `liyongzheng666/huayun_worktime`。
 - Android 仅作为公司内部软件分发，不走 Google Play 或其他应用商店。
 - GitHub Releases 是 Android 安装包和版本信息的唯一权威发布源；普通使用者不拉取源码自行编译。

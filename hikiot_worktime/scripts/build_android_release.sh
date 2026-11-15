@@ -32,7 +32,7 @@ export HUAYUN_ANDROID_KEY_PASSWORD="${HUAYUN_ANDROID_KEY_PASSWORD:-${HUAYUN_ANDR
 cd "${PROJECT_DIR}"
 flutter build apk --release "$@"
 
-readonly APP_VERSION="$(awk '/^version: / { print $2; exit }' pubspec.yaml)"
+readonly APP_VERSION="$(awk '/^version: / { print $2; exit }' pubspec.yaml | tr -d '\r')"
 readonly OUTPUT_DIR="${PROJECT_DIR}/build/app/outputs/flutter-apk"
 readonly SOURCE_APK="${OUTPUT_DIR}/app-release.apk"
 readonly DISTRIBUTION_APK="${OUTPUT_DIR}/huayun-worktime-v${APP_VERSION}.apk"

@@ -1,7 +1,5 @@
 import 'dart:convert';
 
-import 'package:shared_preferences/shared_preferences.dart';
-
 import '../core/constants/constants.dart';
 import '../models/monthly_report_balance.dart';
 import '../utils/calendar_mark_merge.dart';
@@ -9,6 +7,7 @@ import '../utils/date_helper.dart';
 import '../utils/smart_day_type_helper.dart';
 import '../utils/work_time_calculator.dart';
 import '../utils/decimal_hours.dart';
+import '../utils/perf_frame_probe.dart';
 import 'storage_service.dart';
 
 /// 一次完整的月度核对结果；不可用与已核对无差额是不同状态。
@@ -21,6 +20,7 @@ class MonthlyReportSnapshot {
     required this.fingerprint,
     this.plan,
     this.unavailableReason,
+    this.reviewScope,
   });
 
   final DateTime month;
@@ -29,15 +29,31 @@ class MonthlyReportSnapshot {
   final MonthlyReportPlan? plan;
   final String? unavailableReason;
   final int bossRevision;
+  final String? reviewScope;
 
   /// 仅包含日期、工时和核对状态，不含账号凭据。
   final String fingerprint;
 
   bool get isReady => plan != null && unavailableReason == null;
 
+  bool get isMonthEnd =>
+      !DateTime(asOf.year, asOf.month, asOf.day).isBefore(lastWorkday);
+
+  /// 核对收据对应用户看到的摘要，排除易变的缓存版本/刷新时间。
+  String get reviewSignature => jsonEncode([
+    reviewScope,
+    DateHelper.formatMonth(month),
+    DateHelper.formatDate(lastWorkday),
+    isReady,
+    unavailableReason,
+    plan?.actualTotal,
+    plan?.reportedTotal,
+    plan?.problem?.name,
+    plan?.pendingActual.length,
+  ]);
+
   bool get showMonthEndReminder {
-    final today = DateTime(asOf.year, asOf.month, asOf.day);
-    if (today.isBefore(lastWorkday)) return false;
+    if (!isMonthEnd) return false;
     return !isReady ||
         plan!.problem != null ||
         plan!.remainder > 0 ||
@@ -76,7 +92,13 @@ class MonthlyReportBalanceService {
     return DecimalHours.tryHundredths(value);
   }
 
-  Future<MonthlyReportSnapshot> load(DateTime month, {DateTime? now}) async {
+  Future<MonthlyReportSnapshot> load(DateTime month, {DateTime? now}) =>
+      PerfFrameProbe.measure(
+        'monthly_balance.load',
+        () => _load(month, now: now),
+      );
+
+  Future<MonthlyReportSnapshot> _load(DateTime month, {DateTime? now}) async {
     final normalizedMonth = DateTime(month.year, month.month);
     final moment = now ?? _clock();
     final today = DateHelper.getWorkDate(now: moment);
@@ -85,6 +107,7 @@ class MonthlyReportBalanceService {
     final revision = StorageService.bossHoursRevision;
     var lastWorkday = monthEnd;
     String? team;
+    String? person;
 
     MonthlyReportSnapshot unavailable(String reason) => MonthlyReportSnapshot(
       month: normalizedMonth,
@@ -93,10 +116,12 @@ class MonthlyReportBalanceService {
       bossRevision: revision,
       fingerprint: jsonEncode([team, monthKey, reason, revision]),
       unavailableReason: reason,
+      reviewScope: team == null ? null : jsonEncode([team, person]),
     );
 
     try {
       team = await _storage.loadTeamNo();
+      person = await _storage.loadPersonNo();
       final holidayPlan = await _storage.getHolidayPlan(month.year);
       final marks = team == null
           ? <String, Map<String, dynamic>>{}
@@ -159,12 +184,16 @@ class MonthlyReportBalanceService {
       if (team == null || team.isEmpty || cached == null) {
         return unavailable('请先同步本月考勤，实际工时尚未完整');
       }
+      if (await _storage.loadMonthlyHoursCalculationVersion(team, monthKey) !=
+          StorageService.monthlyHoursCalculationVersion) {
+        return unavailable('精度已升级，请全量同步本月考勤后再核对');
+      }
       if (cached.keys.any((key) => !_isDateInMonth(key, monthKey))) {
         return unavailable('考勤缓存日期异常，请重新同步本月考勤');
       }
 
       // 原有读取器会滤掉无法解析的值；平衡不能把被滤掉的污染记录当成0。
-      if (!await _reportedCacheIsValid(monthKey)) {
+      if (!await _storage.hasValidBossHoursCache(monthKey)) {
         return unavailable('华天已填工时缓存不完整或异常，请重新同步本月工时');
       }
       final boss = await _storage.loadBossHours(monthKey);
@@ -226,7 +255,8 @@ class MonthlyReportBalanceService {
           reported[key] = reportedValue;
         }
       }
-      if (team != await _storage.loadTeamNo()) {
+      if (team != await _storage.loadTeamNo() ||
+          person != await _storage.loadPersonNo()) {
         return unavailable('读取期间团队已切换，请刷新建议');
       }
       if (revision != StorageService.bossHoursRevision) {
@@ -241,9 +271,11 @@ class MonthlyReportBalanceService {
         asOf: moment,
         lastWorkday: lastWorkday,
         plan: plan,
+        reviewScope: jsonEncode([team, person]),
         bossRevision: revision,
         fingerprint: jsonEncode([
           team,
+          person,
           monthKey,
           DateHelper.formatDate(end),
           DateHelper.formatDate(lastWorkday),
@@ -262,25 +294,6 @@ class MonthlyReportBalanceService {
     if (!snapshot.isReady) return false;
     final current = await load(snapshot.month);
     return current.isReady && current.fingerprint == snapshot.fingerprint;
-  }
-
-  static Future<bool> _reportedCacheIsValid(String monthKey) async {
-    final prefs = await SharedPreferences.getInstance();
-    final raw = prefs.getString(StorageKeys.bossHoursKey(monthKey));
-    if (raw == null) return false;
-    final decoded = jsonDecode(raw);
-    if (decoded is! Map) return false;
-    for (final entry in decoded.entries) {
-      if (entry.key is! String || !_isDateInMonth(entry.key, monthKey)) {
-        return false;
-      }
-      final value = entry.value;
-      final parsed = value is String ? num.tryParse(value) : value;
-      if (parseHundredths(parsed, enforceDailyLimit: false) == null) {
-        return false;
-      }
-    }
-    return true;
   }
 
   static bool _isDateInMonth(String key, String monthKey) {

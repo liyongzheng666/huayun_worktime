@@ -4,6 +4,8 @@ import 'package:flutter/foundation.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
 import '../core/constants/constants.dart';
+import '../utils/date_helper.dart';
+import '../utils/decimal_hours.dart';
 
 class _BossHoursChanges extends ChangeNotifier {
   void changed() => notifyListeners();
@@ -47,6 +49,8 @@ class ReminderSettings {
 
 /// Local storage facade for SharedPreferences.
 class StorageService {
+  /// 版本2使用整数分钟和十进制边界转换；旧派生缓存必须全月重新获取。
+  static const monthlyHoursCalculationVersion = 2;
   static const String _legacyDisclaimerAccepted = 'disclaimer_shown';
   static const String _legacyCurrentTeamNo = 'current_team_no';
   static const String _legacyCurrentTeamName = 'current_team_name';
@@ -58,6 +62,7 @@ class StorageService {
   static const String _legacyEveningHour = 'evening_alarm_hour';
   static const String _legacyEveningMinute = 'evening_alarm_minute';
 
+  // 历史键名保留以兼容iOS已有主题；两平台各自在本机使用同一套主题实现。
   static const String _appSkinKey = 'ios_app_skin';
 
   /// 主题单独保存，避免工时设置整份写入时覆盖外观选择。
@@ -324,7 +329,35 @@ class StorageService {
   ) async {
     final prefs = await SharedPreferences.getInstance();
     final key = StorageKeys.monthlyDataKey(teamNo, monthKey);
-    await prefs.setString(key, jsonEncode(data));
+    if (!await prefs.setString(key, jsonEncode(data))) {
+      throw StateError('月度考勤缓存保存失败');
+    }
+  }
+
+  Future<int?> loadMonthlyHoursCalculationVersion(
+    String teamNo,
+    String monthKey,
+  ) async {
+    final prefs = await SharedPreferences.getInstance();
+    final value = prefs.get(
+      StorageKeys.monthlyHoursCalculationVersionKey(teamNo, monthKey),
+    );
+    return value is int ? value : null;
+  }
+
+  /// 仅在完整月份由当前算法重新计算并持久化后调用，单日或手工修改不升级。
+  Future<void> saveMonthlyHoursCalculationVersion(
+    String teamNo,
+    String monthKey, {
+    int version = monthlyHoursCalculationVersion,
+  }) async {
+    final prefs = await SharedPreferences.getInstance();
+    if (!await prefs.setInt(
+      StorageKeys.monthlyHoursCalculationVersionKey(teamNo, monthKey),
+      version,
+    )) {
+      throw StateError('月度工时精度版本保存失败');
+    }
   }
 
   Future<Map<String, Map<String, dynamic>>?> loadMonthlyData(
@@ -602,6 +635,36 @@ class StorageService {
   /// 网络请求开始前捕获，回写时防止旧请求覆盖期间更新的日期。
   static int get bossHoursRevision => _bossHoursRevision;
 
+  Future<String?> _monthReportScope() async {
+    final team = await loadTeamNo();
+    final person = await loadPersonNo();
+    if (team == null || team.isEmpty || person == null || person.isEmpty) {
+      return null;
+    }
+    return jsonEncode([team, person]);
+  }
+
+  Future<String?> loadMonthReportReview(String month) async {
+    final scope = await _monthReportScope();
+    if (scope == null) return null;
+    final prefs = await SharedPreferences.getInstance();
+    final value = prefs.get(StorageKeys.monthReportReviewKey(scope, month));
+    return value is String ? value : null;
+  }
+
+  /// 只记录用户明确核对过的摘要；工时变化后的新摘要仍会再次提醒。
+  Future<void> saveMonthReportReview(String month, String signature) async {
+    final scope = await _monthReportScope();
+    if (scope == null) return;
+    final prefs = await SharedPreferences.getInstance();
+    if (!await prefs.setString(
+      StorageKeys.monthReportReviewKey(scope, month),
+      signature,
+    )) {
+      throw StateError('月末核对状态保存失败');
+    }
+  }
+
   Future<void> _queueBossWrite(Future<void> Function() write) {
     final future = (_bossWriteTail ?? Future<void>.value()).then(
       (_) => write(),
@@ -782,6 +845,44 @@ class StorageService {
     return prefs.getInt(StorageKeys.bossHoursProofVersionKey(monthKey)) == 2 &&
         prefs.containsKey(StorageKeys.bossHoursKey(monthKey)) &&
         await loadBossHoursRefreshedAt(monthKey) != null;
+  }
+
+  /// 校验原始缓存，避免宽松读取器丢弃污染值后把它误当成已确认的0。
+  /// 空表合法，但仍须由调用者逐日检查确认时间，才能用于完整月份判断。
+  Future<bool> hasValidBossHoursCache(String monthKey) async {
+    if (!RegExp(r'^\d{4}-\d{2}$').hasMatch(monthKey)) return false;
+    final month = DateTime.tryParse('$monthKey-01');
+    if (month == null || DateHelper.formatMonth(month) != monthKey) {
+      return false;
+    }
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      final raw = prefs.getString(StorageKeys.bossHoursKey(monthKey));
+      if (raw == null) return false;
+      final decoded = jsonDecode(raw);
+      if (decoded is! Map) return false;
+      for (final entry in decoded.entries) {
+        final key = entry.key;
+        if (key is! String ||
+            key.length != 10 ||
+            !key.startsWith('$monthKey-')) {
+          return false;
+        }
+        final date = DateTime.tryParse(key);
+        if (date == null || DateHelper.formatDate(date) != key) return false;
+        final value = entry.value;
+        final parsed = value is String ? num.tryParse(value) : value;
+        if (parsed is! num ||
+            !parsed.isFinite ||
+            parsed < 0 ||
+            DecimalHours.tryHundredths(parsed) == null) {
+          return false;
+        }
+      }
+      return true;
+    } catch (_) {
+      return false;
+    }
   }
 
   Future<Map<String, double>> loadBossHours(String monthKey) async {

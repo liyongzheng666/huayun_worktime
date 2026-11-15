@@ -80,8 +80,13 @@ class MonthlyAttendanceRepository {
   }) async {
     final monthStr = _monthStr(selectedMonth);
     final cacheKey = _cacheKey(teamNo, selectedMonth);
+    final isCurrentCalculation =
+        await _storage.loadMonthlyHoursCalculationVersion(teamNo, monthStr) ==
+        StorageService.monthlyHoursCalculationVersion;
 
-    if (!forceRefresh && _memoryCache.containsKey(cacheKey)) {
+    if (!forceRefresh &&
+        isCurrentCalculation &&
+        _memoryCache.containsKey(cacheKey)) {
       return MonthlyAttendanceLoadResult(
         monthlyData: _copyMonth(_memoryCache[cacheKey]!),
         holidayPlan: await _loadHolidayPlan(selectedMonth),
@@ -89,7 +94,7 @@ class MonthlyAttendanceRepository {
       );
     }
 
-    if (!forceRefresh) {
+    if (!forceRefresh && isCurrentCalculation) {
       final cachedData = await _storage.loadMonthlyData(teamNo, monthStr);
       if (cachedData != null) {
         SmartDayTypeHelper.applyToMonthlyData(cachedData);
@@ -140,8 +145,9 @@ class MonthlyAttendanceRepository {
     }
 
     final monthData = _copyMonth(mergeResult.monthlyData);
-    _memoryCache[_cacheKey(teamNo, selectedMonth)] = _copyMonth(monthData);
     await _storage.saveMonthlyData(teamNo, monthStr, monthData);
+    await _storage.saveMonthlyHoursCalculationVersion(teamNo, monthStr);
+    _memoryCache[_cacheKey(teamNo, selectedMonth)] = _copyMonth(monthData);
 
     return MonthlyAttendanceLoadResult(
       monthlyData: _copyMonth(monthData),

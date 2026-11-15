@@ -75,9 +75,9 @@ void main() {
     await tester.pumpWidget(
       MaterialApp(
         theme: ThemeData(
-          platform: PlatformCapabilities.supportsTodayWrapUp
-              ? TargetPlatform.iOS
-              : TargetPlatform.android,
+          platform: PlatformCapabilities.supportsExactBackgroundAlarm
+              ? TargetPlatform.android
+              : TargetPlatform.iOS,
         ),
         home: ValueListenableBuilder<bool>(
           valueListenable: active ?? ValueNotifier(true),
@@ -97,6 +97,30 @@ void main() {
     await flush(tester);
     expect(tester.takeException(), isNull);
   }
+
+  testWidgets('隐藏首页在应用恢复前台时不刷新，当前首页恢复时只刷新一次', (tester) async {
+    await storage.saveOnboardingCompleted(true);
+    final active = ValueNotifier(true);
+    addTearDown(active.dispose);
+    await open(tester, active: active);
+    expect(repository.calls, 1);
+
+    active.value = false;
+    await flush(tester);
+    tester.binding.handleAppLifecycleStateChanged(AppLifecycleState.paused);
+    tester.binding.handleAppLifecycleStateChanged(AppLifecycleState.resumed);
+    await flush(tester);
+    expect(repository.calls, 1);
+
+    active.value = true;
+    await flush(tester);
+    expect(repository.calls, 1);
+    tester.binding.handleAppLifecycleStateChanged(AppLifecycleState.paused);
+    tester.binding.handleAppLifecycleStateChanged(AppLifecycleState.resumed);
+    await flush(tester);
+    expect(repository.calls, 2);
+    await dispose(tester);
+  });
 
   testWidgets('iOS 真正下拉后结束引导并保存完成状态', (tester) async {
     await open(tester);

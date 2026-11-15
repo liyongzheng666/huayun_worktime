@@ -7,7 +7,7 @@ void main() {
   });
 
   group('PlatformCapabilities', () {
-    test('Android 具备后台闹钟能力，因此提醒文案可携带实时打卡状态', () {
+    test('Android 共用工作台，同时保留后台闹钟和实时提醒能力', () {
       PlatformCapabilities.debugOverride =
           const PlatformCapabilitiesOverride.android();
 
@@ -15,7 +15,7 @@ void main() {
       expect(PlatformCapabilities.supportsLiveReminderContent, isTrue);
       expect(PlatformCapabilities.needsExactAlarmPermission, isTrue);
       expect(PlatformCapabilities.needsVendorKeepAliveGuide, isTrue);
-      expect(PlatformCapabilities.supportsTodayWrapUp, isFalse);
+      expect(PlatformCapabilities.supportsTodayWrapUp, isTrue);
     });
 
     test('iOS 无后台闹钟能力，提醒只能推固定文案且不需要保活引导', () {

@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 
 import '../core/theme/legacy_theme_colors.dart';
@@ -9,6 +11,7 @@ import '../services/boss_hours_auto_refresh_service.dart';
 import '../utils/date_helper.dart';
 import '../utils/work_log_csv_parser.dart';
 import '../utils/work_time_calculator.dart';
+import '../utils/perf_frame_probe.dart';
 import 'monthly_report_balance_dialog.dart';
 import 'monthly_report_inline_suggestion.dart';
 
@@ -89,8 +92,11 @@ class WorkLogConfirmDialog {
     var confirming = false;
     String? balanceMessage;
 
-    final result = await showDialog<WorkLogConfirmOutcome>(
+    final perfTicket = PerfFrameProbe.begin('report_confirm');
+    final navigator = Navigator.of(context, rootNavigator: true);
+    final route = DialogRoute<WorkLogConfirmOutcome>(
       context: context,
+      themes: InheritedTheme.capture(from: context, to: navigator.context),
       builder: (dialogContext) => StatefulBuilder(
         builder: (context, setDialogState) {
           final isToday = DateHelper.isTodayStr(date, now: now);
@@ -423,8 +429,21 @@ class WorkLogConfirmDialog {
       ),
     );
 
-    hoursController.dispose();
-    return result;
+    try {
+      final result = await navigator.push(route);
+      // push返回时反向动画尚未结束；输入框真正移除后再释放控制器。
+      unawaited(
+        route.completed.then((_) {
+          hoursController.dispose();
+          unawaited(PerfFrameProbe.end(perfTicket));
+        }),
+      );
+      return result;
+    } catch (_) {
+      hoursController.dispose();
+      unawaited(PerfFrameProbe.end(perfTicket));
+      rethrow;
+    }
   }
 
   /// 工时来源切换：按打卡 / 按当前时间。

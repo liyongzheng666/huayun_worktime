@@ -126,6 +126,10 @@ class StorageKeys {
   static String bossHoursDateConfirmedAtKey(String date) =>
       'boss_hours_v2_confirmed_at_$date';
 
+  /// 月末核对按团队、人员和月份隔离；scope为身份字段的JSON，不含凭据。
+  static String monthReportReviewKey(String scope, String month) =>
+      'month_report_review_${Uri.encodeComponent(scope)}_$month';
+
   // ============ 引导相关 ============
   /// 新手引导完成标记
   static const String onboardingCompleted = 'onboarding_completed';
@@ -144,4 +148,10 @@ class StorageKeys {
   /// 获取月度数据的完整key
   static String monthlyDataKey(String teamNo, String month) =>
       '${monthlyDataPrefix}_${teamNo}_$month';
+
+  /// 该团队月份的考勤工时算法版本；与登录和手工日历标记独立。
+  static String monthlyHoursCalculationVersionKey(
+    String teamNo,
+    String month,
+  ) => 'monthly_hours_calculation_version_${teamNo}_$month';
 }

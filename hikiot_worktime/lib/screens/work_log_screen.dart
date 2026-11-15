@@ -17,6 +17,7 @@ import '../utils/work_log_edit_script.dart';
 import '../utils/work_log_auditor_lookup.dart';
 import '../utils/work_log_project_list_lookup.dart';
 import '../utils/work_time_calculator.dart';
+import '../utils/perf_frame_probe.dart';
 import '../services/boss_session_runner.dart';
 import '../services/boss_login_coordinator.dart';
 import '../services/boss_hours_auto_refresh_service.dart';
@@ -42,10 +43,12 @@ class WorkLogScreen extends StatefulWidget {
     this.repository,
     this.bossAutoRefresh,
     this.monthlyBalanceService,
+    this.isActive = true,
   });
   final WorkLogRepository? repository;
   final BossHoursAutoRefreshService? bossAutoRefresh;
   final MonthlyReportBalanceService? monthlyBalanceService;
+  final bool isActive;
 
   @override
   State<WorkLogScreen> createState() => WorkLogScreenState();
@@ -88,7 +91,11 @@ class WorkLogScreenState extends State<WorkLogScreen> {
     _bossAutoRefresh =
         widget.bossAutoRefresh ?? BossHoursAutoRefreshService.shared;
     StorageService.bossHoursChanges.addListener(_onBossHoursChanged);
-    _reload();
+    if (widget.isActive) {
+      _reload();
+    } else {
+      _loading = false;
+    }
   }
 
   /// 供外部（主框架切换 tab 时）触发刷新。
@@ -102,7 +109,7 @@ class WorkLogScreenState extends State<WorkLogScreen> {
     if (_submitting || _editingSubmitted) return;
     setState(() => _selectedDate = date);
     final expectedLoad = _loadSeq + 1;
-    await _reload();
+    await _reload(queryBoss: action != TodayWrapUpAction.reviewLog);
     if (!mounted ||
         expectedLoad != _loadSeq ||
         _loading ||
@@ -138,7 +145,7 @@ class WorkLogScreenState extends State<WorkLogScreen> {
 
   /// 缓存通知只复读本地，避免“刷新→通知→再次请求”的循环。
   void _onBossHoursChanged() {
-    if (!mounted) return;
+    if (!mounted || !widget.isActive) return;
     _weekStripKey.currentState?.refresh();
     unawaited(_readReportedHours());
   }
@@ -204,7 +211,7 @@ class WorkLogScreenState extends State<WorkLogScreen> {
     }
   }
 
-  Future<void> _reload({bool forceBoss = false}) async {
+  Future<void> _reload({bool forceBoss = false, bool queryBoss = true}) async {
     final seq = ++_loadSeq;
     setState(() => _loading = true);
 
@@ -241,7 +248,9 @@ class WorkLogScreenState extends State<WorkLogScreen> {
       _loading = false;
     });
     unawaited(_readReportedHours());
-    unawaited(refreshBossHoursSilently(date: date, force: forceBoss));
+    if (queryBoss) {
+      unawaited(refreshBossHoursSilently(date: date, force: forceBoss));
+    }
   }
 
   /// 周条选中某一天。
@@ -354,10 +363,12 @@ class WorkLogScreenState extends State<WorkLogScreen> {
     }
 
     _submitting = true;
+    final perfTicket = PerfFrameProbe.begin('report_submit');
     setState(() {});
     try {
       await _runHeadlessSubmit(entry, draft!);
     } finally {
+      unawaited(PerfFrameProbe.end(perfTicket));
       _submitting = false;
       if (mounted) setState(() {});
     }
@@ -467,37 +478,38 @@ class WorkLogScreenState extends State<WorkLogScreen> {
   }) async {
     _showMessage('正在后台连接 BOSS…');
 
-    final prepared = await BossSessionRunner.run<_SubmitPreparation>((
-      controller,
-    ) async {
-      final service = WorkLogSubmitService(controller);
-      final existingHours = await service.queryAndCacheExistingHours(
-        draft.date,
-      );
-      if (existingHours == null || existingHours > 0) {
-        return _SubmitPreparation.preflightBlocked(existingHours);
-      }
+    final prepared = await PerfFrameProbe.measure(
+      'boss.submit.prepare',
+      () => BossSessionRunner.run<_SubmitPreparation>((controller) async {
+        final service = WorkLogSubmitService(controller);
+        final existingHours = await service.queryAndCacheExistingHours(
+          draft.date,
+        );
+        if (existingHours == null || existingHours > 0) {
+          return _SubmitPreparation.preflightBlocked(existingHours);
+        }
 
-      final resolution = await service.resolveConstants(entry.projectName);
-      // 项目清单扫到了就还有救——让用户自己挑一个即可，不该在这里就判死刑。
-      // 只有连清单带配置都拿不到，才轮到诊断。
-      if (!resolution.hasConstants && !resolution.needsProjectPick) {
-        final (conclusion, report) = await service.collectDiagnostics(
-          entry.projectName,
+        final resolution = await service.resolveConstants(entry.projectName);
+        // 项目清单扫到了就还有救——让用户自己挑一个即可，不该在这里就判死刑。
+        // 只有连清单带配置都拿不到，才轮到诊断。
+        if (!resolution.hasConstants && !resolution.needsProjectPick) {
+          final (conclusion, report) = await service.collectDiagnostics(
+            entry.projectName,
+          );
+          return _SubmitPreparation.failed(
+            resolution.reason ?? conclusion,
+            report,
+          );
+        }
+        return _SubmitPreparation(
+          constants: resolution.constants,
+          existingHours: existingHours,
+          needsProjectPick: resolution.needsProjectPick,
+          projects: resolution.projects,
+          auditors: resolution.auditors,
         );
-        return _SubmitPreparation.failed(
-          resolution.reason ?? conclusion,
-          report,
-        );
-      }
-      return _SubmitPreparation(
-        constants: resolution.constants,
-        existingHours: existingHours,
-        needsProjectPick: resolution.needsProjectPick,
-        projects: resolution.projects,
-        auditors: resolution.auditors,
-      );
-    });
+      }),
+    );
 
     if (!mounted) return;
 

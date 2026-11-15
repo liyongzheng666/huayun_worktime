@@ -8,6 +8,29 @@ import 'package:hikiot_worktime/utils/work_time_calculator.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
 void main() {
+  test('月度精度版本按团队和月份独立，普通月缓存写入不会自动升级', () async {
+    SharedPreferences.setMockInitialValues({});
+    final storage = StorageService();
+    await storage.saveMonthlyData('team-1', '2026-06', {});
+    expect(
+      await storage.loadMonthlyHoursCalculationVersion('team-1', '2026-06'),
+      isNull,
+    );
+    await storage.saveMonthlyHoursCalculationVersion('team-1', '2026-06');
+    expect(
+      await storage.loadMonthlyHoursCalculationVersion('team-1', '2026-06'),
+      2,
+    );
+    expect(
+      await storage.loadMonthlyHoursCalculationVersion('team-2', '2026-06'),
+      isNull,
+    );
+    expect(
+      await storage.loadMonthlyHoursCalculationVersion('team-1', '2026-07'),
+      isNull,
+    );
+  });
+
   group('StorageService 已提交日志 ID', () {
     setUp(() {
       SharedPreferences.setMockInitialValues({});
