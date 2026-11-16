@@ -69,8 +69,72 @@ class MonthlyAttendanceRepository {
   final MonthlyAttendanceLoader _loadMonthlyAttendance;
   final MonthlyDailyAttendanceLoader _loadDailyAttendance;
   final Map<String, Map<String, Map<String, dynamic>>> _memoryCache = {};
+  final Map<String, Future<AttendanceData>> _photoLoads = {};
 
   void clearCache() => _memoryCache.clear();
+
+  /// 只由具体照片按钮调用。上下班共用一次日查询，跨窗口点击复用在途请求。
+  Future<AttendanceData> loadDayPhotos({
+    required String teamNo,
+    required String personNo,
+    required String date,
+  }) {
+    final key = '$teamNo/$personNo/$date';
+    return _photoLoads.putIfAbsent(
+      key,
+      () => _loadDayPhotos(
+        teamNo: teamNo,
+        personNo: personNo,
+        date: date,
+      ).whenComplete(() {
+        _photoLoads.remove(key);
+      }),
+    );
+  }
+
+  Future<AttendanceData> _loadDayPhotos({
+    required String teamNo,
+    required String personNo,
+    required String date,
+  }) async {
+    final monthKey = _cacheKey(teamNo, DateTime.parse(date));
+    var row = _memoryCache[monthKey]?[date];
+    if (row == null ||
+        !row.containsKey('checkInPhotoUrl') ||
+        !row.containsKey('checkOutPhotoUrl')) {
+      row = (await _storage.loadMonthlyData(
+        teamNo,
+        date.substring(0, 7),
+      ))?[date];
+    }
+    if (row != null &&
+        row.containsKey('checkInPhotoUrl') &&
+        row.containsKey('checkOutPhotoUrl')) {
+      return AttendanceData(
+        checkInPhotoUrl: row['checkInPhotoUrl'] as String?,
+        checkOutPhotoUrl: row['checkOutPhotoUrl'] as String?,
+      );
+    }
+    final response = await _loadDailyAttendance(date, personNo);
+    if (response?['dailyDetail'] is! Map<String, dynamic>) {
+      throw StateError('当天照片尚未确认');
+    }
+    final attendance = AttendanceParser.parseFromResponse(response);
+    final current = _memoryCache[monthKey]?[date];
+    current?['checkInPhotoUrl'] = attendance.checkInPhotoUrl;
+    current?['checkOutPhotoUrl'] = attendance.checkOutPhotoUrl;
+    try {
+      await _storage.saveMonthlyDayPhotos(
+        teamNo,
+        date,
+        checkInPhotoUrl: attendance.checkInPhotoUrl,
+        checkOutPhotoUrl: attendance.checkOutPhotoUrl,
+      );
+    } catch (_) {
+      // 已取得照片仍可查看，磁盘写入失败不伪装成查询失败。
+    }
+    return attendance;
+  }
 
   Future<MonthlyAttendanceLoadResult> loadMonth({
     required String teamNo,
@@ -239,6 +303,11 @@ class MonthlyAttendanceRepository {
           (localRow['isEarlyLeave'] == true) == apiData.isEarlyLeave &&
           localData.hasCrossDayPunch == apiData.hasCrossDayPunch &&
           localData.crossDayPunchTime == apiData.crossDayPunchTime;
+      final photosChanged =
+          localRow['checkInPhotoUrl'] != apiData.checkInPhotoUrl ||
+          localRow['checkOutPhotoUrl'] != apiData.checkOutPhotoUrl;
+      localRow['checkInPhotoUrl'] = apiData.checkInPhotoUrl;
+      localRow['checkOutPhotoUrl'] = apiData.checkOutPhotoUrl;
       // 历史休息/请假日的明确空打卡也是有效的稳定边界；未知不能当作0。
       // 当天空白继续检查前一天，以免凌晨或休息日漏掉最近工作日的补卡。
       if (localConfirmed &&
@@ -246,6 +315,8 @@ class MonthlyAttendanceRepository {
               !DateHelper.isSameDay(targetDate, today)) &&
           sameAttendance &&
           !needsTypeCorrection) {
+        // 只更新照片时仍在同一个稳定边界停止，不能因此向前重查整月。
+        if (photosChanged) updatedCount++;
         break;
       }
 
@@ -347,6 +418,8 @@ class MonthlyAttendanceRepository {
     row['apiHours'] = attendance.hours;
     row['checkIn'] = attendance.checkIn;
     row['checkOut'] = attendance.checkOut;
+    row['checkInPhotoUrl'] = attendance.checkInPhotoUrl;
+    row['checkOutPhotoUrl'] = attendance.checkOutPhotoUrl;
     row['hasCrossDayPunch'] = attendance.hasCrossDayPunch;
     row['crossDayPunchTime'] = attendance.crossDayPunchTime;
     row[SmartDayTypeHelper.dataSourceStatusKey] =

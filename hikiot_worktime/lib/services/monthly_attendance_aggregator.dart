@@ -104,6 +104,8 @@ class MonthlyAttendanceAggregator {
       'date': date,
       'checkIn': attendance.checkIn,
       'checkOut': attendance.checkOut,
+      'checkInPhotoUrl': attendance.checkInPhotoUrl,
+      'checkOutPhotoUrl': attendance.checkOutPhotoUrl,
       'hours': attendance.hours,
       'isLate': attendance.isLate,
       'isEarlyLeave': attendance.isEarlyLeave,

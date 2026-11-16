@@ -450,6 +450,31 @@ class StorageService {
     }
   }
 
+  /// 只补照片字段；读取到写回之间不 await，避免用旧日详情覆盖新工时和标记。
+  Future<void> saveMonthlyDayPhotos(
+    String teamNo,
+    String date, {
+    required String? checkInPhotoUrl,
+    required String? checkOutPhotoUrl,
+  }) async {
+    final prefs = await SharedPreferences.getInstance();
+    final key = StorageKeys.monthlyDataKey(teamNo, date.substring(0, 7));
+    final raw = prefs.getString(key);
+    if (raw == null) return;
+    dynamic month;
+    try {
+      month = jsonDecode(raw);
+    } catch (_) {
+      return;
+    }
+    if (month is! Map || month[date] is! Map) return;
+    month[date]['checkInPhotoUrl'] = checkInPhotoUrl;
+    month[date]['checkOutPhotoUrl'] = checkOutPhotoUrl;
+    if (!await prefs.setString(key, jsonEncode(month))) {
+      throw StateError('当天照片缓存保存失败');
+    }
+  }
+
   Future<int?> loadMonthlyHoursCalculationVersion(
     String teamNo,
     String monthKey,

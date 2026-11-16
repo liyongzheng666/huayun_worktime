@@ -18,6 +18,7 @@ import '../utils/decimal_hours.dart';
 import '../widgets/collapsed_target_goal.dart';
 import '../utils/haptic_utils.dart';
 import '../utils/date_helper.dart';
+import '../widgets/attendance_photos_section.dart';
 import '../utils/target_progress_helper.dart';
 
 import '../widgets/home_button.dart';
@@ -1634,6 +1635,8 @@ class MonthlyCalendarScreenState extends State<MonthlyCalendarScreen> {
     bool isCustomHours = dayData['isCustomHours'] ?? false; // 是否自定义工时(用于出差)
     String customCheckIn = dayData['customCheckIn'] ?? '09:00';
     String customCheckOut = dayData['customCheckOut'] ?? '18:00';
+    final teamNo = _teamNo;
+    final personNo = _personNo;
 
     await showDialog(
       context: context,
@@ -1787,6 +1790,33 @@ class MonthlyCalendarScreenState extends State<MonthlyCalendarScreen> {
                       ),
                       const SizedBox(height: 16),
                     ],
+
+                    AttendancePhotosSection(
+                      key: ValueKey('photos-$teamNo-$dateStr'),
+                      date: dateStr,
+                      dayData: dayData,
+                      loadPhotos: () async {
+                        if (personNo == null || teamNo == null) {
+                          throw StateError('员工信息尚未就绪');
+                        }
+                        final attendance = await _monthlyRepository
+                            .loadDayPhotos(
+                              teamNo: teamNo,
+                              personNo: personNo,
+                              date: dateStr,
+                            );
+                        // 迟到响应只补同一身份、同一天的照片，不覆盖工时或手动设置。
+                        if (mounted &&
+                            _teamNo == teamNo &&
+                            _personNo == personNo) {
+                          final row = _monthlyData[dateStr];
+                          row?['checkInPhotoUrl'] = attendance.checkInPhotoUrl;
+                          row?['checkOutPhotoUrl'] =
+                              attendance.checkOutPhotoUrl;
+                        }
+                        return attendance;
+                      },
+                    ),
 
                     // BOSS 已填工时。格子里只剩一条状态细条，具体数值放这里，
                     // 否则不一致时用户看得见警示却查不到差在哪。

@@ -58,6 +58,11 @@ class MonthlyAttendanceMergeService {
         'apiHours': hours,
         'checkIn': record['checkIn'],
         'checkOut': record['checkOut'],
+        // 缺字段的旧缓存保留“尚未查询”，与已确认无照片的 null 区分。
+        if (record.containsKey('checkInPhotoUrl'))
+          'checkInPhotoUrl': record['checkInPhotoUrl'],
+        if (record.containsKey('checkOutPhotoUrl'))
+          'checkOutPhotoUrl': record['checkOutPhotoUrl'],
         'isLate': record['isLate'] ?? false,
         'isEarlyLeave': record['isEarlyLeave'] ?? false,
         'hasCrossDayPunch': record['hasCrossDayPunch'] == true,
