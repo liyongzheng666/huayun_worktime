@@ -82,37 +82,41 @@ class _AttendancePhotosSectionState extends State<AttendancePhotosSection> {
     final photoUrl = url?.trim();
     final known = kind == 'in' ? _checkInKnown : _checkOutKnown;
     final unavailable = known && (photoUrl == null || photoUrl.isEmpty);
-    return OutlinedButton.icon(
-      icon: const Icon(Icons.photo_outlined),
-      label: Text(
-        _loadingKind == kind
-            ? '正在查询$label照片…'
-            : unavailable
-            ? '暂无$label照片'
-            : '查看$label照片',
+    return TextButton(
+      style: TextButton.styleFrom(
+        minimumSize: const Size(0, 32),
+        padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 4),
+        tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+        textStyle: const TextStyle(fontSize: 12),
       ),
       onPressed: unavailable || _loadingKind != null
           ? null
           : () => _openPhoto(kind),
+      child: Text(
+        _loadingKind == kind
+            ? '查询$label…'
+            : unavailable
+            ? '暂无$label照片'
+            : '$label照片',
+        maxLines: 1,
+        overflow: TextOverflow.ellipsis,
+      ),
     );
   }
 
   @override
   Widget build(BuildContext context) {
     return Padding(
-      padding: const EdgeInsets.only(bottom: 16),
+      padding: const EdgeInsets.only(top: 8),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          const Text('打卡照片', style: TextStyle(fontWeight: FontWeight.bold)),
-          const SizedBox(height: 8),
           if (_failed) const Text('照片查询失败，请点击照片重试'),
-          Wrap(
-            spacing: 8,
-            runSpacing: 4,
+          Row(
             children: [
-              _photoButton('上班', _checkInPhoto, 'in'),
-              _photoButton('下班', _checkOutPhoto, 'out'),
+              Expanded(child: _photoButton('上班', _checkInPhoto, 'in')),
+              const SizedBox(width: 8),
+              Expanded(child: _photoButton('下班', _checkOutPhoto, 'out')),
             ],
           ),
         ],

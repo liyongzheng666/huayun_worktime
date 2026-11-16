@@ -80,7 +80,7 @@ void main() {
   tearDown(() => PlatformCapabilities.debugOverride = null);
 
   Future<void> openDay(WidgetTester tester, PhotoApi api, int day) async {
-    await tester.binding.setSurfaceSize(const Size(900, 1500));
+    await tester.binding.setSurfaceSize(const Size(440, 956));
     addTearDown(() => tester.binding.setSurfaceSize(null));
     await tester.pumpWidget(
       MaterialApp(
@@ -100,11 +100,11 @@ void main() {
   testWidgets('月度真实聚合与合并后，日详情能打开上下班照片且不重复查询', (tester) async {
     final api = PhotoApi();
     await openDay(tester, api, 1);
-    expect(find.text('查看上班照片'), findsOneWidget);
-    expect(find.text('查看下班照片'), findsOneWidget);
+    expect(find.text('上班照片'), findsOneWidget);
+    expect(find.text('下班照片'), findsOneWidget);
     expect(api.detailRequests, 0);
-    await tester.ensureVisible(find.text('查看上班照片'));
-    await tester.tap(find.text('查看上班照片'));
+    await tester.ensureVisible(find.text('上班照片'));
+    await tester.tap(find.text('上班照片'));
     await tester.pumpAndSettle();
     final preview = tester.widget<PhotoPreviewScreen>(
       find.byType(PhotoPreviewScreen),
@@ -117,7 +117,7 @@ void main() {
   testWidgets('只有上班卡且工时为零时仍能查看照片，缺下班照片明确显示', (tester) async {
     final api = PhotoApi();
     await openDay(tester, api, 2);
-    expect(find.text('查看上班照片'), findsOneWidget);
+    expect(find.text('上班照片'), findsOneWidget);
     expect(find.text('暂无下班照片'), findsOneWidget);
     expect(api.detailRequests, 0);
   });
@@ -133,20 +133,21 @@ void main() {
   testWidgets('旧数据打开日详情零请求，点击照片才查一次，上下班及重开窗口复用', (tester) async {
     final api = PhotoApi()..legacyMonth = true;
     await openDay(tester, api, 1);
-    expect(find.text('查看上班照片'), findsOneWidget);
+    expect(find.text('上班照片'), findsOneWidget);
     expect(api.detailRequests, 0);
     await tester.ensureVisible(find.text('出差'));
     await tester.tap(find.text('出差'));
     await tester.pumpAndSettle();
     expect(api.detailRequests, 0);
-    await tester.ensureVisible(find.text('查看上班照片'));
-    await tester.tap(find.text('查看上班照片'));
+    await tester.ensureVisible(find.text('上班照片'));
+    await tester.tap(find.text('上班照片'));
     await tester.pumpAndSettle();
     expect(find.byType(PhotoPreviewScreen), findsOneWidget);
     expect(api.detailRequests, 1);
     await tester.pageBack();
     await tester.pumpAndSettle();
-    await tester.tap(find.text('查看下班照片'));
+    await tester.ensureVisible(find.text('下班照片'));
+    await tester.tap(find.text('下班照片'));
     await tester.pumpAndSettle();
     expect(
       tester
@@ -166,7 +167,7 @@ void main() {
     await tester.ensureVisible(cell);
     await tester.tap(cell);
     await tester.pumpAndSettle();
-    expect(find.text('查看上班照片'), findsOneWidget);
+    expect(find.text('上班照片'), findsOneWidget);
     expect(api.detailRequests, 1);
     expect(tester.takeException(), isNull);
   });
@@ -177,12 +178,14 @@ void main() {
       ..failDetail = true;
     await openDay(tester, api, 1);
     expect(api.detailRequests, 0);
-    await tester.tap(find.text('查看上班照片'));
+    await tester.ensureVisible(find.text('上班照片'));
+    await tester.tap(find.text('上班照片'));
     await tester.pumpAndSettle();
     expect(find.text('照片查询失败，请点击照片重试'), findsOneWidget);
     expect(find.text('暂无上班照片'), findsNothing);
     api.failDetail = false;
-    await tester.tap(find.text('查看上班照片'));
+    await tester.ensureVisible(find.text('上班照片'));
+    await tester.tap(find.text('上班照片'));
     await tester.pumpAndSettle();
     expect(find.byType(PhotoPreviewScreen), findsOneWidget);
     expect(api.detailRequests, 2);
@@ -195,9 +198,10 @@ void main() {
       ..pendingDetail = Completer<Map<String, dynamic>?>();
     await openDay(tester, api, 1);
     expect(api.detailRequests, 0);
-    await tester.tap(find.text('查看上班照片'));
+    await tester.ensureVisible(find.text('上班照片'));
+    await tester.tap(find.text('上班照片'));
     await tester.pumpAndSettle();
-    expect(find.text('正在查询上班照片…'), findsOneWidget);
+    expect(find.text('查询上班…'), findsOneWidget);
     await tester.tapAt(const Offset(5, 5));
     await tester.pumpAndSettle();
     api.pendingDetail!.complete(api.response('2026-11-01'));
