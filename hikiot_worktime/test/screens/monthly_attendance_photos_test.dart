@@ -3,7 +3,7 @@ import 'dart:async';
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:hikiot_worktime/screens/monthly_calendar_screen.dart';
-import 'package:hikiot_worktime/screens/photo_preview_screen.dart';
+import 'package:hikiot_worktime/widgets/attendance_photo_dialog.dart';
 import 'package:hikiot_worktime/services/hikiot_api_client.dart';
 import 'package:hikiot_worktime/services/monthly_attendance_aggregator.dart';
 import 'package:hikiot_worktime/services/platform_capabilities.dart';
@@ -106,12 +106,12 @@ void main() {
     await tester.ensureVisible(find.text('上班照片'));
     await tester.tap(find.text('上班照片'));
     await tester.pumpAndSettle();
-    final preview = tester.widget<PhotoPreviewScreen>(
-      find.byType(PhotoPreviewScreen),
+    final preview = tester.widget<AttendancePhotoDialog>(
+      find.byType(AttendancePhotoDialog),
     );
     expect(preview.photoUrl, 'https://example.test/in.jpg');
-    expect(find.byType(InteractiveViewer), findsOneWidget);
-    expect(find.byTooltip('保存图片'), findsOneWidget);
+    expect(find.byType(Dialog), findsNWidgets(2));
+    expect(find.text('保存图片'), findsOneWidget);
   });
 
   testWidgets('只有上班卡且工时为零时仍能查看照片，缺下班照片明确显示', (tester) async {
@@ -142,21 +142,21 @@ void main() {
     await tester.ensureVisible(find.text('上班照片'));
     await tester.tap(find.text('上班照片'));
     await tester.pumpAndSettle();
-    expect(find.byType(PhotoPreviewScreen), findsOneWidget);
+    expect(find.byType(AttendancePhotoDialog), findsOneWidget);
     expect(api.detailRequests, 1);
-    await tester.pageBack();
+    await tester.tap(find.byTooltip('关闭照片'));
     await tester.pumpAndSettle();
     await tester.ensureVisible(find.text('下班照片'));
     await tester.tap(find.text('下班照片'));
     await tester.pumpAndSettle();
     expect(
       tester
-          .widget<PhotoPreviewScreen>(find.byType(PhotoPreviewScreen))
+          .widget<AttendancePhotoDialog>(find.byType(AttendancePhotoDialog))
           .photoUrl,
       'https://example.test/out.jpg',
     );
     expect(api.detailRequests, 1);
-    await tester.pageBack();
+    await tester.tap(find.byTooltip('关闭照片'));
     await tester.pumpAndSettle();
     await tester.tapAt(const Offset(5, 5));
     await tester.pumpAndSettle();
@@ -187,7 +187,7 @@ void main() {
     await tester.ensureVisible(find.text('上班照片'));
     await tester.tap(find.text('上班照片'));
     await tester.pumpAndSettle();
-    expect(find.byType(PhotoPreviewScreen), findsOneWidget);
+    expect(find.byType(AttendancePhotoDialog), findsOneWidget);
     expect(api.detailRequests, 2);
     expect(tester.takeException(), isNull);
   });
@@ -207,7 +207,7 @@ void main() {
     api.pendingDetail!.complete(api.response('2026-11-01'));
     await tester.pumpAndSettle();
     expect(find.byType(AlertDialog), findsNothing);
-    expect(find.byType(PhotoPreviewScreen), findsNothing);
+    expect(find.byType(AttendancePhotoDialog), findsNothing);
     expect(tester.takeException(), isNull);
   });
 }

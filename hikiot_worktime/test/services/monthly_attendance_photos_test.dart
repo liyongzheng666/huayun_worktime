@@ -123,4 +123,41 @@ void main() {
     expect(result.monthlyData[date]!['checkInPhotoUrl'], 'in.jpg');
     expect(result.monthlyData[date]!['checkOutPhotoUrl'], 'out.jpg');
   });
+
+  test('已有地址正常打开零日查询，仅明确失效重试强制查一次后继续复用', () async {
+    await storage.saveMonthlyData('team', '2026-11', {
+      date: {
+        'checkInPhotoUrl': 'old-in.jpg',
+        'checkOutPhotoUrl': 'old-out.jpg',
+      },
+    });
+    var requests = 0;
+    final repository = MonthlyAttendanceRepository(
+      loadMonthlyAttendance: (_, _) async => throw StateError('禁止整月重查'),
+      loadDailyAttendance: (_, _) async {
+        requests++;
+        return response();
+      },
+    );
+    await repository.loadDayPhotos(
+      teamNo: 'team',
+      personNo: 'person',
+      date: date,
+    );
+    expect(requests, 0);
+    final fresh = await repository.loadDayPhotos(
+      teamNo: 'team',
+      personNo: 'person',
+      date: date,
+      forceRefresh: true,
+    );
+    expect(fresh.checkOutPhotoUrl, 'out.jpg');
+    expect(requests, 1);
+    await repository.loadDayPhotos(
+      teamNo: 'team',
+      personNo: 'person',
+      date: date,
+    );
+    expect(requests, 1);
+  });
 }

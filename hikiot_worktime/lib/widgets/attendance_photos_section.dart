@@ -1,7 +1,8 @@
 import 'package:flutter/material.dart';
 
-import '../screens/photo_preview_screen.dart';
+import 'attendance_photo_dialog.dart';
 import '../utils/attendance_parser.dart';
+import '../services/attendance_photo_loader.dart';
 
 /// 只有点击具体照片时才补查旧缓存；打开日期窗口不触发任何照片请求。
 class AttendancePhotosSection extends StatefulWidget {
@@ -10,11 +11,13 @@ class AttendancePhotosSection extends StatefulWidget {
     required this.date,
     required this.dayData,
     required this.loadPhotos,
+    this.photoLoader,
   });
 
   final String date;
   final Map<String, dynamic> dayData;
-  final Future<AttendanceData> Function() loadPhotos;
+  final Future<AttendanceData> Function(bool forceRefresh) loadPhotos;
+  final AttendancePhotoLoader? photoLoader;
 
   @override
   State<AttendancePhotosSection> createState() =>
@@ -48,7 +51,7 @@ class _AttendancePhotosSectionState extends State<AttendancePhotosSection> {
       });
       try {
         // 一次日接口同时返回上下班地址，另一个按钮也复用本次结果。
-        final photos = await widget.loadPhotos();
+        final photos = await widget.loadPhotos(false);
         if (!mounted) return;
         setState(() {
           _checkInPhoto = photos.checkInPhotoUrl;
@@ -68,12 +71,26 @@ class _AttendancePhotosSectionState extends State<AttendancePhotosSection> {
     }
     final url = (kind == 'in' ? _checkInPhoto : _checkOutPhoto)?.trim();
     if (url == null || url.isEmpty || !mounted) return;
-    await Navigator.of(context).push(
-      MaterialPageRoute<void>(
-        builder: (_) => PhotoPreviewScreen(
-          photoUrl: url,
-          heroTag: 'attendance-${widget.date}-$kind',
-        ),
+    await showDialog<void>(
+      context: context,
+      builder: (_) => AttendancePhotoDialog(
+        photoUrl: url,
+        loader: widget.photoLoader,
+        title: kind == 'in' ? '上班照片' : '下班照片',
+        refreshPhotoUrl: () async {
+          final photos = await widget.loadPhotos(true);
+          if (mounted) {
+            setState(() {
+              _checkInPhoto = photos.checkInPhotoUrl;
+              _checkOutPhoto = photos.checkOutPhotoUrl;
+              _checkInKnown = true;
+              _checkOutKnown = true;
+            });
+          }
+          return kind == 'in'
+              ? photos.checkInPhotoUrl
+              : photos.checkOutPhotoUrl;
+        },
       ),
     );
   }

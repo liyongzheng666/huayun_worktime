@@ -78,17 +78,20 @@ class MonthlyAttendanceRepository {
     required String teamNo,
     required String personNo,
     required String date,
+    bool forceRefresh = false,
   }) {
     final key = '$teamNo/$personNo/$date';
     return _photoLoads.putIfAbsent(
       key,
-      () => _loadDayPhotos(
-        teamNo: teamNo,
-        personNo: personNo,
-        date: date,
-      ).whenComplete(() {
-        _photoLoads.remove(key);
-      }),
+      () =>
+          _loadDayPhotos(
+            teamNo: teamNo,
+            personNo: personNo,
+            date: date,
+            forceRefresh: forceRefresh,
+          ).whenComplete(() {
+            _photoLoads.remove(key);
+          }),
     );
   }
 
@@ -96,6 +99,7 @@ class MonthlyAttendanceRepository {
     required String teamNo,
     required String personNo,
     required String date,
+    required bool forceRefresh,
   }) async {
     final monthKey = _cacheKey(teamNo, DateTime.parse(date));
     var row = _memoryCache[monthKey]?[date];
@@ -107,7 +111,8 @@ class MonthlyAttendanceRepository {
         date.substring(0, 7),
       ))?[date];
     }
-    if (row != null &&
+    if (!forceRefresh &&
+        row != null &&
         row.containsKey('checkInPhotoUrl') &&
         row.containsKey('checkOutPhotoUrl')) {
       return AttendanceData(

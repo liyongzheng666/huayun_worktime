@@ -71,7 +71,7 @@
 		<string>UIInterfaceOrientationLandscapeLeft</string>
 		<string>UIInterfaceOrientationLandscapeRight</string>
 	</array>
-	<!-- 保存打卡照片到相册（photo_preview_screen.dart 的 gal 调用）。
+	<!-- 保存打卡照片到相册（attendance_photo_dialog.dart 的 gal 调用）。
 	     缺少此项会在用户点保存时直接崩溃，不是弹权限框。 -->
 	<key>NSPhotoLibraryAddUsageDescription</key>
 	<string>需要访问相册，以便将打卡照片保存到你的相册中</string>

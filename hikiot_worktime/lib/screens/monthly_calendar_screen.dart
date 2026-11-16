@@ -2023,7 +2023,7 @@ class MonthlyCalendarScreenState extends State<MonthlyCalendarScreen> {
                       key: ValueKey('photos-$teamNo-$dateStr'),
                       date: dateStr,
                       dayData: dayData,
-                      loadPhotos: () async {
+                      loadPhotos: (forceRefresh) async {
                         if (personNo == null || teamNo == null) {
                           throw StateError('员工信息尚未就绪');
                         }
@@ -2032,6 +2032,7 @@ class MonthlyCalendarScreenState extends State<MonthlyCalendarScreen> {
                               teamNo: teamNo,
                               personNo: personNo,
                               date: dateStr,
+                              forceRefresh: forceRefresh,
                             );
                         // 迟到响应只补同一身份、同一天的照片，不覆盖工时或手动设置。
                         if (mounted &&

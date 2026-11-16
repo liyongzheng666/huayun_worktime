@@ -24,7 +24,7 @@ import '../widgets/percentage_pill.dart';
 import '../widgets/haptic_refresh_indicator.dart';
 import '../widgets/pull_refresh_guide.dart';
 import 'feature_guide_page.dart';
-import 'photo_preview_screen.dart';
+import '../widgets/attendance_photo_dialog.dart';
 
 class DailyHoursScreen extends StatefulWidget {
   final bool autoLoad;
@@ -533,114 +533,41 @@ class DailyHoursScreenState extends State<DailyHoursScreen>
     );
   }
 
-  /// 显示打卡照片弹窗
+  /// 只展示入口，不同时下载两张缩略图；与月度页共用按需弹层和缓存。
   void _showPhotoDialog() {
     final checkInPhotoUrl = _attendanceData?['checkInPhotoUrl'] as String?;
     final checkOutPhotoUrl = _attendanceData?['checkOutPhotoUrl'] as String?;
-
-    showDialog(
+    showDialog<void>(
       context: context,
-      builder: (context) => Dialog(
-        child: Padding(
-          padding: const EdgeInsets.all(16),
-          child: Column(
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              const Text(
-                '打卡照片',
-                style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold),
-              ),
-              const SizedBox(height: 16),
-              if (checkInPhotoUrl != null) ...[
-                const Text(
-                  '上班打卡',
-                  style: TextStyle(fontWeight: FontWeight.w500),
-                ),
-                const SizedBox(height: 8),
-                _buildPhotoWidget(checkInPhotoUrl, 'checkIn'),
-                const SizedBox(height: 16),
-              ],
-              if (checkOutPhotoUrl != null) ...[
-                const Text(
-                  '下班打卡',
-                  style: TextStyle(fontWeight: FontWeight.w500),
-                ),
-                const SizedBox(height: 8),
-                _buildPhotoWidget(checkOutPhotoUrl, 'checkOut'),
-              ],
-              const SizedBox(height: 16),
-              TextButton(
-                onPressed: () => Navigator.pop(context),
-                child: const Text('关闭'),
-              ),
-            ],
-          ),
+      builder: (context) => AlertDialog(
+        title: const Text('打卡照片'),
+        content: Row(
+          children: [
+            if (checkInPhotoUrl != null)
+              Expanded(child: _buildPhotoWidget(checkInPhotoUrl, 'checkIn')),
+            if (checkOutPhotoUrl != null)
+              Expanded(child: _buildPhotoWidget(checkOutPhotoUrl, 'checkOut')),
+          ],
         ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(context),
+            child: const Text('关闭'),
+          ),
+        ],
       ),
     );
   }
 
-  /// 构建照片组件
   Widget _buildPhotoWidget(String photoUrl, String label) {
-    // 使用URL作为Hero Tag，保证唯一性
-    final heroTag = 'photo_$label$photoUrl';
-
-    return GestureDetector(
-      onTap: () {
-        Navigator.push(
-          context,
-          MaterialPageRoute(
-            builder: (context) =>
-                PhotoPreviewScreen(photoUrl: photoUrl, heroTag: heroTag),
-          ),
-        );
-      },
-      child: Hero(
-        tag: heroTag,
-        child: ClipRRect(
-          borderRadius: BorderRadius.circular(8),
-          child: Image.network(
-            photoUrl,
-            height: 200,
-            fit: BoxFit.contain,
-            loadingBuilder: (context, child, loadingProgress) {
-              if (loadingProgress == null) return child;
-              return SizedBox(
-                height: 150,
-                child: Center(
-                  child: CircularProgressIndicator(
-                    value: loadingProgress.expectedTotalBytes != null
-                        ? loadingProgress.cumulativeBytesLoaded /
-                              loadingProgress.expectedTotalBytes!
-                        : null,
-                  ),
-                ),
-              );
-            },
-            errorBuilder: (context, error, stackTrace) => Container(
-              height: 150,
-              color: LegacyThemeColors.inset(context, Colors.grey[200]!),
-              child: Column(
-                mainAxisAlignment: MainAxisAlignment.center,
-                children: [
-                  Icon(
-                    Icons.broken_image,
-                    color: LegacyThemeColors.muted(context, Colors.grey),
-                  ),
-                  const SizedBox(height: 8),
-                  Text(
-                    '照片加载失败',
-                    style: TextStyle(
-                      color: LegacyThemeColors.muted(context, Colors.grey),
-                    ),
-                  ),
-                  // 移除详细错误显示，保持界面整洁(KISS)
-                ],
-              ),
-            ),
-          ),
-        ),
+    final title = label == 'checkIn' ? '上班照片' : '下班照片';
+    return TextButton(
+      style: TextButton.styleFrom(textStyle: const TextStyle(fontSize: 12)),
+      onPressed: () => showDialog<void>(
+        context: context,
+        builder: (_) => AttendancePhotoDialog(photoUrl: photoUrl, title: title),
       ),
+      child: Text(title),
     );
   }
 
